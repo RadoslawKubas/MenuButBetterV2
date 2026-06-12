@@ -1,0 +1,153 @@
+// Rdzeń: jedno lub WIELE zdjęć menu → Claude vision → jedno spójne, strukturyzowane menu.
+import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
+import { MENU_SCHEMA, type Menu } from "./schema.ts";
+import { usageFrom, logUsage, type Usage } from "./usage.ts";
+
+const client = new Anthropic(); // klucz z ANTHROPIC_API_KEY (env)
+
+// Dostępne modele (najnowsze) + ich maksymalne wyjście.
+// max_tokens to tylko SUFIT — ustawiony na maksimum modelu nie kosztuje więcej,
+// jeśli model skończy wcześniej; po prostu menu praktycznie nigdy się nie utnie.
+export const MODELS = {
+  "claude-sonnet-4-6": { label: "Sonnet 4.6", maxOutput: 64000 },
+  "claude-opus-4-8": { label: "Opus 4.8", maxOutput: 128000 },
+} as const;
+
+export type ModelId = keyof typeof MODELS;
+export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
+
+export function isModelId(v: unknown): v is ModelId {
+  return typeof v === "string" && v in MODELS;
+}
+
+export type MediaType = "image/jpeg" | "image/png" | "image/webp";
+
+export interface InputImage {
+  base64: string;
+  mediaType: MediaType;
+}
+
+const MEDIA_TYPES: Record<string, MediaType> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+
+function mediaTypeFor(path: string): MediaType {
+  const type = MEDIA_TYPES[extname(path).toLowerCase()];
+  if (!type) throw new Error(`Nieobsługiwany format obrazu: ${path} (użyj jpg/png/webp)`);
+  return type;
+}
+
+export interface ExtractOptions {
+  /** Język docelowy tłumaczenia, np. "polski". */
+  targetLang: string;
+  /** Podpowiedź o lokalu (nazwa/miasto), jeśli znana — poprawia kontekst. */
+  restaurantHint?: string;
+  /** Model do użycia. Domyślnie Sonnet 4.6. */
+  model?: ModelId;
+}
+
+const SYSTEM = [
+  "Jesteś ekspertem kulinarnym i tłumaczem.",
+  "Otrzymasz jedno lub WIELE zdjęć — to kolejne strony / fragmenty TEGO SAMEGO menu",
+  "(mogą zawierać okładkę albo zdjęcie lokalu).",
+  "Połącz wszystkie zdjęcia w JEDNO spójne menu: zachowaj kolejność sekcji w miarę,",
+  "jak pojawiają się na stronach, i nie duplikuj powtórzonych nagłówków ani pozycji.",
+  "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje.",
+  "",
+  "NAJPIERW ustal kontekst i zapisz go w polu `cuisine`: rodzaj kuchni (np. indyjska,",
+  "hiszpańska, włoska) oraz — na własny użytek — kraj i miasto lokalu (z nazw dań,",
+  "języka menu, adresu i szyldu). Wszystkie opisy MUSZĄ pasować do tego kontekstu.",
+  "",
+  "Tłumacz nazwy i sekcje na język docelowy podany przez użytkownika.",
+  "OPIS dania pisz ZWIĘŹLE i RZECZOWO, opierając się WYŁĄCZNIE na tym, co wynika z nazwy",
+  "dania i z typowego sposobu jego przyrządzania w TEJ kuchni/regionie.",
+  "NIE upiększaj i NIE dodawaj składników, których nie ma w nazwie i które nie są standardowe",
+  "dla tego dania w tej kuchni (np. NIE dodawaj awokado do zwykłej zielonej sałatki",
+  "w hinduskiej restauracji). Przy ogólnej nazwie (np. zielona sałatka) opisz typowy,",
+  "prosty skład dla takiego lokalu, bez egzotycznych dodatków.",
+  "Zasada: lepiej napisać ogólnie i PRAWDZIWIE niż barwnie i zmyślnie. W polu `ingredients`",
+  "podawaj tylko składniki pewne lub typowe dla tego dania; nie zgaduj egzotycznych.",
+  "Alergeny i flagi dietetyczne szacuj zachowawczo.",
+  "",
+  "Jedno ze zdjęć może być FOTOGRAFIĄ LOKALU Z ZEWNĄTRZ (szyld, witryna, fasada) albo",
+  "wnętrza — odczytaj NAZWĘ i adres także z szyldu/witryny. Takie zdjęcie zwykle nie",
+  "zawiera dań: użyj go tylko do nazwy/adresu, nie twórz z niego pozycji menu.",
+  "Nazwę i adres wyodrębnij do pól restaurant_name / restaurant_address (z okładki,",
+  "nagłówka, stopki lub szyldu); jeśli nigdzie nie widać — ustaw null.",
+  "Nie wymyślaj pozycji, których nie ma na zdjęciach. Jeśli ceny nie widać, ustaw null.",
+].join(" ");
+
+/** Główna funkcja: wyciąga jedno menu z dowolnej liczby obrazów (+ zużycie tokenów). */
+export async function extractMenu(
+  images: InputImage[],
+  opts: ExtractOptions,
+): Promise<{ menu: Menu; usage: Usage }> {
+  if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
+
+  const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
+  // max_tokens = maksimum modelu (to tylko sufit; nie kosztuje, gdy model skończy wcześniej).
+  const maxTokens = MODELS[model].maxOutput;
+
+  // Treść: dla każdego zdjęcia etykieta + obraz, na końcu instrukcja kontekstowa.
+  const content: Anthropic.ContentBlockParam[] = [];
+  images.forEach((img, i) => {
+    content.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: img.mediaType, data: img.base64 },
+    });
+  });
+  content.push({
+    type: "text",
+    text:
+      `Język docelowy: ${opts.targetLang}.\n` +
+      `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+      `Połącz powyższe ${images.length} zdjęć w jedno menu.`,
+  });
+
+  // Streaming — duże wyjście nie wpada w timeout, a max_tokens = maksimum modelu zapobiega ucięciu.
+  const stream = client.messages.stream({
+    model,
+    max_tokens: maxTokens,
+    system: SYSTEM,
+    messages: [{ role: "user", content }],
+    output_config: { format: { type: "json_schema", schema: MENU_SCHEMA } },
+  });
+  const response = await stream.finalMessage();
+
+  // Zużycie tokenów + koszt (do licznika w apce).
+  const usage = usageFrom(model, response.usage);
+  logUsage(`menu obrazów=${images.length} stop=${response.stop_reason}`, model, usage);
+
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      "Menu jest bardzo duże i przekroczyło limit jednego skanu. " +
+        "Spróbuj zeskanować mniej stron naraz (np. po 3–4).",
+    );
+  }
+
+  // Przy output_config.format pierwszy blok tekstowy zawiera poprawny JSON.
+  const text = response.content.find((b) => b.type === "text");
+  if (!text || text.type !== "text") {
+    throw new Error(`Brak tekstowej odpowiedzi (stop_reason=${response.stop_reason}).`);
+  }
+  try {
+    return { menu: JSON.parse(text.text) as Menu, usage };
+  } catch {
+    throw new Error(`Nie udało się odczytać menu (odpowiedź niepełna, stop=${response.stop_reason}).`);
+  }
+}
+
+/** Wygoda dla CLI: jeden plik ze ścieżki. */
+export async function extractMenuFromFile(
+  imagePath: string,
+  opts: ExtractOptions,
+): Promise<{ menu: Menu; usage: Usage }> {
+  const base64 = (await readFile(imagePath)).toString("base64");
+  return extractMenu([{ base64, mediaType: mediaTypeFor(imagePath) }], opts);
+}

@@ -1,0 +1,24 @@
+{
+  "name": "menubutbetter-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Backend PoC: zdjęcie menu → Claude vision → strukturyzowane menu + zdjęcia dań",
+  "scripts": {
+    "dev": "tsx watch src/http.ts",
+    "start": "tsx src/http.ts",
+    "scan": "tsx src/runScan.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "@hono/node-server": "^2.0.4",
+    "dotenv": "^17.0.0",
+    "hono": "^4.12.23",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}

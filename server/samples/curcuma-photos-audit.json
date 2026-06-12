@@ -1,0 +1,422 @@
+{
+  "Chicken Korma": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTN_SFuzHMBRa0KJShdJFqJG2gCH-2HHdaw8A&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/ca/onion-bhaji-chicken-korma.jpg?w=900&h=500&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Dwa curry w metalowych miseczkach, ryż i naan z czarnuszką",
+      "match": 0.6
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRpxvhMByexQzyTHDlL5Uwu-_f5kj5qWNtUkA&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/c7/onion-bhaji-chicken-korma.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Curry, ryż i chlebek naan na stole",
+      "match": 0.6
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR31pFI4GTEiLI24I4WfiRs1_CZeGGuRhBnjw&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/2e/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone pakory lub kąski z kurczaka na talerzu",
+      "match": 0.2
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQoCkg_2G0KBkaxAxYzKgR65-SA1TJL_0ANpQ&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/c8/onion-bhaji-chicken-korma.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Zestaw indyjski: dwa curry, ryż i naan",
+      "match": 0.6
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRfZMzajL69yPaePTGZMkzrpCa-mjLXVQU0zA&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/766f66ac-c59e-4dae-8f68-5bc9a8d8c527.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Kilka miseczek różnych curry z cytryną i raitą",
+      "match": 0.55
+    }
+  ],
+  "Onion Bhaji": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTPhkVkxbK083o3BL6qXNJ2ReBiXSGPc1KTeg&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ab/2b/onion-bhaji-cipolla-fritta.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone krążki cebulowe z dwoma sosami",
+      "match": 0.85
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ_bG694sSN0aDHzB0wpUmzfSidTuuN4xrDaA&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/ca/onion-bhaji-chicken-korma.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Curry, ryż i chleb naan",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRpxvhMByexQzyTHDlL5Uwu-_f5kj5qWNtUkA&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/c7/onion-bhaji-chicken-korma.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Curry, ryż i chleb naan",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSsF_Kf5S3acxQE0hnJxJzgc4Yb-8VDZgRl5w&s",
+      "imageUrl": "https://tb-static.uber.com/prod/image-proc/processed_images/0d077e0408f6d50da7e55f87da38225f/97e6648b3593c29cb4a6335f976e6d84.jpeg",
+      "source": "Uber Eats",
+      "link": "https://www.ubereats.com/es/store/curcuma-badalona-indian-restaurant/KkuHYYuwTLqJCmJWwkuUww?srsltid=AfmBOorvHNVY8gEtmaeIMiQiMU9zYB_AkEwcZYeYyYjgqbLomW4qwDiM",
+      "shows": "Zestaw indyjski z naan, ryżem, curry i samosami",
+      "match": 0.1
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSp5lxtYsNflSOeRx_JSPG7Swc4g_tNl20odA&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/2f/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Przekrojone samosy z nadzieniem warzywnym",
+      "match": 0.05
+    }
+  ],
+  "Palak Paneer": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQKg1ylJNeMiFUxy3YjpnxoMcWkRGDOvcdEejf81CU&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,q_auto,c_thumb,w_120/f_auto/q_auto/v1/es/dishes/17842/palak-panner-con-arroz",
+      "source": "Just Eat",
+      "link": "https://www.just-eat.es/ca/restaurants-curcuma-badalona/menu",
+      "shows": "Zielone curry w miseczce, prawdopodobnie palak paneer",
+      "match": 0.85
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQJdjYzHcMXWAsVekpX_yO_AIIKGwnSRItNZTZSjh_qug&s=10",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/f01098ca-45c3-4137-bcc2-41282f0a0686.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Naan posypany kolendrą na talerzu",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOsdyYVYQY_q0cHI-jop-6NzAUnzvVZKXgy9aCLE1OeA&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,d_es:cuisines:asiatica-2.jpg,f_auto,q_auto,w_374,h_510/v1/es/restaurants/17842",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Smażone placki/pakory z sosami",
+      "match": 0.02
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQCiD9811rOuCRyI3j2K7U9htMyrT3v-javeIbv6TqUxg&s=10",
+      "imageUrl": "https://lookaside.fbsbx.com/lookaside/crawler/media/?media_id=4063445400368070",
+      "source": "Facebook",
+      "link": "https://www.facebook.com/p/Curcuma-Badalona-Indian-Restaurant-100067785459540/",
+      "shows": "Ludzie pozujący przy stole w restauracji",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQQYB_8HYcFLMvPi1bFk2JkaVJMsdkeOLo6rcS_gEddSQ&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,f_auto,q_auto,h_197,w_390/es/cuisines/asiatica-3",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Różne dania azjatyckie z ryżem i kurczakiem",
+      "match": 0.02
+    }
+  ],
+  "Chicken Tikka Masala": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ-AQmXMqt3SAbrDqgi2V2BfqnJrz8BccdAsg&s",
+      "imageUrl": "https://d1e4mqw8kzyykz.cloudfront.net/img/auto/curcuma-badalona-indian-restaurant-lz2cjhmr-food2.jpg",
+      "source": "curcumabadalonaindianrestaurantct.com",
+      "link": "https://curcumabadalonaindianrestaurantct.com/",
+      "shows": "Curry z kawałkami mięsa w pomarańczowym sosie z kolendrą w misie",
+      "match": 0.85
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQTLI2bk1CDw8I6B1jECPnLu2H04YYVQJ9I3w&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/34/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Talerz z ryżem, chlebkiem naan i curry z kurczakiem w pomarańczowym sosie",
+      "match": 0.9
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTN_SFuzHMBRa0KJShdJFqJG2gCH-2HHdaw8A&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/ca/onion-bhaji-chicken-korma.jpg?w=900&h=500&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Zestaw indyjski: ryż, chlebki naan i dwa rodzaje curry w miseczkach",
+      "match": 0.55
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSRw4DFEpdPjBTsL101ARNx7W5R27bSDpnqOA&s",
+      "imageUrl": "https://tb-static.uber.com/prod/image-proc/processed_images/0d077e0408f6d50da7e55f87da38225f/3ac2b39ad528f8c8c5dc77c59abb683d.jpeg",
+      "source": "Uber Eats",
+      "link": "https://www.ubereats.com/es/store/curcuma-badalona-indian-restaurant/KkuHYYuwTLqJCmJWwkuUww?srsltid=AfmBOoqx6ZdP8k52hW5Us_MNuzSEhsQjrlMI09_U0iD-g4OxYPjc-UPv",
+      "shows": "Zestaw indyjski na wynos: naan, curry, pakory, samosy i sosy",
+      "match": 0.45
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR31pFI4GTEiLI24I4WfiRs1_CZeGGuRhBnjw&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/2e/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone kąski w cieście (pakory/bhaji) na białym talerzu",
+      "match": 0.1
+    }
+  ],
+  "Gulab Jamun": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTiPJTKD7qMCvdjci5frZGp64HEneKgYhkG2g&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/35/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Gulab jamun w metalowej miseczce, kuliste słodycze w syropie z łyżeczką",
+      "match": 0.95
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSb48ZjNz_Bs-AzRR9rstn79GdQkTx3vkseSg&s",
+      "imageUrl": "https://media-cdn.tripadvisor.com/media/photo-m/1280/2d/41/f5/2d/caption.jpg",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Wnętrze restauracji indyjskiej, stoły nakryte do posiłku",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR31pFI4GTEiLI24I4WfiRs1_CZeGGuRhBnjw&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/2e/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone pakory lub placki warzywne na talerzu z sosem",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTN_SFuzHMBRa0KJShdJFqJG2gCH-2HHdaw8A&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/ca/onion-bhaji-chicken-korma.jpg?w=900&h=500&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Dania główne: curry, ryż i chlebki naan",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTPhkVkxbK083o3BL6qXNJ2ReBiXSGPc1KTeg&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ab/2b/onion-bhaji-cipolla-fritta.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone krążki cebulowe lub bhaji z sosami",
+      "match": 0.03
+    }
+  ],
+  "Chicken Vindaloo": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSRw4DFEpdPjBTsL101ARNx7W5R27bSDpnqOA&s",
+      "imageUrl": "https://tb-static.uber.com/prod/image-proc/processed_images/0d077e0408f6d50da7e55f87da38225f/3ac2b39ad528f8c8c5dc77c59abb683d.jpeg",
+      "source": "Uber Eats",
+      "link": "https://www.ubereats.com/es/store/curcuma-badalona-indian-restaurant/KkuHYYuwTLqJCmJWwkuUww?srsltid=AfmBOopJEG0LY9LgmRE_KKu0aAAgmKt9HTmsYoWOSR6LEQJB0Vqh7UPf",
+      "shows": "Zestaw indyjski: curry, naan, ryż, pakory, sosy",
+      "match": 0.45
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRUVHqJ3-MvmO4nX__ki9wNmanP5UuAoxObGA&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,f_auto,q_auto,h_197,w_390/es/cuisines/asiatica-3",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Dania tajskie/azjatyckie: pad thai, kurczak, ryż, szaszłyki",
+      "match": 0.1
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRfZMzajL69yPaePTGZMkzrpCa-mjLXVQU0zA&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/766f66ac-c59e-4dae-8f68-5bc9a8d8c527.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Kilka misek indyjskich curry z cytryną i raitą",
+      "match": 0.6
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxTLWvWDU6RIup7QdZ-fI5LOMmpvyNpwgIgQ&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/a13712b2-515a-4026-913e-9bb37fc3b544.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Dosa z curry dal i ryżem na metalowej tacy",
+      "match": 0.2
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSFi55jyMBYoYB9X-GJQaJ1C4eMKATq70_T2w&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,d_es:cuisines:asiatica-2.jpg,f_auto,q_auto,w_374,h_510/v1/es/restaurants/17842",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Smażone pakory/przekąski z sosami",
+      "match": 0.05
+    }
+  ],
+  "Veg Samosa": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSp5lxtYsNflSOeRx_JSPG7Swc4g_tNl20odA&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/2f/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Przekrojone pieczone pierożki/calzone z nadzieniem warzywnym",
+      "match": 0.35
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSRw4DFEpdPjBTsL101ARNx7W5R27bSDpnqOA&s",
+      "imageUrl": "https://tb-static.uber.com/prod/image-proc/processed_images/0d077e0408f6d50da7e55f87da38225f/3ac2b39ad528f8c8c5dc77c59abb683d.jpeg",
+      "source": "Uber Eats",
+      "link": "https://www.ubereats.com/es/store/curcuma-badalona-indian-restaurant/KkuHYYuwTLqJCmJWwkuUww?srsltid=AfmBOoolLmWwgOJaTO6w9nrgxaWalAkbeOeNQqSr8y2d2SfkpHGqK12l",
+      "shows": "Zestaw dań indyjskich: naan, curry, pakory, samosa i sosy",
+      "match": 0.5
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTPhkVkxbK083o3BL6qXNJ2ReBiXSGPc1KTeg&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ab/2b/onion-bhaji-cipolla-fritta.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Smażone krążki cebulowe lub warzywne w panierce z sosami",
+      "match": 0.2
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSSYf3hSk4h7DbDNpjNEnRCF3r3QVgFvZb2MA&s",
+      "imageUrl": "https://lookaside.instagram.com/seo/google_widget/crawler/?media_id=3744919479223075378",
+      "source": "Instagram",
+      "link": "https://www.instagram.com/curcuma_indian_restaurant/",
+      "shows": "Puri/golgappa z cieciorką, danie typu pani puri",
+      "match": 0.15
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQUnwdnc0Yr5Pz9KGoVkc-9grgc2rR_7NoTIw&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/f01098ca-45c3-4137-bcc2-41282f0a0686.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Placki naan/chlebek z natką pietruszki",
+      "match": 0.05
+    }
+  ],
+  "Mango Lassi": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQUnwdnc0Yr5Pz9KGoVkc-9grgc2rR_7NoTIw&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/f01098ca-45c3-4137-bcc2-41282f0a0686.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Chlebek naan z ziołami",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSFi55jyMBYoYB9X-GJQaJ1C4eMKATq70_T2w&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,d_es:cuisines:asiatica-2.jpg,f_auto,q_auto,w_374,h_510/v1/es/restaurants/17842",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Smażone placki/pakora na talerzu",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcThs_rdQ_B2-QAC0UMpTQpHZFKDGYQG7A7lBg&s",
+      "imageUrl": "https://lh3.googleusercontent.com/p/AF1QipNl_-rS5SPT6BSOO87XaleIZc3gT884rsXUlQry=w408-h544-k-no",
+      "source": "Restaurantes Indios en España",
+      "link": "https://rodrygodelicioso.com/barcelona/badalona/",
+      "shows": "Wejście do indyjskiej restauracji",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSvpZjZYgkPCqD0vTow5oqBV6H8M6ThJkRVjw&s",
+      "imageUrl": "https://lookaside.fbsbx.com/lookaside/crawler/media/?media_id=100067785459540",
+      "source": "Facebook",
+      "link": "https://www.facebook.com/p/Curcuma-Badalona-Indian-Restaurant-100067785459540/",
+      "shows": "Fasada budynku/restauracji",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRc8TZZ5lVS79RIyrO18pq1qxOVxE45y902jw&s",
+      "imageUrl": "https://lookaside.fbsbx.com/lookaside/crawler/media/?media_id=4061345423911401",
+      "source": "Facebook",
+      "link": "https://www.facebook.com/p/Curcuma-Badalona-Indian-Restaurant-100067785459540/",
+      "shows": "Dwa piwa (Kingfisher i Cobra)",
+      "match": 0
+    }
+  ],
+  "Daal Makhni": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQUnwdnc0Yr5Pz9KGoVkc-9grgc2rR_7NoTIw&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/f01098ca-45c3-4137-bcc2-41282f0a0686.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Chlebek naan z ziołami",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcThs_rdQ_B2-QAC0UMpTQpHZFKDGYQG7A7lBg&s",
+      "imageUrl": "https://lh3.googleusercontent.com/p/AF1QipNl_-rS5SPT6BSOO87XaleIZc3gT884rsXUlQry=w408-h544-k-no",
+      "source": "Restaurantes Indios en España",
+      "link": "https://rodrygodelicioso.com/barcelona/badalona/",
+      "shows": "Wejście do indyjskiej restauracji",
+      "match": 0
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRfZMzajL69yPaePTGZMkzrpCa-mjLXVQU0zA&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/766f66ac-c59e-4dae-8f68-5bc9a8d8c527.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Zestaw indyjskich curry w miseczkach, w tym ciemne danie z soczewicy",
+      "match": 0.7
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSFi55jyMBYoYB9X-GJQaJ1C4eMKATq70_T2w&s",
+      "imageUrl": "https://just-eat-prod-eu-res.cloudinary.com/image/upload/c_fill,d_es:cuisines:asiatica-2.jpg,f_auto,q_auto,w_374,h_510/v1/es/restaurants/17842",
+      "source": "www.cataluna2014restaurantbadalona.com",
+      "link": "https://www.cataluna2014restaurantbadalona.com/",
+      "shows": "Smażone przekąski (pakora) z sosami",
+      "match": 0.05
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxTLWvWDU6RIup7QdZ-fI5LOMmpvyNpwgIgQ&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/a13712b2-515a-4026-913e-9bb37fc3b544.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Naan, ryż i miska curry z soczewicy",
+      "match": 0.55
+    }
+  ],
+  "Naan": [
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTN_SFuzHMBRa0KJShdJFqJG2gCH-2HHdaw8A&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/ca/onion-bhaji-chicken-korma.jpg?w=900&h=500&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Naan, ryż i dwa curry w miseczkach",
+      "match": 0.7
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQIO8NrfOKfuOEkCwgojjnS8toimJkGV-k3dw&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/41/f5/33/caption.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Chlebek naan w misce na stole",
+      "match": 0.95
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSRw4DFEpdPjBTsL101ARNx7W5R27bSDpnqOA&s",
+      "imageUrl": "https://tb-static.uber.com/prod/image-proc/processed_images/0d077e0408f6d50da7e55f87da38225f/3ac2b39ad528f8c8c5dc77c59abb683d.jpeg",
+      "source": "Uber Eats",
+      "link": "https://www.ubereats.com/es/store/curcuma-badalona-indian-restaurant/KkuHYYuwTLqJCmJWwkuUww?srsltid=AfmBOootqO5C2dmT8d2sVAia1-Fb90y2h_6LiYHDNWFx7tXIiriHELnF",
+      "shows": "Zestaw dań indyjskich: naan, curry, samosa, ryż, pakora",
+      "match": 0.6
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQoCkg_2G0KBkaxAxYzKgR65-SA1TJL_0ANpQ&s",
+      "imageUrl": "https://dynamic-media-cdn.tripadvisor.com/media/photo-o/2d/4e/ac/c8/onion-bhaji-chicken-korma.jpg?w=1200&h=1200&s=1",
+      "source": "Tripadvisor",
+      "link": "https://www.tripadvisor.com/Restaurant_Review-g665816-d26833615-Reviews-Curcuma-Badalona_Catalonia.html",
+      "shows": "Naan, ryż i dwa curry, nakryty stół",
+      "match": 0.7
+    },
+    {
+      "thumbnailUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQUnwdnc0Yr5Pz9KGoVkc-9grgc2rR_7NoTIw&s",
+      "imageUrl": "https://cdn.thefork.com/tf-lab/image/upload/restaurant/dcb592cd-49ee-4be3-8363-410644f507d1/f01098ca-45c3-4137-bcc2-41282f0a0686.jpg",
+      "source": "TheFork",
+      "link": "https://www.thefork.com/restaurant/curcuma-r810203/menu",
+      "shows": "Chlebek naan z ziołami i czosnkiem",
+      "match": 0.95
+    }
+  ]
+}

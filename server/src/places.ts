@@ -1,0 +1,265 @@
+// Integracja z Google Places API (New): znajdź restaurację po nazwie + lokalizacji,
+// zwróć ocenę, godziny, kontakt, zdjęcie i kraj/miasto.
+import type { TripAdvisorInfo } from "./tripadvisor.ts";
+
+const KEY = () => process.env.GOOGLE_MAPS_KEY;
+
+export interface RestaurantInfo {
+  placeId: string;
+  name: string;
+  address: string | null;
+  rating: number | null;
+  ratingCount: number | null;
+  openNow: boolean | null;
+  weekdayHours: string[] | null;
+  phone: string | null;
+  website: string | null;
+  mapsUri: string | null;
+  priceLevel: string | null;
+  location: { lat: number; lng: number } | null;
+  country: string | null;
+  city: string | null;
+  /** Nazwy zasobów zdjęć Google (do proxy /place-photo). */
+  photoNames: string[];
+  /** Dane z TripAdvisor (ocena + realny link), jeśli skonfigurowane. */
+  tripAdvisor?: TripAdvisorInfo | null;
+  /** true = lokal zgadnięty po GPS+kuchni (nie po nazwie) — niepewny. */
+  guessedByLocation?: boolean;
+}
+
+interface FindParams {
+  name: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  lang?: string;
+}
+
+const FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.location",
+  "places.rating",
+  "places.userRatingCount",
+  "places.regularOpeningHours",
+  "places.nationalPhoneNumber",
+  "places.websiteUri",
+  "places.googleMapsUri",
+  "places.priceLevel",
+  "places.photos",
+  "places.addressComponents",
+  "places.primaryType",
+  "places.types",
+].join(",");
+
+interface PlaceComponent {
+  longText?: string;
+  shortText?: string;
+  types?: string[];
+}
+interface Place {
+  id: string;
+  displayName?: { text?: string };
+  formattedAddress?: string;
+  location?: { latitude?: number; longitude?: number };
+  rating?: number;
+  userRatingCount?: number;
+  regularOpeningHours?: { openNow?: boolean; weekdayDescriptions?: string[] };
+  nationalPhoneNumber?: string;
+  websiteUri?: string;
+  googleMapsUri?: string;
+  priceLevel?: string;
+  photos?: { name?: string }[];
+  addressComponents?: PlaceComponent[];
+  primaryType?: string;
+  types?: string[];
+}
+
+function pickComponent(components: PlaceComponent[] | undefined, type: string): string | null {
+  return components?.find((c) => c.types?.includes(type))?.longText ?? null;
+}
+
+function toInfo(p: Place): RestaurantInfo {
+  return {
+    placeId: p.id,
+    name: p.displayName?.text ?? "",
+    address: p.formattedAddress ?? null,
+    rating: p.rating ?? null,
+    ratingCount: p.userRatingCount ?? null,
+    openNow: p.regularOpeningHours?.openNow ?? null,
+    weekdayHours: p.regularOpeningHours?.weekdayDescriptions ?? null,
+    phone: p.nationalPhoneNumber ?? null,
+    website: p.websiteUri ?? null,
+    mapsUri: p.googleMapsUri ?? null,
+    priceLevel: p.priceLevel ?? null,
+    location:
+      p.location?.latitude != null && p.location?.longitude != null
+        ? { lat: p.location.latitude, lng: p.location.longitude }
+        : null,
+    country: pickComponent(p.addressComponents, "country"),
+    city:
+      pickComponent(p.addressComponents, "locality") ??
+      pickComponent(p.addressComponents, "postal_town") ??
+      pickComponent(p.addressComponents, "administrative_area_level_2"),
+    photoNames: (p.photos ?? [])
+      .map((ph) => ph.name)
+      .filter((n): n is string => !!n)
+      .slice(0, 10),
+  };
+}
+
+// Mapowanie kuchni (PL/EN, free text z menu.cuisine) → ZBIÓR pokrewnych typów Google.
+// Pokrewne, bo Google klasyfikuje wąsko (np. „Khan Nawab" to pakistani_restaurant, a nie
+// indian_restaurant) — chcemy je trzymać razem, żeby nie wypadały z wyników.
+function normCuisine(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+const CUISINE_TYPES: { keys: string[]; types: string[] }[] = [
+  {
+    keys: ["indyjsk", "indian", "pakistan", "afgan", "afghan", "nepal", "banglad", "hindus", "tikka", "tandoor", "curry"],
+    types: ["indian_restaurant", "pakistani_restaurant", "afghani_restaurant", "middle_eastern_restaurant"],
+  },
+  { keys: ["wlosk", "italian", "pizz"], types: ["italian_restaurant", "pizza_restaurant", "mediterranean_restaurant"] },
+  { keys: ["chinsk", "chin", "chinese", "azjat", "asian"], types: ["chinese_restaurant", "asian_restaurant"] },
+  { keys: ["japon", "japan", "sushi", "ramen"], types: ["japanese_restaurant", "sushi_restaurant", "ramen_restaurant", "asian_restaurant"] },
+  { keys: ["tajsk", "tajland", "thai"], types: ["thai_restaurant", "asian_restaurant"] },
+  { keys: ["meksyk", "mexican", "latyno", "latin"], types: ["mexican_restaurant", "latin_american_restaurant"] },
+  { keys: ["francus", "french"], types: ["french_restaurant"] },
+  { keys: ["hiszpan", "spanish", "tapas"], types: ["spanish_restaurant", "tapas_restaurant", "mediterranean_restaurant"] },
+  { keys: ["greck", "greek"], types: ["greek_restaurant", "mediterranean_restaurant"] },
+  { keys: ["koreans", "korean"], types: ["korean_restaurant", "asian_restaurant"] },
+  { keys: ["wietnam", "vietnam"], types: ["vietnamese_restaurant", "asian_restaurant"] },
+  { keys: ["tureck", "turkish", "kebab"], types: ["turkish_restaurant", "middle_eastern_restaurant"] },
+  { keys: ["liban", "bliskowschod", "lebanese", "middle eastern", "arab"], types: ["lebanese_restaurant", "middle_eastern_restaurant"] },
+  { keys: ["amerykan", "american", "burger"], types: ["american_restaurant", "hamburger_restaurant"] },
+  { keys: ["owoce morza", "rybn", "seafood"], types: ["seafood_restaurant"] },
+  { keys: ["wegetari", "vegetarian"], types: ["vegetarian_restaurant"] },
+  { keys: ["wegan", "vegan"], types: ["vegan_restaurant"] },
+];
+
+/** Zwraca pokrewne typy Google dla opisu kuchni (puste, gdy nie rozpoznano). */
+export function cuisineRelatedTypes(cuisine?: string): string[] {
+  if (!cuisine) return [];
+  const c = normCuisine(cuisine);
+  for (const { keys, types } of CUISINE_TYPES) {
+    if (keys.some((k) => c.includes(k))) return types;
+  }
+  return [];
+}
+
+interface NearbyParams {
+  lat: number;
+  lng: number;
+  cuisine?: string;
+  lang?: string;
+  /** Promień poszukiwań w metrach (domyślnie 800; klient może zwiększać). */
+  radius?: number;
+  max?: number;
+}
+
+/**
+ * FALLBACK bez nazwy: szuka restauracji W POBLIŻU (po GPS). NIE zawęża sztywno do typu
+ * kuchni (Google klasyfikuje wąsko i gubiłby pasujące lokale) — pobiera wszystkie lokale
+ * gastronomiczne posortowane po odległości, a następnie wypycha na górę te o pokrewnej
+ * kuchni. Dzięki temu właściwy lokal nigdy nie wypada, a trafne są pierwsze.
+ */
+export async function findRestaurantNearby(params: NearbyParams): Promise<RestaurantInfo[]> {
+  const key = KEY();
+  if (!key) throw new Error("Brak GOOGLE_MAPS_KEY w środowisku.");
+
+  const body: Record<string, unknown> = {
+    languageCode: params.lang ?? "pl",
+    maxResultCount: Math.min(params.max ?? 20, 20),
+    rankPreference: "DISTANCE",
+    // Szeroko: restauracje + lokale na wynos/dowóz (nie wykluczamy nic gastronomicznego).
+    includedTypes: ["restaurant", "meal_takeaway", "meal_delivery"],
+    locationRestriction: {
+      circle: {
+        center: { latitude: params.lat, longitude: params.lng },
+        radius: Math.min(params.radius ?? 800, 50000),
+      },
+    },
+  };
+
+  const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Places nearby HTTP ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as { places?: Place[] };
+  let places = json.places ?? [];
+
+  // Stabilne posortowanie: pokrewna kuchnia najpierw (zachowując kolejność po odległości).
+  const related = cuisineRelatedTypes(params.cuisine);
+  if (related.length > 0) {
+    const isRel = (p: Place) =>
+      (p.primaryType != null && related.includes(p.primaryType)) ||
+      (p.types ?? []).some((t) => related.includes(t));
+    places = [...places.filter(isRel), ...places.filter((p) => !isRel(p))];
+  }
+
+  return places.map((p) => ({ ...toInfo(p), guessedByLocation: true }));
+}
+
+/** Znajduje restaurację. Zwraca null, gdy nic nie pasuje. */
+export async function findRestaurant(params: FindParams): Promise<RestaurantInfo | null> {
+  const key = KEY();
+  if (!key) throw new Error("Brak GOOGLE_MAPS_KEY w środowisku.");
+
+  const textQuery = [params.name, "restauracja", params.address].filter(Boolean).join(" ");
+  const body: Record<string, unknown> = {
+    textQuery,
+    languageCode: params.lang ?? "pl",
+    maxResultCount: 1,
+  };
+  // Jeśli mamy współrzędne — biasuj wyszukiwanie do okolicy (promień 8 km).
+  if (params.lat != null && params.lng != null) {
+    body.locationBias = {
+      circle: { center: { latitude: params.lat, longitude: params.lng }, radius: 8000 },
+    };
+  }
+
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Places HTTP ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as { places?: Place[] };
+  const place = json.places?.[0];
+  return place ? toInfo(place) : null;
+}
+
+/** Pobiera bajty zdjęcia lokalu (proxy — klucz zostaje po stronie serwera). */
+export async function fetchPlacePhoto(
+  photoName: string,
+  maxWidth = 800,
+): Promise<{ body: ArrayBuffer; contentType: string }> {
+  const key = KEY();
+  if (!key) throw new Error("Brak GOOGLE_MAPS_KEY.");
+  if (!photoName.startsWith("places/")) throw new Error("Nieprawidłowa nazwa zdjęcia.");
+
+  const url = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${maxWidth}&key=${key}`;
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok) throw new Error(`Place photo HTTP ${res.status}`);
+  return {
+    body: await res.arrayBuffer(),
+    contentType: res.headers.get("content-type") ?? "image/jpeg",
+  };
+}

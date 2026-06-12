@@ -1,0 +1,23 @@
+# Sekrety — NIGDY do repo
+.env
+.env.local
+*.pem
+
+# Zależności / build
+node_modules/
+dist/
+build/
+.expo/
+
+# Logi i śmieci
+*.log
+.DS_Store
+
+# Lokalne ustawienia narzędzi
+.claude/settings.local.json
+
+# Lokalne zdjęcia testowe (menu) — nie commitujemy
+server/samples/*.jpg
+server/samples/*.jpeg
+server/samples/*.png
+server/samples/*.webp

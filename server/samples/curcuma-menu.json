@@ -1,0 +1,2615 @@
+{
+  "restaurant_name": "Cúrcuma",
+  "restaurant_address": null,
+  "restaurant_language": "es",
+  "cuisine": "kuchnia indyjska",
+  "sections": [
+    {
+      "name": "ENTRANTES",
+      "name_translated": "Przystawki",
+      "items": [
+        {
+          "original": "Papardam",
+          "translated": "Papadam",
+          "description": "Cienki, chrupiący placek z mąki soczewicowej, podawany z sosami.",
+          "ingredients": [
+            "mąka soczewicowa"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "1.35",
+          "currency": "EUR"
+        },
+        {
+          "original": "Masala Papad",
+          "translated": "Masala Papad",
+          "description": "Chrupiący papadam z pomidorem, cebulą, ogórkiem i sosami.",
+          "ingredients": [
+            "papadam",
+            "pomidor",
+            "cebula",
+            "ogórek",
+            "sosy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "4.95",
+          "currency": "EUR"
+        },
+        {
+          "original": "Aloo Poori",
+          "translated": "Aloo Poori",
+          "description": "Smażony chleb pszenny podawany z ziemniakami w przyprawach.",
+          "ingredients": [
+            "mąka pszenna",
+            "ziemniaki",
+            "przyprawy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "6.80",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chana Chat",
+          "translated": "Chana Chat",
+          "description": "Gotowane ciecierzyca z cebulą, pomidorem, chutney z tamaryndowca, przyozdobione listkami kolendry.",
+          "ingredients": [
+            "ciecierzyca",
+            "cebula",
+            "pomidor",
+            "chutney z tamaryndowca",
+            "sev",
+            "kolendra"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "6.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Aloo tikki 2 unidades",
+          "translated": "Aloo Tikki 2 sztuki",
+          "description": "Placuszki z ziemniaków i ciecierzycy, smażone na złoto.",
+          "ingredients": [
+            "ziemniaki",
+            "ciecierzyca"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "5.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Veg Samosa 2 unidades",
+          "translated": "Samosa warzywna 2 sztuki",
+          "description": "Trójkątne pierożki z ciasta pszennego nadziewane ziemniakami i groszkiem.",
+          "ingredients": [
+            "mąka pszenna",
+            "ziemniaki",
+            "groszek",
+            "przyprawy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "6.20",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Samosa 2 unidades",
+          "translated": "Samosa z kurczakiem 2 sztuki",
+          "description": "Trójkątne pierożki z ciasta pszennego nadziewane mielonym kurczakiem.",
+          "ingredients": [
+            "mąka pszenna",
+            "kurczak",
+            "przyprawy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "6.95",
+          "currency": "EUR"
+        },
+        {
+          "original": "Onion Bhaji",
+          "translated": "Onion Bhaji",
+          "description": "Smażone kulki z cebuli w cieście z mąki z ciecierzycy.",
+          "ingredients": [
+            "cebula",
+            "mąka z ciecierzycy",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "5.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Veg Pakora 6 unidades",
+          "translated": "Pakora warzywna 6 sztuk",
+          "description": "Warzywa mieszane w cieście z mąki z ciecierzycy, smażone.",
+          "ingredients": [
+            "warzywa mieszane",
+            "mąka z ciecierzycy",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "6.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Baigan Pakora 4 unidades",
+          "translated": "Pakora z bakłażana 4 sztuki",
+          "description": "Plastry bakłażana w cieście z mąki z ciecierzycy, smażone.",
+          "ingredients": [
+            "bakłażan",
+            "mąka z ciecierzycy",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "5.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Paneer Pakora 6 unidades",
+          "translated": "Pakora z paneer 6 sztuk",
+          "description": "Świeży domowy ser paneer w cieście z mąki z ciecierzycy, smażony.",
+          "ingredients": [
+            "paneer",
+            "mąka z ciecierzycy",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "7.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Pakora 6 unidades",
+          "translated": "Pakora z kurczaka 6 sztuk",
+          "description": "Kawałki kurczaka w cieście z mąki z ciecierzycy, smażone.",
+          "ingredients": [
+            "kurczak",
+            "mąka z ciecierzycy",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "6.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chilli Chicken Picante",
+          "translated": "Pikantny Chilli Chicken",
+          "description": "Kawałki kurczaka z ostrymi i słodkimi papryczkami w sosie ze słodkimi i ostrymi papryczkami.",
+          "ingredients": [
+            "kurczak",
+            "papryczki chilli",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 3,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chilli Paneer Picante",
+          "translated": "Pikantny Chilli Paneer",
+          "description": "Świeży ser paneer z ostrymi papryczkami w sosie słodko-pikantnym.",
+          "ingredients": [
+            "paneer",
+            "papryczki chilli",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 3,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Pani Puri 6 unidades",
+          "translated": "Pani Puri 6 sztuk",
+          "description": "Chrupiące kuleczki z ciasta pszenne, napełniane wodą z tamaryndowca i miętą.",
+          "ingredients": [
+            "mąka pszenna",
+            "woda z tamaryndowca",
+            "mięta"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "6.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Cúrcuma Platter",
+          "translated": "Talerz Cúrcuma",
+          "description": "Zestaw różnych przystawek serwowanych razem.",
+          "ingredients": [
+            "różne przystawki"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "starter",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "ENSALADAS",
+      "name_translated": "Sałatki",
+      "items": [
+        {
+          "original": "Cúrcuma Salad",
+          "translated": "Sałatka Cúrcuma",
+          "description": "Sałatka z sałatą, cebulą, pomidorem i domowym świeżym serem.",
+          "ingredients": [
+            "sałata",
+            "cebula",
+            "pomidor",
+            "ser paneer"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "salad",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "6.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Salad",
+          "translated": "Sałatka z kurczakiem",
+          "description": "Sałatka z sałatą, cebulą, pomidorem i kurczakiem pieczonym w tandoorze.",
+          "ingredients": [
+            "sałata",
+            "cebula",
+            "pomidor",
+            "kurczak"
+          ],
+          "allergens": [],
+          "category": "salad",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "7.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Green Salad",
+          "translated": "Zielona sałatka",
+          "description": "Sałatka z sałatą, oliwą, awokado, brokułami i oliwkami.",
+          "ingredients": [
+            "sałata",
+            "oliwa",
+            "awokado",
+            "brokuły",
+            "oliwki"
+          ],
+          "allergens": [],
+          "category": "salad",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "8.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "POLLO (con arroz Basmati incluido)",
+      "name_translated": "Kurczak (z ryżem Basmati w zestawie)",
+      "items": [
+        {
+          "original": "Chicken Curry",
+          "translated": "Curry z kurczaka",
+          "description": "Kurczak w sosie na bazie cebuli i pomidora, doprawiony mieszanką aromatycznych przypraw.",
+          "ingredients": [
+            "kurczak",
+            "cebula",
+            "pomidor",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Tikka Masala",
+          "translated": "Chicken Tikka Masala",
+          "description": "Kurczak marynowany w jogurcie i przyprawach, pieczony w tandoorze, w kremowym sosie pomidorowym z migdałami.",
+          "ingredients": [
+            "kurczak",
+            "jogurt",
+            "śmietana",
+            "pomidor",
+            "migdały",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza",
+            "orzechy"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Korma",
+          "translated": "Chicken Korma",
+          "description": "Kurczak w łagodnym kremowym sosie z kokosem, śmietaną, czosnkiem i różnymi aromatycznymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "kokos",
+            "śmietana",
+            "czosnek",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "12.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Balti",
+          "translated": "Chicken Balti",
+          "description": "Danie z kurczaka z cebulą, papryką, czosnkiem, kurkumą i różnymi aromatycznymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "cebula",
+            "papryka",
+            "czosnek",
+            "kurkuma",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "11.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Vindaloo",
+          "translated": "Chicken Vindaloo",
+          "description": "Bardzo pikantne curry z kurczakiem, papryczkami chilli, imbirem, czosnkiem i aromatycznymi przyprawami, z ziemniakami.",
+          "ingredients": [
+            "kurczak",
+            "papryczki chilli",
+            "imbir",
+            "czosnek",
+            "ziemniaki",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 3,
+          "price": "12.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Kadhai",
+          "translated": "Chicken Kadhai",
+          "description": "Pyszne danie z kurczakiem, cebulą, pomidorami i świeżo mielonymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "cebula",
+            "pomidor",
+            "papryka",
+            "świeże przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Saag",
+          "translated": "Chicken Saag",
+          "description": "Kurczak ze szpinakiem i tradycyjnymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "szpinak",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Madras",
+          "translated": "Chicken Madras",
+          "description": "Pikantne curry z kurczaka z tamaryndowcem i tradycyjnymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "tamaryndowiec",
+            "cebula",
+            "pomidor",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Tandoori Masala",
+          "translated": "Chicken Tandoori Masala",
+          "description": "Udka z kurczaka w sosie z cebulą, pomidorem i jogurtem z aromatycznymi przyprawami.",
+          "ingredients": [
+            "udka kurczaka",
+            "cebula",
+            "pomidor",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Malai Methi",
+          "translated": "Chicken Malai Methi",
+          "description": "Kurczak ze śmietaną, ziołami i aromatycznymi przyprawami.",
+          "ingredients": [
+            "kurczak",
+            "śmietana",
+            "kozieradka",
+            "zioła",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Butter Chicken",
+          "translated": "Butter Chicken",
+          "description": "Kurczak marynowany i pieczony, podawany w sosie z masłem, natanem i pomidorem.",
+          "ingredients": [
+            "kurczak",
+            "masło",
+            "nata",
+            "pomidor",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "13.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mango Chicken",
+          "translated": "Mango Chicken",
+          "description": "Pierś kurczaka w sosie z mango, natą i cebulą.",
+          "ingredients": [
+            "pierś kurczaka",
+            "mango",
+            "śmietana",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "12.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "CORDERO",
+      "name_translated": "Jagnięcina",
+      "items": [
+        {
+          "original": "Mutton Tikka Masala",
+          "translated": "Mutton Tikka Masala",
+          "description": "Jagnięcina w kremowym sosie z migdałami i pomidorami, marynowana i pieczona w tandoorze.",
+          "ingredients": [
+            "jagnięcina",
+            "śmietana",
+            "migdały",
+            "pomidor",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza",
+            "orzechy"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "13.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Curry",
+          "translated": "Curry z jagnięciny",
+          "description": "Jagnięcina w sosie z cebulą i pomidorami z aromatycznymi przyprawami.",
+          "ingredients": [
+            "jagnięcina",
+            "cebula",
+            "pomidor",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Palak",
+          "translated": "Mutton Palak",
+          "description": "Jagnięcina w sosie szpinakowym z imbirem, czosnkiem i przyprawami.",
+          "ingredients": [
+            "jagnięcina",
+            "szpinak",
+            "imbir",
+            "czosnek",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "13.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Korma",
+          "translated": "Mutton Korma",
+          "description": "Jagnięcina w łagodnym kremowym sosie z kokosem, śmietaną i przyprawami.",
+          "ingredients": [
+            "jagnięcina",
+            "kokos",
+            "śmietana",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "14.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Balti",
+          "translated": "Mutton Balti",
+          "description": "Jagnięcina z cebulą, czosnkiem, kurkumą i różnymi aromatycznymi przyprawami.",
+          "ingredients": [
+            "jagnięcina",
+            "cebula",
+            "czosnek",
+            "kurkuma",
+            "papryka",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Madras",
+          "translated": "Mutton Madras",
+          "description": "Pikantne curry z jagnięciny z tamaryndowcem i tradycyjnymi przyprawami.",
+          "ingredients": [
+            "jagnięcina",
+            "tamaryndowiec",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "13.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Vindaloo",
+          "translated": "Mutton Vindaloo",
+          "description": "Bardzo pikantne curry z jagnięciny z papryczkami chilli i wieloma przyprawami, z ziemniakami.",
+          "ingredients": [
+            "jagnięcina",
+            "papryczki chilli",
+            "czosnek",
+            "imbir",
+            "ziemniaki",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 3,
+          "price": "13.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "PLATOS PRINCIPALES - VEGETALES (con arroz Basmati incluido)",
+      "name_translated": "Dania główne - Wegetariańskie (z ryżem Basmati w zestawie)",
+      "items": [
+        {
+          "original": "Daal Tarka",
+          "translated": "Daal Tarka",
+          "description": "Żółta soczewica gotowana z cebulą, pomidorem i przyprawami podsmażanymi na maśle klarowanym.",
+          "ingredients": [
+            "żółta soczewica",
+            "cebula",
+            "pomidor",
+            "ghee",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "9.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Daal Makhni",
+          "translated": "Daal Makhni",
+          "description": "Czarna soczewica gotowana z masłem i świeżymi przyprawami.",
+          "ingredients": [
+            "czarna soczewica",
+            "masło",
+            "śmietana",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chana Masala",
+          "translated": "Chana Masala",
+          "description": "Ciecierzyca gotowana z pomidorem i cebulą, doprawiona aromatycznymi przyprawami.",
+          "ingredients": [
+            "ciecierzyca",
+            "pomidor",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "10.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Bhartha",
+          "translated": "Bhartha",
+          "description": "Bakłażan pieczony bezpośrednio w ogniu, wymieszany z kolendrą, czosnkiem, cebulą i przyprawami.",
+          "ingredients": [
+            "bakłażan",
+            "kolendra",
+            "czosnek",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "10.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Sabji Bahar",
+          "translated": "Sabji Bahar",
+          "description": "Różne warzywa gotowane z tradycyjnymi przyprawami.",
+          "ingredients": [
+            "warzywa mieszane",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Veg Korma",
+          "translated": "Veg Korma",
+          "description": "Różne warzywa w łagodnym kremowym sosie z kokosem, migdałami i przyprawami.",
+          "ingredients": [
+            "warzywa mieszane",
+            "kokos",
+            "migdały",
+            "śmietana",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza",
+            "orzechy"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Veg Curry",
+          "translated": "Curry warzywne",
+          "description": "Różne warzywa w sosie z cebulą, pomidorem i przyprawami curry.",
+          "ingredients": [
+            "warzywa mieszane",
+            "cebula",
+            "pomidor",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "9.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Curry Pakora",
+          "translated": "Curry Pakora",
+          "description": "Smażone kulki z mąki z ciecierzycy w sosie jogurtowym z przyprawami curry.",
+          "ingredients": [
+            "mąka z ciecierzycy",
+            "jogurt",
+            "kurkuma",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutter Paneer",
+          "translated": "Mutter Paneer",
+          "description": "Ser paneer z groszkiem w domowym sosie pomidorowym z czosnkiem i cebulą.",
+          "ingredients": [
+            "paneer",
+            "groszek",
+            "pomidor",
+            "cebula",
+            "czosnek",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Shahi Paneer",
+          "translated": "Shahi Paneer",
+          "description": "Ser paneer w bogatym sosie curry z natą i masłem klarowanym.",
+          "ingredients": [
+            "paneer",
+            "śmietana",
+            "masło",
+            "przyprawy curry"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "13.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Palak Paneer",
+          "translated": "Palak Paneer",
+          "description": "Szpinak z serem paneer i tradycyjnymi przyprawami.",
+          "ingredients": [
+            "szpinak",
+            "paneer",
+            "czosnek",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Paneer Butter Masala",
+          "translated": "Paneer Butter Masala",
+          "description": "Ser paneer w sosie pomidorowo-maślanym z papryką i mieszanką przypraw.",
+          "ingredients": [
+            "paneer",
+            "masło",
+            "pomidor",
+            "papryka",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Kadhai Paneer",
+          "translated": "Kadhai Paneer",
+          "description": "Ser paneer ze świeżą papryką i cebulą w mieszance przypraw.",
+          "ingredients": [
+            "paneer",
+            "papryka",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 2,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mashrum Masala",
+          "translated": "Mushroom Masala",
+          "description": "Pieczarki w aromatycznym sosie z cebulą i pomidorem.",
+          "ingredients": [
+            "pieczarki",
+            "cebula",
+            "pomidor",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Palak Kofta",
+          "translated": "Palak Kofta",
+          "description": "Kulki ze świeżego sera i ziemniaków ze szpinakiem w sosie curry z owocami suszonymi i słodką salsa.",
+          "ingredients": [
+            "szpinak",
+            "paneer",
+            "ziemniaki",
+            "owoce suszone",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Malai Kofta",
+          "translated": "Malai Kofta",
+          "description": "Kulki z sera paneer i ziemniaków w kremowym sosie curry ze słodką salsa.",
+          "ingredients": [
+            "paneer",
+            "ziemniaki",
+            "śmietana",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "COCINA TANDOORI",
+      "name_translated": "Kuchnia Tandoori",
+      "items": [
+        {
+          "original": "Chicken Tikka",
+          "translated": "Chicken Tikka",
+          "description": "Kawałki kurczaka marynowane w jogurcie i przyprawach, pieczone w piecu tandoor.",
+          "ingredients": [
+            "kurczak",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "10.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Hariyali Tikka",
+          "translated": "Hariyali Tikka",
+          "description": "Pierś kurczaka marynowana ze świeżą miętą, kolendrą i przyprawami, pieczona w tandoorze.",
+          "ingredients": [
+            "pierś kurczaka",
+            "mięta",
+            "kolendra",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Tandoori Tikka",
+          "translated": "Tandoori Tikka",
+          "description": "Kawałki kurczaka w domowej marynacie jogurtowej pieczone w tandoorze.",
+          "ingredients": [
+            "kurczak",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Paneer Tikka",
+          "translated": "Paneer Tikka",
+          "description": "Świeży domowy ser paneer marynowany z przyprawami, pieczony w tandoorze.",
+          "ingredients": [
+            "paneer",
+            "jogurt",
+            "przyprawy"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "main",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "12.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "ACOMPAÑAMIENTOS - ARROZ, NAAN Y BIRIYANIS",
+      "name_translated": "Dodatki - Ryż, Naan i Biryani",
+      "items": [
+        {
+          "original": "Plain Rice",
+          "translated": "Ryż biały",
+          "description": "Gotowany ryż basmati.",
+          "ingredients": [
+            "ryż basmati"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Jira Rice",
+          "translated": "Ryż z kminkiem",
+          "description": "Ryż basmati z kminkiem.",
+          "ingredients": [
+            "ryż basmati",
+            "kminek"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Rice Pilaw",
+          "translated": "Ryż Pilaw",
+          "description": "Ryż basmati z groszkiem i przyprawami.",
+          "ingredients": [
+            "ryż basmati",
+            "groszek",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "5.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Panela Rice/Lemon Rice/Coco Rice",
+          "translated": "Ryż Panela/Ryż Cytrynowy/Ryż Kokosowy",
+          "description": "Ryż basmati przygotowany na trzy sposoby: z panelaą, cytryną lub kokosem.",
+          "ingredients": [
+            "ryż basmati",
+            "panela/cytryna/kokos"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "5.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Egg fried rice",
+          "translated": "Smażony ryż z jajkiem",
+          "description": "Ryż basmati smażony z jajkiem.",
+          "ingredients": [
+            "ryż basmati",
+            "jajko"
+          ],
+          "allergens": [
+            "jaja"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "6.25",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan Normal",
+          "translated": "Naan zwykły",
+          "description": "Tradycyjny chleb pszenny pieczony w tandoorze.",
+          "ingredients": [
+            "mąka pszenna"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.25",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan de mantequilla",
+          "translated": "Naan z masłem",
+          "description": "Chleb naan posmarowany masłem.",
+          "ingredients": [
+            "mąka pszenna",
+            "masło"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan de ajo",
+          "translated": "Naan czosnkowy",
+          "description": "Chleb naan z czosnkiem.",
+          "ingredients": [
+            "mąka pszenna",
+            "czosnek"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan de queso",
+          "translated": "Naan serowy",
+          "description": "Chleb naan nadziewany serem.",
+          "ingredients": [
+            "mąka pszenna",
+            "ser"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "4.25",
+          "currency": "EUR"
+        },
+        {
+          "original": "Ajo + Queso",
+          "translated": "Czosnek + Ser",
+          "description": "Chleb naan z czosnkiem i serem.",
+          "ingredients": [
+            "mąka pszenna",
+            "czosnek",
+            "ser"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "4.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Paneer Naan",
+          "translated": "Naan z paneer",
+          "description": "Chleb naan nadziewany serem paneer.",
+          "ingredients": [
+            "mąka pszenna",
+            "paneer"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "4.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan Peshawari",
+          "translated": "Naan Peszawarski",
+          "description": "Chleb naan nadziewany suszonymi owocami.",
+          "ingredients": [
+            "mąka pszenna",
+            "suszone owoce"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Naan Kulcha",
+          "translated": "Naan Kulcha",
+          "description": "Chleb naan z cebulą i przyprawami.",
+          "ingredients": [
+            "mąka pszenna",
+            "cebula",
+            "przyprawy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Tandoori Roti",
+          "translated": "Tandoori Roti",
+          "description": "Pełnoziarnisty chleb pieczony w tandoorze.",
+          "ingredients": [
+            "mąka pełnoziarnista"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Tawa Roti",
+          "translated": "Tawa Roti",
+          "description": "Chleb pszenny pieczony na patelni tawa (na kuchence gazowej).",
+          "ingredients": [
+            "mąka pszenna"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Veg. Biriyani",
+          "translated": "Biryani warzywne",
+          "description": "Ryż basmati aromatyzowany z różnymi warzywami.",
+          "ingredients": [
+            "ryż basmati",
+            "warzywa mieszane",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "9.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Chicken Biriyani",
+          "translated": "Biryani z kurczakiem",
+          "description": "Ryż basmati z kurczakiem i aromatycznymi przyprawami.",
+          "ingredients": [
+            "ryż basmati",
+            "kurczak",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "11.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mutton Biriyani",
+          "translated": "Biryani z jagnięciną",
+          "description": "Ryż basmati z jagnięciną i aromatycznymi przyprawami.",
+          "ingredients": [
+            "ryż basmati",
+            "jagnięcina",
+            "przyprawy"
+          ],
+          "allergens": [],
+          "category": "side",
+          "dietary": {
+            "vegetarian": false,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 1,
+          "price": "13.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "RAITA",
+      "name_translated": "Raita",
+      "items": [
+        {
+          "original": "Plain Raita",
+          "translated": "Raita naturalna",
+          "description": "Jogurt naturalny.",
+          "ingredients": [
+            "jogurt"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mix Raita",
+          "translated": "Raita mix",
+          "description": "Jogurt z ogórkiem, kminkiem, pomidorem i cebulą.",
+          "ingredients": [
+            "jogurt",
+            "ogórek",
+            "kminek",
+            "pomidor",
+            "cebula"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Boondi Raita",
+          "translated": "Boondi Raita",
+          "description": "Jogurt z chrupiącymi kulkami z mąki z ciecierzycy.",
+          "ingredients": [
+            "jogurt",
+            "boondi (kulki z mąki z ciecierzycy)"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "side",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.25",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "POSTRES",
+      "name_translated": "Desery",
+      "items": [
+        {
+          "original": "Gulab Jamun",
+          "translated": "Gulab Jamun",
+          "description": "Smażone kuleczki z mleka skondensowanego w syropie różanym.",
+          "ingredients": [
+            "mleko w proszku",
+            "mąka",
+            "syrop cukrowy",
+            "woda różana"
+          ],
+          "allergens": [
+            "gluten",
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Gajrola (estacional)",
+          "translated": "Gajar Halwa (sezonowe)",
+          "description": "Indyjski deser z marchwi gotowanej w mleku z cukrem i kardamonem.",
+          "ingredients": [
+            "marchew",
+            "mleko",
+            "cukier",
+            "kardamon"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "5.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Crema de mango",
+          "translated": "Krem z mango",
+          "description": "Deser kremowy na bazie mango.",
+          "ingredients": [
+            "mango",
+            "śmietana",
+            "cukier"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.25",
+          "currency": "EUR"
+        },
+        {
+          "original": "Mango Lassi",
+          "translated": "Mango Lassi",
+          "description": "Orzeźwiający napój jogurtowy z mango.",
+          "ingredients": [
+            "jogurt",
+            "mango",
+            "cukier"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "3.95",
+          "currency": "EUR"
+        },
+        {
+          "original": "Sweet Lassi",
+          "translated": "Słodkie Lassi",
+          "description": "Orzeźwiający słodki napój jogurtowy.",
+          "ingredients": [
+            "jogurt",
+            "cukier"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "3.25",
+          "currency": "EUR"
+        },
+        {
+          "original": "Rose Lassi",
+          "translated": "Lassi różane",
+          "description": "Jogurtowy napój o smaku różanym.",
+          "ingredients": [
+            "jogurt",
+            "syrop różany"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Helados (chocolate, vanilla, limón)",
+          "translated": "Lody (czekolada, wanilia, cytryna)",
+          "description": "Gałki lodów w trzech smakach: czekoladowym, waniliowym i cytrynowym.",
+          "ingredients": [
+            "mleko",
+            "śmietana",
+            "cukier",
+            "czekolada/wanilia/cytryna"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Helado de pistacho",
+          "translated": "Lody pistacjowe",
+          "description": "Lody o smaku pistacjowym.",
+          "ingredients": [
+            "mleko",
+            "śmietana",
+            "pistacje",
+            "cukier"
+          ],
+          "allergens": [
+            "laktoza",
+            "orzechy"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "5.75",
+          "currency": "EUR"
+        },
+        {
+          "original": "Helado de Mango",
+          "translated": "Lody mango",
+          "description": "Lody o smaku mango.",
+          "ingredients": [
+            "mleko",
+            "śmietana",
+            "mango",
+            "cukier"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "dessert",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "5.50",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "BEBIDAS",
+      "name_translated": "Napoje",
+      "items": [
+        {
+          "original": "Aqua (solon de cobra 500 ml)",
+          "translated": "Woda (Solan de Cobras 500 ml)",
+          "description": "Woda mineralna butelkowana 500 ml.",
+          "ingredients": [
+            "woda"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.40",
+          "currency": "EUR"
+        },
+        {
+          "original": "Aqua con gas (cristal 500 ml)",
+          "translated": "Woda gazowana (Cristal 500 ml)",
+          "description": "Woda gazowana butelkowana 500 ml.",
+          "ingredients": [
+            "woda gazowana"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.60",
+          "currency": "EUR"
+        },
+        {
+          "original": "Coca Cola (cristal) 355 ml",
+          "translated": "Coca Cola (szklana) 355 ml",
+          "description": "Coca Cola w szklanej butelce 355 ml.",
+          "ingredients": [
+            "Coca Cola"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Coca Cola Zero, Zero-Zero",
+          "translated": "Coca Cola Zero, Zero-Zero",
+          "description": "Coca Cola Zero lub bez kofeiny i cukru.",
+          "ingredients": [
+            "Coca Cola Zero"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Fanta Naranja/Fanta Limón",
+          "translated": "Fanta Pomarańczowa/Fanta Cytrynowa",
+          "description": "Napój gazowany Fanta w smaku pomarańczowym lub cytrynowym.",
+          "ingredients": [
+            "Fanta"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Aquarius",
+          "translated": "Aquarius",
+          "description": "Napój izotoniczny Aquarius.",
+          "ingredients": [
+            "Aquarius"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Nestea/Sprite",
+          "translated": "Nestea/Sprite",
+          "description": "Napój Nestea lub Sprite.",
+          "ingredients": [
+            "Nestea/Sprite"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        },
+        {
+          "original": "Tonica",
+          "translated": "Tonik",
+          "description": "Woda tonikowa.",
+          "ingredients": [
+            "woda tonikowa"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Salt Lassi (Bebida Indu)",
+          "translated": "Lassi słone (napój indyjski)",
+          "description": "Tradycyjny indyjski napój jogurtowy z solą.",
+          "ingredients": [
+            "jogurt",
+            "sól"
+          ],
+          "allergens": [
+            "laktoza"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": false,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.75",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "CERVEZA",
+      "name_translated": "Piwo",
+      "items": [
+        {
+          "original": "Cobra (cerveza indu 330 ml)",
+          "translated": "Cobra (piwo indyjskie 330 ml)",
+          "description": "Indyjskie piwo Cobra 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "King Fisher (cerveza indu 330 ml)",
+          "translated": "King Fisher (piwo indyjskie 330 ml)",
+          "description": "Indyjskie piwo Kingfisher 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Estrella Damm (330 ml)",
+          "translated": "Estrella Damm (330 ml)",
+          "description": "Hiszpańskie piwo Estrella Damm 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.60",
+          "currency": "EUR"
+        },
+        {
+          "original": "Estrella Galicia (330 ml)",
+          "translated": "Estrella Galicia (330 ml)",
+          "description": "Hiszpańskie piwo Estrella Galicia 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "2.80",
+          "currency": "EUR"
+        },
+        {
+          "original": "1906 (330 ml)",
+          "translated": "1906 (330 ml)",
+          "description": "Piwo 1906 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.10",
+          "currency": "EUR"
+        },
+        {
+          "original": "Ambar 10 (330 ml)",
+          "translated": "Ambar 10 (330 ml)",
+          "description": "Piwo Ambar 10 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Cerveza con Limon (330 ml)",
+          "translated": "Piwo z cytryną (330 ml)",
+          "description": "Piwo z sokiem cytrynowym 330 ml.",
+          "ingredients": [
+            "piwo",
+            "sok cytrynowy"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.50",
+          "currency": "EUR"
+        },
+        {
+          "original": "Alhambra 1925 (330 ml)",
+          "translated": "Alhambra 1925 (330 ml)",
+          "description": "Piwo Alhambra 1925 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.10",
+          "currency": "EUR"
+        },
+        {
+          "original": "Cerveza Zero Zero (330 ml)",
+          "translated": "Piwo bezalkoholowe Zero Zero (330 ml)",
+          "description": "Piwo bezalkoholowe 330 ml.",
+          "ingredients": [
+            "słód",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.00",
+          "currency": "EUR"
+        },
+        {
+          "original": "Cerveza Zero Zero Tostada (330 ml)",
+          "translated": "Piwo bezalkoholowe ciemne Zero Zero (330 ml)",
+          "description": "Ciemne piwo bezalkoholowe 330 ml.",
+          "ingredients": [
+            "słód ciemny",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [
+            "gluten"
+          ],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": false
+          },
+          "spice_level": 0,
+          "price": "3.20",
+          "currency": "EUR"
+        },
+        {
+          "original": "Gluten Free (330 ml)",
+          "translated": "Piwo bezglutenowe (330 ml)",
+          "description": "Piwo bezglutenowe 330 ml.",
+          "ingredients": [
+            "słód bezglutenowy",
+            "chmiel",
+            "drożdże",
+            "woda"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "VINOS (TINTO)",
+      "name_translated": "Wina (Czerwone)",
+      "items": [
+        {
+          "original": "Rasa by Sula Syrah",
+          "translated": "Rasa by Sula Syrah",
+          "description": "Indyjskie wino czerwone Syrah.",
+          "ingredients": [
+            "winogrona Syrah"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.90 copa / 21.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Dindori Reserve Shiraz by Sula",
+          "translated": "Dindori Reserve Shiraz by Sula",
+          "description": "Indyjskie wino czerwone Shiraz Dindori Reserve.",
+          "ingredients": [
+            "winogrona Shiraz"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.90 copa / 21.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Portia Roble 2021 (Ribera del Duero)",
+          "translated": "Portia Roble 2021 (Ribera del Duero)",
+          "description": "Hiszpańskie wino czerwone Ribera del Duero Portia Roble 2021.",
+          "ingredients": [
+            "winogrona Tempranillo"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.50 copa / 19.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Faustino Crianza (Rioja)",
+          "translated": "Faustino Crianza (Rioja)",
+          "description": "Hiszpańskie wino czerwone Rioja Faustino Crianza.",
+          "ingredients": [
+            "winogrona Tempranillo"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.20 copa / 17.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Cor del Paris Joven Montsant",
+          "translated": "Cor del Paris Joven Montsant",
+          "description": "Hiszpańskie młode wino czerwone Montsant.",
+          "ingredients": [
+            "winogrona Montsant"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "3.90 copa / 15.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Vino de la casa",
+          "translated": "Wino domowe (czerwone)",
+          "description": "Wino czerwone dnia.",
+          "ingredients": [
+            "winogrona"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90 copa / 11.90 botella",
+          "currency": "EUR"
+        }
+      ]
+    },
+    {
+      "name": "VINOS (BLANCO)",
+      "name_translated": "Wina (Białe)",
+      "items": [
+        {
+          "original": "Dindori Reserve by Sula (Vino Indu)",
+          "translated": "Dindori Reserve by Sula (Wino indyjskie)",
+          "description": "Indyjskie białe wino Dindori Reserve by Sula.",
+          "ingredients": [
+            "winogrona"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.90 copa / 21.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Polvorete 2023",
+          "translated": "Polvorete 2023",
+          "description": "Hiszpańskie białe wino Polvorete 2023.",
+          "ingredients": [
+            "winogrona"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.90 copa / 22.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Protos Verdejo",
+          "translated": "Protos Verdejo",
+          "description": "Hiszpańskie białe wino Protos Verdejo.",
+          "ingredients": [
+            "winogrona Verdejo"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "4.50 copa / 19.90 botella",
+          "currency": "EUR"
+        },
+        {
+          "original": "Vino de la casa",
+          "translated": "Wino domowe (białe)",
+          "description": "Wino białe dnia.",
+          "ingredients": [
+            "winogrona"
+          ],
+          "allergens": [],
+          "category": "drink",
+          "dietary": {
+            "vegetarian": true,
+            "vegan": true,
+            "gluten_free": true
+          },
+          "spice_level": 0,
+          "price": "2.90 copa / 11.90 botella",
+          "currency": "EUR"
+        }
+      ]
+    }
+  ]
+}

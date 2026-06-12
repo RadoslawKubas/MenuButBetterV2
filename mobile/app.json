@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "MenuButBetter",
+    "slug": "menubutbetter",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "MenuButBetter potrzebuje dostępu do zdjęć, aby wczytać menu z galerii.",
+          "cameraPermission": "MenuButBetter używa aparatu do zrobienia zdjęcia menu."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "MenuButBetter używa lokalizacji tylko gdy zaznaczysz, że jesteś w restauracji, aby ją namierzyć."
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.appwithkiss.menubutbetter"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
