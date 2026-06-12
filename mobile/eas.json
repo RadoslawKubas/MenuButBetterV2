@@ -11,14 +11,14 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://ZMIEN-NA-URL-Z-RAILWAY.up.railway.app",
+        "EXPO_PUBLIC_API_URL": "https://menubutbetter-production.up.railway.app",
         "EXPO_PUBLIC_APP_TOKEN": "83cb106b076472d8cd09683b24530cfcd056d81a4ced2077"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://ZMIEN-NA-URL-Z-RAILWAY.up.railway.app",
+        "EXPO_PUBLIC_API_URL": "https://menubutbetter-production.up.railway.app",
         "EXPO_PUBLIC_APP_TOKEN": "83cb106b076472d8cd09683b24530cfcd056d81a4ced2077"
       }
     }
