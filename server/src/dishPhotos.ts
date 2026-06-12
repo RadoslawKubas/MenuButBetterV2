@@ -194,6 +194,9 @@ export class SerpApiImageProvider implements DishPhotoProvider {
         source: "serpapi",
         attribution: it.source ?? it.title,
         contextUrl: it.link,
+        // Domena ze strony źródłowej — inaczej photoSourceCategory zrzuca wszystko do „web"
+        // (więc etykiety TripAdvisor/Yelp nie pojawiałyby się mimo trafień z tych portali).
+        domain: hostOf(it.link),
       }))
       .filter((p) => p.url);
   }

@@ -39,6 +39,12 @@ export function Lightbox({
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
 
+  // Powrót do stanu neutralnego (gest anulowany / niewystarczający do zamknięcia).
+  const resetPan = useRef(() => {
+    Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    Animated.spring(bgOpacity, { toValue: 1, useNativeDriver: true, bounciness: 0 }).start();
+  }).current;
+
   // Reset pozycji/przezroczystości i ustaw stronę startową przy każdym otwarciu.
   useEffect(() => {
     if (state) {
@@ -51,26 +57,29 @@ export function Lightbox({
   // Gest pionowy w górę → zamknij. Poziome przesuwanie zostawiamy FlatList (paginacja).
   const pan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy < -8 && Math.abs(g.dy) > Math.abs(g.dx) * 1.5,
+      // Przejmujemy TYLKO wyraźny ruch w górę (pionowy dominuje nad poziomym).
+      onMoveShouldSetPanResponder: (_, g) => g.dy < -10 && Math.abs(g.dy) > Math.abs(g.dx),
+      // Gdy już przejęliśmy pionowy gest, NIE oddajemy go FlatList — inaczej ruch w bok
+      // w trakcie machnięcia „wyrywał" gest i zostawał dziwny, połowiczny stan.
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
-        if (g.dy < 0) {
-          translateY.setValue(g.dy);
-          bgOpacity.setValue(Math.max(0.15, 1 + g.dy / 400));
-        }
+        const dy = Math.min(0, g.dy); // tylko w górę
+        translateY.setValue(dy);
+        bgOpacity.setValue(Math.max(0.15, 1 + dy / 400));
       },
       onPanResponderRelease: (_, g) => {
-        const dismiss = g.dy < -110 || g.vy < -0.6;
-        if (dismiss) {
+        if (g.dy < -110 || g.vy < -0.6) {
           Animated.timing(translateY, {
             toValue: -height,
             duration: 150,
             useNativeDriver: true,
           }).start(() => onClose());
         } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: true }).start();
-          Animated.spring(bgOpacity, { toValue: 1, useNativeDriver: true }).start();
+          resetPan();
         }
       },
+      // Bezpiecznik: gdyby gest został przerwany (system / inny responder) — wróć do zera.
+      onPanResponderTerminate: () => resetPan(),
     }),
   ).current;
 
