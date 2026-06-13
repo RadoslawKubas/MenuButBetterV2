@@ -288,21 +288,26 @@ app.post("/dish-photos", async (c) => {
   // Klucz nazwy lokalu (np. „curcuma") do potwierdzenia, że strona portalu jest TEGO lokalu.
   const venueKey = body.restaurantName?.trim() ? stripAlnum(body.restaurantName) : "";
 
-  // Zdjęcia POGLĄDOWE (typ dania): Wikimedia → Openverse. DOMYŚLNIE WERYFIKOWANE wizją —
-  // wyszukiwarka Commons często trafia w słowo z nazwy i zwraca mapy/ptaki/budynki/rysunki.
-  // Jak żadne nie pokazuje dania/napoju → oddajemy PUSTĄ listę (lepiej brak niż bzdura).
+  // Zdjęcia POGLĄDOWE (typ dania): Serper (Google Images) → Wikimedia → Openverse fallback.
+  // Serper ma dużo wyższe pokrycie trafnych zdjęć dań niż Commons (zmierzone: 93% vs 60%);
+  // Commons często zwraca mapy/budynki/przypadkowe pliki, więc był słabym źródłem startowym.
+  // DOMYŚLNIE WERYFIKOWANE wizją; jak nic nie pokazuje dania → PUSTA lista (lepiej brak niż bzdura).
   async function representatives(verify: boolean): Promise<{
     photos: { url: string; source: string; attribution?: string; verified: boolean; representative: boolean }[];
     usage: Usage;
   }> {
     const pool = Math.max(num * 2, 6);
-    let found = await new WikimediaProvider(pool).find(dish).catch(() => []);
+    let found = await genericWebImages(dish, pool).catch(() => []);
+    if (found.length === 0) found = await new WikimediaProvider(pool).find(dish).catch(() => []);
     if (found.length === 0) found = await new OpenverseProvider(pool).find(dish).catch(() => []);
     if (found.length === 0) return { photos: [], usage: ZERO_USAGE };
+    // Etykieta źródła: dla wyników z domeną (Serper) → kategoria (web/tripadvisor…),
+    // dla Wikimedia/Openverse (bez domeny) → ich własny source.
+    const srcOf = (p: DishPhoto) => (p.domain ? photoSourceCategory(p.domain) : p.source);
     if (!verify) {
       return {
         photos: found.slice(0, num).map((p) => ({
-          url: p.url, source: p.source, attribution: p.attribution, verified: false, representative: true,
+          url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true,
         })),
         usage: ZERO_USAGE,
       };
@@ -313,7 +318,7 @@ app.post("/dish-photos", async (c) => {
       .filter((p) => p.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.score - a.score)
       .slice(0, num)
-      .map((p) => ({ url: p.url, source: p.source, attribution: p.attribution, verified: false, representative: true }));
+      .map((p) => ({ url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true }));
     return { photos, usage };
   }
 

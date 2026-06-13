@@ -8,7 +8,7 @@ import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track } from "./apiLog.ts";
 
-const client = new Anthropic();
+const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6";
 
 // Próg pewności dopasowania danie↔zdjęcie. Niżej — zbyt luźne (ryzyko złego dania).

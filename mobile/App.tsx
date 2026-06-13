@@ -48,6 +48,7 @@ import { MenuView } from "./src/MenuView";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
 import { ApiErrorToast } from "./src/Toast";
+import { friendlyMessage } from "./src/appLog";
 import { RenameModal } from "./src/RenameModal";
 import { RestaurantCard } from "./src/RestaurantCard";
 import { colors } from "./src/theme";
@@ -155,7 +156,7 @@ export default function App() {
       const img = await captureFromCamera();
       if (img) addImages([img]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Nieznany błąd.");
+      setError(friendlyMessage(e instanceof Error ? e.message : undefined));
     }
   }
 
@@ -164,7 +165,7 @@ export default function App() {
     try {
       addImages(await pickFromLibrary());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Nieznany błąd.");
+      setError(friendlyMessage(e instanceof Error ? e.message : undefined));
     }
   }
 
@@ -280,7 +281,7 @@ export default function App() {
       void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
       void fillDescriptions(result, scanId!, targetLang, model, setMenu);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Nieznany błąd.");
+      setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
       setScanProgress(null);
     }
@@ -629,7 +630,7 @@ export default function App() {
           setScans(await listScans());
         }
       } catch (e) {
-        Alert.alert("Nie udało się pobrać opisu", e instanceof Error ? e.message : "Spróbuj ponownie.");
+        Alert.alert("Nie udało się pobrać opisu", friendlyMessage(e instanceof Error ? e.message : undefined));
       } finally {
         setInfoLoading((p) => {
           const n = new Set(p);
@@ -944,7 +945,7 @@ export default function App() {
       void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
       void fillDescriptions(merged, scanId, scanLang, scanModel, applyMenu);
     } catch (e) {
-      Alert.alert("Nie udało się dodać", e instanceof Error ? e.message : "Spróbuj ponownie.");
+      Alert.alert("Nie udało się dodać", friendlyMessage(e instanceof Error ? e.message : undefined));
     } finally {
       setAppending(false);
     }

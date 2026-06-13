@@ -61,3 +61,23 @@ export function classifyError(detail?: string): ErrorKind {
     return { icon: "🔌", label: "Sieć / timeout", color: AMBER };
   return { icon: "❗", label: "Błąd", color: RED };
 }
+
+/** Czytelny komunikat dla użytkownika (zamiast surowego/„Nieznany błąd"). */
+export function friendlyMessage(detail?: string): string {
+  switch (classifyError(detail).label) {
+    case "Sieć / timeout":
+      return "Problem z połączeniem. Sprawdź internet i spróbuj ponownie.";
+    case "Limit zapytań (rate)":
+      return "Za dużo zapytań na raz. Odczekaj chwilę i spróbuj ponownie.";
+    case "Kredyty / limit konta":
+      return "Wyczerpany limit/kredyty jednego z API. Zajrzyj do Diagnostyki (📊).";
+    case "Autoryzacja / klucz":
+      return "Problem z autoryzacją API. Sprawdź klucze w Diagnostyce (📊).";
+    case "Błąd serwera":
+      return "Chwilowy błąd serwera. Spróbuj ponownie za moment.";
+    default:
+      return detail && detail.length > 0 && detail.length < 120
+        ? detail
+        : "Coś poszło nie tak. Spróbuj ponownie.";
+  }
+}

@@ -6,7 +6,7 @@ import { MENU_SCHEMA, type Menu } from "./schema.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
 import { track } from "./apiLog.ts";
 
-const client = new Anthropic(); // klucz z ANTHROPIC_API_KEY (env)
+const client = new Anthropic({ maxRetries: 4 }); // klucz z ANTHROPIC_API_KEY (env); retry na sieć/429/5xx
 
 // Dostępne modele (najnowsze) + ich maksymalne wyjście.
 // max_tokens to tylko SUFIT — ustawiony na maksimum modelu nie kosztuje więcej,

@@ -4,7 +4,7 @@ import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
 import { track } from "./apiLog.ts";
 
-const client = new Anthropic();
+const client = new Anthropic({ maxRetries: 4 });
 
 export interface DishInfoInput {
   name: string;
