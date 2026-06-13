@@ -1,0 +1,131 @@
+// Diagnostyka: lekki, w pamięci log wywołań ZEWNĘTRZNYCH API (per provider, ring buffer).
+// Cel — wgląd w to, których serwerów używamy, ile było zapytań i czy ostatnie odpowiedzi
+// były OK/error (do wychwytywania problemów przy testach). Resetuje się po restarcie serwera.
+
+export type Provider =
+  | "claude"
+  | "google_places"
+  | "google_cse"
+  | "tripadvisor"
+  | "serper"
+  | "serpapi"
+  | "wikimedia"
+  | "openverse"
+  | "other";
+
+export interface ApiLogEntry {
+  ts: number; // epoch ms
+  op: string; // krótka nazwa operacji
+  ok: boolean;
+  ms: number; // czas trwania
+  detail?: string; // komunikat błędu / status
+}
+
+interface State {
+  entries: ApiLogEntry[];
+  total: number;
+  errors: number;
+}
+
+const MAX = 40; // ostatnich wpisów na providera
+const store = new Map<Provider, State>();
+
+export function record(provider: Provider, op: string, ok: boolean, ms: number, detail?: string): void {
+  let s = store.get(provider);
+  if (!s) {
+    s = { entries: [], total: 0, errors: 0 };
+    store.set(provider, s);
+  }
+  s.total++;
+  if (!ok) s.errors++;
+  s.entries.unshift({ ts: Date.now(), op, ok, ms: Math.round(ms), detail: detail?.slice(0, 300) });
+  if (s.entries.length > MAX) s.entries.length = MAX;
+}
+
+/** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude). Re-rzuca błąd. */
+export async function track<T>(provider: Provider, op: string, fn: () => Promise<T>): Promise<T> {
+  const t0 = Date.now();
+  try {
+    const r = await fn();
+    record(provider, op, true, Date.now() - t0);
+    return r;
+  } catch (e) {
+    record(provider, op, false, Date.now() - t0, (e as Error)?.message ?? String(e));
+    throw e;
+  }
+}
+
+function detect(u: string): { provider: Provider; op: string } {
+  let host = "";
+  let path = "";
+  try {
+    const url = new URL(u);
+    host = url.hostname;
+    path = url.pathname;
+  } catch {
+    /* zostaw puste */
+  }
+  const op = (path.split("/").filter(Boolean).pop() || "request").slice(0, 40);
+  const provider: Provider = host.includes("serper.dev")
+    ? "serper"
+    : host.includes("serpapi.com")
+      ? "serpapi"
+      : host.includes("customsearch")
+        ? "google_cse"
+        : host.includes("googleapis.com")
+          ? "google_places"
+          : host.includes("tripadvisor")
+            ? "tripadvisor"
+            : host.includes("wikimedia") || host.includes("wikipedia")
+              ? "wikimedia"
+              : host.includes("openverse")
+                ? "openverse"
+                : "other";
+  return { provider, op };
+}
+
+/** Drop-in zamiennik `fetch` dla wywołań zewnętrznych — sam wykrywa providera z URL i loguje. */
+export async function trackedFetch(input: string | URL, init?: RequestInit, op?: string): Promise<Response> {
+  const urlStr = typeof input === "string" ? input : input.toString();
+  const d = detect(urlStr);
+  const t0 = Date.now();
+  try {
+    const res = await fetch(input, init);
+    let detail: string | undefined;
+    if (!res.ok) {
+      // Dołóż fragment treści odpowiedzi — pozwala sklasyfikować błąd (quota/klucz/itp.).
+      const body = await res.clone().text().catch(() => "");
+      detail = `HTTP ${res.status}${body ? " " + body.replace(/\s+/g, " ").slice(0, 180) : ""}`;
+    }
+    record(d.provider, op ?? d.op, res.ok, Date.now() - t0, detail);
+    return res;
+  } catch (e) {
+    record(d.provider, op ?? d.op, false, Date.now() - t0, (e as Error)?.message ?? String(e));
+    throw e;
+  }
+}
+
+export interface ProviderReport {
+  provider: Provider;
+  total: number;
+  ok: number;
+  errors: number;
+  lastAt: number | null;
+  lastError: string | null;
+  entries: ApiLogEntry[];
+}
+
+/** Pełny zrzut do endpointu /diagnostics. */
+export function snapshot(): ProviderReport[] {
+  return [...store.entries()]
+    .map(([provider, s]) => ({
+      provider,
+      total: s.total,
+      ok: s.total - s.errors,
+      errors: s.errors,
+      lastAt: s.entries[0]?.ts ?? null,
+      lastError: s.entries.find((e) => !e.ok)?.detail ?? null,
+      entries: s.entries,
+    }))
+    .sort((a, b) => b.total - a.total);
+}

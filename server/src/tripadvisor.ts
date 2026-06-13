@@ -1,5 +1,7 @@
 // TripAdvisor Content API: znajdź lokal i pobierz ocenę + REALNY link na jego stronę.
 // Darmowe, ale wymaga klucza (TRIPADVISOR_KEY) z zatwierdzonej rejestracji.
+import { trackedFetch } from "./apiLog.ts";
+
 const BASE = "https://api.content.tripadvisor.com/api/v1";
 const KEY = () => process.env.TRIPADVISOR_KEY;
 
@@ -70,7 +72,7 @@ async function fetchPhotos(locId: string, lang: string, key: string): Promise<Tr
   p.searchParams.set("key", key);
   p.searchParams.set("language", lang);
   p.searchParams.set("limit", "12");
-  const r = await fetch(p, { headers: { Accept: "application/json" } });
+  const r = await trackedFetch(p, { headers: { Accept: "application/json" } });
   if (!r.ok) return [];
   const j = (await r.json()) as PhotosResponse;
   return (j.data ?? [])
@@ -104,7 +106,7 @@ export async function findTripAdvisor(params: TaParams): Promise<TripAdvisorInfo
   }
   search.searchParams.set("language", lang);
 
-  const sres = await fetch(search, { headers: { Accept: "application/json" } });
+  const sres = await trackedFetch(search, { headers: { Accept: "application/json" } });
   if (!sres.ok) throw new Error(`TripAdvisor search HTTP ${sres.status}: ${await sres.text()}`);
   const sjson = (await sres.json()) as SearchResponse;
 
@@ -118,7 +120,7 @@ export async function findTripAdvisor(params: TaParams): Promise<TripAdvisorInfo
   det.searchParams.set("key", key);
   det.searchParams.set("language", lang);
 
-  const dres = await fetch(det, { headers: { Accept: "application/json" } });
+  const dres = await trackedFetch(det, { headers: { Accept: "application/json" } });
   if (!dres.ok) throw new Error(`TripAdvisor details HTTP ${dres.status}: ${await dres.text()}`);
   const d = (await dres.json()) as DetailsResponse;
   const photos = await fetchPhotos(locId, lang, key).catch(() => []);

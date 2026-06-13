@@ -4,6 +4,7 @@
 // (np. 0.85 dla pakory zwróconej na zapytanie „Mango Lassi").
 import Anthropic from "@anthropic-ai/sdk";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
+import { track } from "./apiLog.ts";
 
 const client = new Anthropic();
 const MODEL = "claude-sonnet-4-6";
@@ -104,7 +105,8 @@ export async function scoreDishPhotos(
   });
 
   try {
-    const resp = await client.messages.create({
+    const resp = await track("claude", "verify-photos", () =>
+      client.messages.create({
       model: MODEL,
       max_tokens: 800,
       system:
@@ -113,7 +115,8 @@ export async function scoreDishPhotos(
         "mapy, rysunki, logo, budynki, wnętrza, ludzi, zwierzęta, przedmioty oraz inne dania/napoje.",
       messages: [{ role: "user", content }],
       output_config: { format: { type: "json_schema", schema: SCHEMA } },
-    });
+      }),
+    );
     usage = usageFrom(MODEL, resp.usage);
     const text = resp.content.find((b) => b.type === "text");
     if (!text || text.type !== "text") return { scores, usage };

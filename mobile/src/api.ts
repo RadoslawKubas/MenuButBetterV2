@@ -1,6 +1,7 @@
 // Klient API backendu. Adres bazowy wykrywamy automatycznie z hosta dev-serwera
 // Expo (żeby działało na fizycznym telefonie bez ręcznego wpisywania IP).
 import Constants from "expo-constants";
+import * as appLog from "./appLog";
 import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type RestaurantInfo, type Usage } from "./types";
 
 const API_PORT = 8787;
@@ -36,6 +37,25 @@ function jsonHeaders(): Record<string, string> {
   return h;
 }
 
+/** fetch z logowaniem do diagnostyki (czas, ok/błąd) + powiadomieniem o błędzie (toast). */
+async function loggedFetch(label: string, input: string, init?: RequestInit): Promise<Response> {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(input, init);
+    appLog.logCall({
+      ts: Date.now(),
+      label,
+      ok: res.ok,
+      ms: Date.now() - t0,
+      detail: res.ok ? undefined : `HTTP ${res.status}`,
+    });
+    return res;
+  } catch (e) {
+    appLog.logCall({ ts: Date.now(), label, ok: false, ms: Date.now() - t0, detail: (e as Error).message });
+    throw e;
+  }
+}
+
 export interface ScanImage {
   base64: string;
   mediaType: "image/jpeg" | "image/png" | "image/webp";
@@ -49,7 +69,7 @@ export interface ScanParams {
 }
 
 export async function scanMenu(params: ScanParams): Promise<{ menu: Menu; usage: Usage }> {
-  const res = await fetch(`${API_BASE}/scan`, {
+  const res = await loggedFetch("scan", `${API_BASE}/scan`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify({
@@ -81,7 +101,7 @@ export interface DishInfoParams {
 export async function fetchDishInfo(
   params: DishInfoParams,
 ): Promise<{ info: string; usage: Usage }> {
-  const res = await fetch(`${API_BASE}/dish-info`, {
+  const res = await loggedFetch("dish-info", `${API_BASE}/dish-info`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify(params),
@@ -113,7 +133,7 @@ export interface RestaurantQuery {
 export async function fetchRestaurant(
   q: RestaurantQuery,
 ): Promise<{ restaurant: RestaurantInfo | null; candidates: RestaurantInfo[] }> {
-  const res = await fetch(`${API_BASE}/restaurant`, {
+  const res = await loggedFetch("restaurant", `${API_BASE}/restaurant`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify({
@@ -158,7 +178,7 @@ export async function fetchVenuePhotos(
   dishes: string[],
   cuisine?: string,
 ): Promise<{ matches: VenueMatch[]; usage: Usage }> {
-  const res = await fetch(`${API_BASE}/venue-photos`, {
+  const res = await loggedFetch("venue-photos", `${API_BASE}/venue-photos`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine }),
@@ -173,7 +193,7 @@ export async function fetchDishPhotos(
   restaurantHint?: string,
   opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string },
 ): Promise<{ photos: DishPhotoLite[]; usage: Usage }> {
-  const res = await fetch(`${API_BASE}/dish-photos`, {
+  const res = await loggedFetch("dish-photos", `${API_BASE}/dish-photos`, {
     method: "POST",
     headers: jsonHeaders(),
     body: JSON.stringify({
@@ -189,4 +209,33 @@ export async function fetchDishPhotos(
   const json = (await res.json()) as { photos?: DishPhotoLite[]; usage?: Usage; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
   return { photos: json.photos ?? [], usage: json.usage ?? ZERO_USAGE };
+}
+
+// --- Diagnostyka: zewnętrzne API używane przez serwer ---
+export interface DiagEntry {
+  ts: number;
+  op: string;
+  ok: boolean;
+  ms: number;
+  detail?: string;
+}
+export interface DiagProvider {
+  provider: string;
+  label: string;
+  paid: boolean;
+  configured: boolean;
+  total: number;
+  ok: number;
+  errors: number;
+  lastAt: number | null;
+  lastError: string | null;
+  entries: DiagEntry[];
+}
+
+/** Pobiera log/statystyki zewnętrznych API z serwera (ekran Diagnostyka). */
+export async function fetchDiagnostics(): Promise<{ now: number; providers: DiagProvider[] }> {
+  const res = await loggedFetch("diagnostics", `${API_BASE}/diagnostics`, { headers: jsonHeaders() });
+  const json = (await res.json()) as { now?: number; providers?: DiagProvider[]; error?: string };
+  if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return { now: json.now ?? Date.now(), providers: json.providers ?? [] };
 }

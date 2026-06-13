@@ -21,6 +21,7 @@ import {
 } from "./dishPhotos.ts";
 import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
+import { snapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 
 const app = new Hono();
@@ -401,6 +402,43 @@ app.post("/dish-photos", async (c) => {
     console.error("dish-photos error:", e);
     return c.json({ error: `Wyszukiwanie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
   }
+});
+
+// Diagnostyka: lista zewnętrznych API których bezpośrednio używamy + liczby zapytań i logi.
+app.get("/diagnostics", (c) => {
+  const reps = new Map(snapshot().map((r) => [r.provider, r]));
+  const KNOWN: { provider: Provider; label: string; paid: boolean; configured: boolean }[] = [
+    { provider: "claude", label: "Claude (Anthropic)", paid: true, configured: !!process.env.ANTHROPIC_API_KEY },
+    { provider: "google_places", label: "Google Places", paid: true, configured: !!process.env.GOOGLE_MAPS_KEY },
+    { provider: "tripadvisor", label: "TripAdvisor", paid: false, configured: !!process.env.TRIPADVISOR_KEY },
+    { provider: "serper", label: "Serper.dev", paid: true, configured: !!process.env.SERPER_KEY },
+    { provider: "serpapi", label: "SerpApi", paid: true, configured: !!process.env.SERPAPI_KEY },
+    { provider: "wikimedia", label: "Wikimedia Commons", paid: false, configured: true },
+    { provider: "openverse", label: "Openverse", paid: false, configured: true },
+    {
+      provider: "google_cse",
+      label: "Google CSE",
+      paid: true,
+      configured: !!(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
+    },
+  ];
+  const providers = KNOWN.map((k) => {
+    const r = reps.get(k.provider);
+    return {
+      ...k,
+      total: r?.total ?? 0,
+      ok: r?.ok ?? 0,
+      errors: r?.errors ?? 0,
+      lastAt: r?.lastAt ?? null,
+      lastError: r?.lastError ?? null,
+      entries: r?.entries ?? [],
+    };
+  });
+  const other = reps.get("other");
+  if (other && other.total > 0) {
+    providers.push({ label: "Inne", paid: false, configured: true, ...other });
+  }
+  return c.json({ now: Date.now(), providers });
 });
 
 // Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.

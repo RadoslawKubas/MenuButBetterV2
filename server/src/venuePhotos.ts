@@ -6,6 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
+import { track } from "./apiLog.ts";
 
 const client = new Anthropic();
 const MODEL = "claude-sonnet-4-6";
@@ -156,15 +157,17 @@ export async function matchVenuePhotos(
   });
 
   try {
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      system:
-        "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
-        "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.",
-      messages: [{ role: "user", content }],
-      output_config: { format: { type: "json_schema", schema: SCHEMA } },
-    });
+    const resp = await track("claude", "venue-photos", () =>
+      client.messages.create({
+        model: MODEL,
+        max_tokens: 2000,
+        system:
+          "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
+          "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.",
+        messages: [{ role: "user", content }],
+        output_config: { format: { type: "json_schema", schema: SCHEMA } },
+      }),
+    );
     const usage = usageFrom(MODEL, resp.usage);
     const text = resp.content.find((b) => b.type === "text");
     if (!text || text.type !== "text") return { matches: [], usage };

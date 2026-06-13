@@ -2,6 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
+import { track } from "./apiLog.ts";
 
 const client = new Anthropic();
 
@@ -34,24 +35,26 @@ export async function describeDish(
 ): Promise<{ text: string; usage: Usage }> {
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: 1500,
-    system: SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          `Danie: ${input.name}\n` +
-          (input.description ? `Krótki opis z menu: ${input.description}\n` : "") +
-          (input.cuisine ? `Rodzaj kuchni: ${input.cuisine}\n` : "") +
-          (input.location ? `Lokalizacja lokalu: ${input.location}\n` : "") +
-          (input.restaurant ? `Restauracja: ${input.restaurant}\n` : "") +
-          `Język odpowiedzi: ${input.targetLang}\n\n` +
-          "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.",
-      },
-    ],
-  });
+  const response = await track("claude", "dish-info", () =>
+    client.messages.create({
+      model,
+      max_tokens: 1500,
+      system: SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content:
+            `Danie: ${input.name}\n` +
+            (input.description ? `Krótki opis z menu: ${input.description}\n` : "") +
+            (input.cuisine ? `Rodzaj kuchni: ${input.cuisine}\n` : "") +
+            (input.location ? `Lokalizacja lokalu: ${input.location}\n` : "") +
+            (input.restaurant ? `Restauracja: ${input.restaurant}\n` : "") +
+            `Język odpowiedzi: ${input.targetLang}\n\n` +
+            "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.",
+        },
+      ],
+    }),
+  );
 
   const text = response.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") {

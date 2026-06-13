@@ -1,6 +1,7 @@
 // Integracja z Google Places API (New): znajdź restaurację po nazwie + lokalizacji,
 // zwróć ocenę, godziny, kontakt, zdjęcie i kraj/miasto.
 import type { TripAdvisorInfo } from "./tripadvisor.ts";
+import { trackedFetch } from "./apiLog.ts";
 
 const KEY = () => process.env.GOOGLE_MAPS_KEY;
 
@@ -182,7 +183,7 @@ export async function findRestaurantNearby(params: NearbyParams): Promise<Restau
     },
   };
 
-  const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+  const res = await trackedFetch("https://places.googleapis.com/v1/places:searchNearby", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -228,7 +229,7 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
     };
   }
 
-  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+  const res = await trackedFetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -256,7 +257,7 @@ export async function fetchPlacePhoto(
   if (!photoName.startsWith("places/")) throw new Error("Nieprawidłowa nazwa zdjęcia.");
 
   const url = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${maxWidth}&key=${key}`;
-  const res = await fetch(url, { redirect: "follow" });
+  const res = await trackedFetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`Place photo HTTP ${res.status}`);
   return {
     body: await res.arrayBuffer(),

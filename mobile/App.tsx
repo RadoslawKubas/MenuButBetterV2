@@ -46,6 +46,8 @@ import {
 } from "./src/storage";
 import { MenuView } from "./src/MenuView";
 import { HistoryView } from "./src/HistoryView";
+import { DiagnosticsView } from "./src/DiagnosticsView";
+import { ApiErrorToast } from "./src/Toast";
 import { RenameModal } from "./src/RenameModal";
 import { RestaurantCard } from "./src/RestaurantCard";
 import { colors } from "./src/theme";
@@ -93,6 +95,7 @@ const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
 export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
+  const [showDiag, setShowDiag] = useState(false);
 
   const [status, setStatus] = useState<Status>("idle");
   // Postęp analizy gdy skan idzie partiami (duże menu). null = brak/jedna partia.
@@ -1080,8 +1083,11 @@ export default function App() {
 
         <View style={styles.header}>
           <Text style={styles.brand}>MenuButBetter</Text>
-          {showingDetail ? (
-            <Pressable onPress={() => setOpenScan(null)} style={styles.navBtn}>
+          {showDiag || showingDetail ? (
+            <Pressable
+              onPress={() => (showDiag ? setShowDiag(false) : setOpenScan(null))}
+              style={styles.navBtn}
+            >
               <Text style={styles.navText}>‹ Wstecz</Text>
             </Pressable>
           ) : (
@@ -1094,10 +1100,16 @@ export default function App() {
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
+              <Pressable onPress={() => setShowDiag(true)} hitSlop={8}>
+                <Text style={styles.tab}>📊</Text>
+              </Pressable>
             </View>
           )}
         </View>
 
+        {showDiag ? (
+          <DiagnosticsView />
+        ) : (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {/* PODGLĄD ZAPISANEGO MENU */}
           {showingDetail && openScan ? (
@@ -1413,6 +1425,8 @@ export default function App() {
             </>
           ) : null}
         </ScrollView>
+        )}
+        <ApiErrorToast />
         <RenameModal
           visible={!!renameTarget}
           initialValue={renameTarget?.restaurantName ?? renameTarget?.restaurant?.name ?? ""}

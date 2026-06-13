@@ -1,6 +1,7 @@
 // Dostawca zdjęć dań — abstrakcja z wymiennym backendem.
 // Tryb osobisty: Google Custom Search JSON API (searchType=image) — oficjalne API,
 // bez scrapowania HTML. Tryb sklepowy: podmieni się implementację (Places/AI/UGC).
+import { trackedFetch } from "./apiLog.ts";
 
 export interface DishPhoto {
   url: string;
@@ -98,7 +99,7 @@ export class GoogleCseImageProvider implements DishPhotoProvider {
     url.searchParams.set("num", String(this.num));
     url.searchParams.set("safe", "active");
 
-    const res = await fetch(url);
+    const res = await trackedFetch(url);
     if (!res.ok) {
       throw new Error(`Custom Search HTTP ${res.status}: ${await res.text()}`);
     }
@@ -138,7 +139,7 @@ export class OpenverseProvider implements DishPhotoProvider {
     url.searchParams.set("q", dish);
     url.searchParams.set("page_size", String(this.num));
 
-    const res = await fetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
+    const res = await trackedFetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
     if (!res.ok) throw new Error(`Openverse HTTP ${res.status}: ${await res.text()}`);
     const json = (await res.json()) as OpenverseResponse;
 
@@ -182,7 +183,7 @@ export class SerpApiImageProvider implements DishPhotoProvider {
     url.searchParams.set("api_key", this.key);
     url.searchParams.set("safe", "active");
 
-    const res = await fetch(url);
+    const res = await trackedFetch(url);
     if (!res.ok) throw new Error(`SerpApi HTTP ${res.status}: ${await res.text()}`);
     const json = (await res.json()) as SerpResponse;
     if (json.error) throw new Error(`SerpApi: ${json.error}`);
@@ -227,7 +228,7 @@ export class WikimediaProvider implements DishPhotoProvider {
     url.searchParams.set("iiurlwidth", "500");
     url.searchParams.set("format", "json");
 
-    const res = await fetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
+    const res = await trackedFetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
     if (!res.ok) throw new Error(`Wikimedia HTTP ${res.status}`);
     const j = (await res.json()) as WmResponse;
     const pages = j.query?.pages ? Object.values(j.query.pages) : [];
@@ -264,7 +265,7 @@ export class SerperImageProvider implements DishPhotoProvider {
 
   async find(dish: string, restaurantHint?: string): Promise<DishPhoto[]> {
     const query = restaurantImageQuery(dish, restaurantHint);
-    const res = await fetch("https://google.serper.dev/images", {
+    const res = await trackedFetch("https://google.serper.dev/images", {
       method: "POST",
       headers: { "X-API-KEY": this.key, "Content-Type": "application/json" },
       body: JSON.stringify({ q: query, num: this.num }),
@@ -289,7 +290,7 @@ export async function restaurantSiteImages(dish: string, domain: string, num = 6
   const key = process.env.SERPER_KEY;
   if (!key || !domain) return [];
   try {
-    const res = await fetch("https://google.serper.dev/images", {
+    const res = await trackedFetch("https://google.serper.dev/images", {
       method: "POST",
       headers: { "X-API-KEY": key, "Content-Type": "application/json" },
       body: JSON.stringify({ q: `${dish} site:${domain}`, num }),
@@ -320,7 +321,7 @@ export async function genericWebImages(dish: string, num = 6): Promise<DishPhoto
   const key = process.env.SERPER_KEY;
   if (!key) return [];
   try {
-    const res = await fetch("https://google.serper.dev/images", {
+    const res = await trackedFetch("https://google.serper.dev/images", {
       method: "POST",
       headers: { "X-API-KEY": key, "Content-Type": "application/json" },
       body: JSON.stringify({ q: dish, num }),

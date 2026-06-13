@@ -4,6 +4,7 @@ import { extname } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
+import { track } from "./apiLog.ts";
 
 const client = new Anthropic(); // klucz z ANTHROPIC_API_KEY (env)
 
@@ -118,7 +119,7 @@ export async function extractMenu(
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: MENU_SCHEMA } },
   });
-  const response = await stream.finalMessage();
+  const response = await track("claude", "scan-menu", () => stream.finalMessage());
 
   // Zużycie tokenów + koszt (do licznika w apce).
   const usage = usageFrom(model, response.usage);
