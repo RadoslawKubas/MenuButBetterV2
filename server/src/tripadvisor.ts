@@ -5,6 +5,19 @@ import { trackedFetch } from "./apiLog.ts";
 const BASE = "https://api.content.tripadvisor.com/api/v1";
 const KEY = () => process.env.TRIPADVISOR_KEY;
 
+// Klucz TripAdvisor bywa ograniczony po HTTP referer (a nie po IP — wygodne, gdy serwer
+// ma zmienny IP, np. Railway). Gdy ustawisz TRIPADVISOR_REFERER, serwer dokłada ten
+// Referer/Origin do zapytań, żeby przejść przez allowlistę.
+function taHeaders(): Record<string, string> {
+  const h: Record<string, string> = { Accept: "application/json" };
+  const ref = process.env.TRIPADVISOR_REFERER;
+  if (ref) {
+    h.Referer = ref;
+    h.Origin = ref;
+  }
+  return h;
+}
+
 // Języki wspierane przez TripAdvisor Content API. Nieobsługiwane (np. "pl")
 // dają 400 w /details — mapujemy je na "en" (ocena/link i tak są niezależne od języka).
 const TA_LANGS = new Set([
@@ -72,7 +85,7 @@ async function fetchPhotos(locId: string, lang: string, key: string): Promise<Tr
   p.searchParams.set("key", key);
   p.searchParams.set("language", lang);
   p.searchParams.set("limit", "12");
-  const r = await trackedFetch(p, { headers: { Accept: "application/json" } });
+  const r = await trackedFetch(p, { headers: taHeaders() });
   if (!r.ok) return [];
   const j = (await r.json()) as PhotosResponse;
   return (j.data ?? [])
@@ -106,7 +119,7 @@ export async function findTripAdvisor(params: TaParams): Promise<TripAdvisorInfo
   }
   search.searchParams.set("language", lang);
 
-  const sres = await trackedFetch(search, { headers: { Accept: "application/json" } });
+  const sres = await trackedFetch(search, { headers: taHeaders() });
   if (!sres.ok) throw new Error(`TripAdvisor search HTTP ${sres.status}: ${await sres.text()}`);
   const sjson = (await sres.json()) as SearchResponse;
 
@@ -120,7 +133,7 @@ export async function findTripAdvisor(params: TaParams): Promise<TripAdvisorInfo
   det.searchParams.set("key", key);
   det.searchParams.set("language", lang);
 
-  const dres = await trackedFetch(det, { headers: { Accept: "application/json" } });
+  const dres = await trackedFetch(det, { headers: taHeaders() });
   if (!dres.ok) throw new Error(`TripAdvisor details HTTP ${dres.status}: ${await dres.text()}`);
   const d = (await dres.json()) as DetailsResponse;
   const photos = await fetchPhotos(locId, lang, key).catch(() => []);
