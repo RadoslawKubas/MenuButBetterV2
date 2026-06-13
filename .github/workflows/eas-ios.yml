@@ -1,0 +1,41 @@
+name: iOS → TestFlight
+
+# Buduje aplikację i wysyła ją do TestFlight automatycznie.
+# Wyzwalacze:
+#  - push na main, ALE tylko gdy zmienia się coś w aplikacji (mobile/),
+#    żeby zmiany samego backendu (server/) nie odpalały buildu iOS;
+#  - ręcznie: Actions → „iOS → TestFlight" → Run workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: npm ci
+
+      # Build w chmurze EAS + automatyczna wysyłka do App Store Connect / TestFlight.
+      # Wymaga: (1) sekretu EXPO_TOKEN w repo, (2) zapisanych w EAS poświadczeń iOS
+      # i klucza App Store Connect API (tworzone przy pierwszym interaktywnym
+      # `eas build` / `eas submit` lub przez `eas credentials`).
+      - run: eas build --platform ios --profile production --non-interactive --auto-submit
