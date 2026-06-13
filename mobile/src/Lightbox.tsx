@@ -14,6 +14,7 @@ import {
   View,
 } from "react-native";
 import { sourceMeta } from "./photoSource";
+import { resolveCachedUri } from "./imageCache";
 
 export interface LightboxPhoto {
   url: string;
@@ -73,7 +74,14 @@ export function Lightbox({
             toValue: -height,
             duration: 150,
             useNativeDriver: true,
-          }).start(() => onClose());
+          }).start(() => {
+            // Zamknij i ZRESETUJ pozycję/tło — inaczej przy ponownym otwarciu zdjęcie
+            // zostaje wypchnięte poza ekran (puste). Modal i tak jest odmontowany, więc
+            // reset jest niewidoczny.
+            onClose();
+            translateY.setValue(0);
+            bgOpacity.setValue(1);
+          });
         } else {
           resetPan();
         }
@@ -109,7 +117,7 @@ export function Lightbox({
             >
               <Pressable style={styles.pagePress} onPress={onClose}>
                 <Image
-                  source={{ uri: item.url }}
+                  source={{ uri: resolveCachedUri(item.url) }}
                   style={{ width: width * 0.92, height: height * 0.72 }}
                   resizeMode="contain"
                 />

@@ -13,6 +13,7 @@ import {
 import { placePhotoUrl } from "./api";
 import { colors } from "./theme";
 import { Lightbox, type LightboxPhoto, type LightboxState } from "./Lightbox";
+import { resolveCachedUri } from "./imageCache";
 import type { RestaurantInfo } from "./types";
 
 const PRICE: Record<string, string> = {
@@ -61,8 +62,12 @@ export function RestaurantCard({
 
   // Jedna grupa zdjęć lokalu (Google + TripAdvisor) do przesuwania w podglądzie.
   // Preferuj lokalny plik (offline, bez wygasania linków); w razie braku — proxy Google.
-  const googleUrls = r.photoNames.map((n, i) => r.photoUris?.[i] ?? placePhotoUrl(n, 1000));
-  const taUrls = (ta?.photos ?? []).map((p) => p.url);
+  // Lokalny plik trzymamy jako referencję względną → składamy bezwzględny URI przy renderze.
+  const googleUrls = r.photoNames.map((n, i) => {
+    const cached = r.photoUris?.[i];
+    return cached ? resolveCachedUri(cached)! : placePhotoUrl(n, 1000);
+  });
+  const taUrls = (ta?.photos ?? []).map((p) => resolveCachedUri(p.url)!);
   const allPhotos = [...googleUrls, ...taUrls];
   // Zdjęcia lokalu są z definicji „z tego lokalu" (★) — Google Maps + TripAdvisor.
   const lbPhotos: LightboxPhoto[] = [
@@ -165,7 +170,7 @@ export function RestaurantCard({
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {ta.photos.map((p, i) => (
                 <Pressable key={i} onPress={() => open(googleUrls.length + i)}>
-                  <Image source={{ uri: p.url }} style={styles.galleryPhoto} />
+                  <Image source={{ uri: taUrls[i] }} style={styles.galleryPhoto} />
                 </Pressable>
               ))}
             </ScrollView>

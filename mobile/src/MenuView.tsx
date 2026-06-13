@@ -3,7 +3,6 @@
 import { useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,7 @@ import type { Menu, MenuItem } from "./types";
 import { colors } from "./theme";
 import { Lightbox, type LightboxPhoto, type LightboxState } from "./Lightbox";
 import { sourceMeta } from "./photoSource";
+import { CachedImage } from "./CachedImage";
 
 // Mapuje zdjęcia dania na model podglądu (z info o źródle, by pokazać je w galerii).
 function toLightbox(photos: MenuItem["photos"]): LightboxPhoto[] {
@@ -83,7 +83,7 @@ function InfoFooter({
                   onPress={() => onPhotoOpen({ photos: toLightbox(photos), index: i })}
                   style={styles.dishPhotoWrap}
                 >
-                  <Image source={{ uri: p.url }} style={styles.dishPhoto} />
+                  <CachedImage uri={p.url} remoteUrl={p.remoteUrl} style={styles.dishPhoto} />
                   {p.verified ? (
                     <View style={styles.verifiedBadge}>
                       <Text style={styles.verifiedText}>✓</Text>
@@ -212,34 +212,51 @@ export function MenuView({
                       <Text style={styles.allergens}>Alergeny: {item.allergens.join(", ")}</Text>
                     ) : null}
                   </View>
-                  {item.photos && item.photos[0] ? (
-                    <Pressable
-                      style={styles.cardThumbWrap}
-                      onPress={() => setPreview({ photos: toLightbox(item.photos), index: 0 })}
-                    >
-                      <Image source={{ uri: item.photos[0].url }} style={styles.cardThumb} />
-                      {item.photos[0].verified ? (
-                        <View style={styles.cardThumbVerified}>
-                          <Text style={styles.verifiedText}>✓</Text>
-                        </View>
-                      ) : null}
-                      {item.photos[0].fromVenue ? (
-                        <View style={styles.cardThumbVenue}>
-                          <Text style={styles.cardThumbVenueText}>★</Text>
-                        </View>
-                      ) : null}
-                      <View
-                        style={[
-                          styles.cardThumbSource,
-                          { backgroundColor: sourceMeta(item.photos[0].source).color },
-                        ]}
+                  {(() => {
+                    const photo = item.photos?.[0];
+                    return (
+                      <Pressable
+                        style={styles.cardThumbWrap}
+                        onPress={() => photo && setPreview({ photos: toLightbox(item.photos), index: 0 })}
+                        disabled={!photo}
                       >
-                        <Text style={styles.cardThumbSourceText} numberOfLines={1}>
-                          {sourceMeta(item.photos[0].source).short}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  ) : null}
+                        {/* Wyblakły placeholder zawsze pod spodem — daje stały rozmiar i tło, więc
+                            layout się nie przesuwa, gdy zdjęcia brak albo jeszcze się ładuje. */}
+                        <View style={[styles.cardThumb, styles.thumbPlaceholder]}>
+                          <Text style={styles.thumbPlaceholderGlyph}>🍽️</Text>
+                        </View>
+                        {photo ? (
+                          <CachedImage
+                            uri={photo.url}
+                            remoteUrl={photo.remoteUrl}
+                            style={[styles.cardThumb, styles.thumbAbs]}
+                          />
+                        ) : null}
+                        {photo?.verified ? (
+                          <View style={styles.cardThumbVerified}>
+                            <Text style={styles.verifiedText}>✓</Text>
+                          </View>
+                        ) : null}
+                        {photo?.fromVenue ? (
+                          <View style={styles.cardThumbVenue}>
+                            <Text style={styles.cardThumbVenueText}>★</Text>
+                          </View>
+                        ) : null}
+                        {photo ? (
+                          <View
+                            style={[
+                              styles.cardThumbSource,
+                              { backgroundColor: sourceMeta(photo.source).color },
+                            ]}
+                          >
+                            <Text style={styles.cardThumbSourceText} numberOfLines={1}>
+                              {sourceMeta(photo.source).short}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })()}
                 </View>
                 <InfoFooter
                   item={item}
@@ -284,6 +301,11 @@ const styles = StyleSheet.create({
   // inaczej pasek źródła (bottom:0) ląduje POD zdjęciem, nie na nim.
   cardThumbWrap: { marginLeft: 12, position: "relative", alignSelf: "flex-start" },
   cardThumb: { width: 72, height: 72, borderRadius: 10, backgroundColor: colors.badgeBg },
+  // Wyblakły placeholder pod miniaturką (stały rozmiar → brak skoków layoutu).
+  thumbPlaceholder: { alignItems: "center", justifyContent: "center", opacity: 0.5 },
+  thumbPlaceholderGlyph: { fontSize: 26, opacity: 0.35 },
+  // Zdjęcie nakładane na placeholder (wypełnia ten sam box).
+  thumbAbs: { position: "absolute", top: 0, left: 0 },
   cardThumbVerified: {
     position: "absolute",
     top: 4,
