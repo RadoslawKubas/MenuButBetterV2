@@ -1,0 +1,24 @@
+name: iOS → TestFlight
+
+# EAS Workflow: na push do main buduje aplikację iOS (profil production)
+# i wysyła ją do App Store Connect / TestFlight. Uruchamia się na infrastrukturze
+# EAS dzięki integracji GitHub (repo podłączone w ustawieniach projektu).
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_ios:
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  submit_ios:
+    needs: [build_ios]
+    type: submit
+    params:
+      platform: ios
+      profile: production
+      build_id: ${{ needs.build_ios.outputs.build_id }}
