@@ -31,7 +31,7 @@ import {
   SCAN_BATCH,
   type PreparedImage,
 } from "./src/image";
-import { getCurrentLocation } from "./src/location";
+import { getCurrentLocation, reverseGeocode } from "./src/location";
 import {
   listScans,
   saveScan,
@@ -200,6 +200,8 @@ export default function App() {
           location = null; // brak zgody/błąd — skanujemy dalej bez lokalizacji
         }
       }
+      // „Miasto, Kraj" z GPS → pewny kontekst dla modelu przy tłumaczeniu (gdzie jest lokal).
+      const locationHint = location ? await reverseGeocode(location) : undefined;
 
       // Skan PARTIAMI: dużą liczbę zdjęć dzielimy na partie po SCAN_BATCH i scalamy
       // wyniki z deduplikacją (mniejsze, bezpieczne wywołania + widoczny postęp).
@@ -220,6 +222,7 @@ export default function App() {
           images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
           targetLang,
           restaurantHint: batchHint,
+          locationHint,
           model,
         });
 

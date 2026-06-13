@@ -72,6 +72,7 @@ interface ScanBody {
   mediaType?: string;
   targetLang?: string;
   restaurantHint?: string;
+  locationHint?: string;
   model?: string;
 }
 
@@ -123,6 +124,7 @@ app.post("/scan", async (c) => {
       const { menu, usage } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
+        locationHint: body.locationHint?.trim() || undefined,
         model: isModelId(body.model) ? body.model : undefined,
       });
       await s.write(JSON.stringify({ menu, usage }));

@@ -48,6 +48,8 @@ export interface ExtractOptions {
   targetLang: string;
   /** Podpowiedź o lokalu (nazwa/miasto), jeśli znana — poprawia kontekst. */
   restaurantHint?: string;
+  /** „Miasto, Kraj" z GPS (EXIF/telefon) — pewny kontekst lokalizacji lokalu. */
+  locationHint?: string;
   /** Model do użycia. Domyślnie Sonnet 4.6. */
   model?: ModelId;
 }
@@ -63,6 +65,9 @@ const SYSTEM = [
   "NAJPIERW ustal kontekst i zapisz go w polu `cuisine`: rodzaj kuchni (np. indyjska,",
   "hiszpańska, włoska) oraz — na własny użytek — kraj i miasto lokalu (z nazw dań,",
   "języka menu, adresu i szyldu). Wszystkie opisy MUSZĄ pasować do tego kontekstu.",
+  "Jeśli w treści podano `Lokalizacja lokalu (GPS)`, traktuj ją jako WIARYGODNE miejsce",
+  "lokalu (kraj/miasto) — użyj jej do kontekstu i interpretacji lokalnych/regionalnych nazw",
+  "dań, nawet jeśli menu jest w innym języku (kuchnia może być inna niż kraj położenia).",
   "",
   "Tłumacz nazwy i sekcje na język docelowy podany przez użytkownika.",
   "OPIS dania pisz ZWIĘŹLE i RZECZOWO, opierając się WYŁĄCZNIE na tym, co wynika z nazwy",
@@ -108,6 +113,7 @@ export async function extractMenu(
     text:
       `Język docelowy: ${opts.targetLang}.\n` +
       `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+      (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
       `Połącz powyższe ${images.length} zdjęć w jedno menu.`,
   });
 

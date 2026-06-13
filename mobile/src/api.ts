@@ -65,6 +65,8 @@ export interface ScanParams {
   images: ScanImage[];
   targetLang: string;
   restaurantHint?: string;
+  /** „Miasto, Kraj" z GPS — daje modelowi pewny kontekst gdzie jest lokal. */
+  locationHint?: string;
   model: ModelId;
 }
 
@@ -76,6 +78,7 @@ export async function scanMenu(params: ScanParams): Promise<{ menu: Menu; usage:
       images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
       targetLang: params.targetLang,
       restaurantHint: params.restaurantHint,
+      locationHint: params.locationHint,
       model: params.model,
     }),
   });
