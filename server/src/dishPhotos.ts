@@ -3,6 +3,47 @@
 // bez scrapowania HTML. Tryb sklepowy: podmieni się implementację (Places/AI/UGC).
 import { trackedFetch } from "./apiLog.ts";
 
+// Polityka Wikimedia: opisowy User-Agent z kontaktem → wyższe limity, mniej 429.
+const WIKI_UA = "MenuButBetter/1.0 (https://appwithkiss.com; contact rk@appwithkiss.com)";
+
+// Globalny (na proces) ogranicznik dla Wikimedii: max 2 równolegle + minimalny odstęp,
+// żeby seria zapytań (tanie zdjęcia poglądowe dla wielu dań) nie wpadała w 429.
+function makeLimiter(maxConcurrent: number, minGapMs: number) {
+  let active = 0;
+  let nextSlot = 0;
+  const queue: (() => void)[] = [];
+  const pump = (): void => {
+    if (active >= maxConcurrent || queue.length === 0) return;
+    const now = Date.now();
+    const wait = Math.max(0, nextSlot - now);
+    nextSlot = Math.max(now, nextSlot) + minGapMs;
+    active++;
+    const run = queue.shift()!;
+    setTimeout(run, wait);
+  };
+  return <T>(fn: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      queue.push(() => {
+        fn().then(resolve, reject).finally(() => {
+          active--;
+          pump();
+        });
+      });
+      pump();
+    });
+}
+const wikiLimit = makeLimiter(2, 150);
+
+/** Fetch do Wikimedii przez ogranicznik + 1 retry na 429 (krótki backoff). */
+async function wikiFetch(url: URL): Promise<Response> {
+  return wikiLimit(async () => {
+    const res = await trackedFetch(url, { headers: { "User-Agent": WIKI_UA } });
+    if (res.status !== 429) return res;
+    await new Promise((r) => setTimeout(r, 700));
+    return trackedFetch(url, { headers: { "User-Agent": WIKI_UA } });
+  });
+}
+
 export interface DishPhoto {
   url: string;
   source: string;
@@ -139,7 +180,7 @@ export class OpenverseProvider implements DishPhotoProvider {
     url.searchParams.set("q", dish);
     url.searchParams.set("page_size", String(this.num));
 
-    const res = await trackedFetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
+    const res = await trackedFetch(url, { headers: { "User-Agent": WIKI_UA } });
     if (!res.ok) throw new Error(`Openverse HTTP ${res.status}: ${await res.text()}`);
     const json = (await res.json()) as OpenverseResponse;
 
@@ -228,7 +269,7 @@ export class WikimediaProvider implements DishPhotoProvider {
     url.searchParams.set("iiurlwidth", "500");
     url.searchParams.set("format", "json");
 
-    const res = await trackedFetch(url, { headers: { "User-Agent": "MenuButBetter/0.1 (personal)" } });
+    const res = await wikiFetch(url);
     if (!res.ok) throw new Error(`Wikimedia HTTP ${res.status}`);
     const j = (await res.json()) as WmResponse;
     const pages = j.query?.pages ? Object.values(j.query.pages) : [];
