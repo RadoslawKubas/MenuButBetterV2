@@ -13,7 +13,15 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { scanMenu, fetchDishInfo, fetchDishPhotos, fetchRestaurant, placePhotoUrl } from "./src/api";
+import {
+  scanMenu,
+  fetchDishInfo,
+  fetchDishPhotos,
+  fetchRestaurant,
+  fetchVenuePhotos,
+  placePhotoUrl,
+  type VenueMatch,
+} from "./src/api";
 import { cacheImage, cachePhotos } from "./src/imageCache";
 import { mergeMenus } from "./src/mergeMenu";
 import {
@@ -125,6 +133,9 @@ export default function App() {
   const [renameTarget, setRenameTarget] = useState<SavedScan | null>(null);
   // Trwa dokładanie nowych zdjęć do istniejącego menu.
   const [appending, setAppending] = useState(false);
+  // Krok „Potwierdź lokal" po świeżym skanie (potwierdź / wybierz inny / wyszukaj / pomiń).
+  const [venueConfirmed, setVenueConfirmed] = useState(true);
+  const [venueQuery, setVenueQuery] = useState("");
 
   useEffect(() => {
     listScans().then(setScans).catch(() => {});
@@ -238,6 +249,8 @@ export default function App() {
 
       setScanProgress(null);
       setStatus("done");
+      setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
+      setVenueQuery("");
       const result = merged!;
 
       // Namierzenie lokalu: mamy nazwę → automatycznie po nazwie (pewne). Brak nazwy →
@@ -278,6 +291,8 @@ export default function App() {
     setFreshRestaurant(null);
     setFreshScanId(null);
     setRestaurantCtx(null);
+    setVenueConfirmed(true);
+    setVenueQuery("");
   }
 
   async function lookupRestaurant(
@@ -364,6 +379,22 @@ export default function App() {
     }
     void lookupRestaurant(
       restaurantCtx.menu,
+      restaurantCtx.location,
+      restaurantCtx.scanId,
+      restaurantCtx.lang,
+      restaurantCtx.apply,
+      { applyMenu: restaurantCtx.applyMenu },
+    );
+  }
+
+  // Ręczne wyszukanie lokalu z wpisanego tekstu (nazwa, ewentualnie + miasto) — działa też
+  // BEZ GPS. Wpisaną frazę traktujemy jak nazwę do wyszukania (lokalizacja jako bias, gdy jest).
+  function searchVenueText(query: string) {
+    if (!restaurantCtx) return;
+    const q = query.trim();
+    if (!q) return;
+    void lookupRestaurant(
+      { ...restaurantCtx.menu, restaurant_name: q },
       restaurantCtx.location,
       restaurantCtx.scanId,
       restaurantCtx.lang,
@@ -731,67 +762,78 @@ export default function App() {
     return demoted;
   }
 
-  // Po namierzeniu lokalu: doszukuje zdjęć Z TEGO LOKALU (strona www + pewna nazwa →
-  // ★ fromVenue, plus portale i podpisy TripAdvisora) i podmienia tanie/poglądowe fotki.
-  // Pomija dania, które JUŻ mają potwierdzone (★) zdjęcie — żeby nie szukać w kółko.
+  // Tier 0 — po namierzeniu lokalu: bierze CAŁĄ pulę zdjęć z lokalu (Google Places +
+  // TripAdvisor) i JEDNYM przejściem wizji dopasowuje realne potrawy do dań z menu (z
+  // odrzuceniem stock/AI). Trafienia → ★ „z lokalu" przy odpowiednich daniach. Dania spoza
+  // puli zostają z poglądowymi i dociągają lepsze zdjęcia dopiero przy wejściu (on‑tap).
   async function upgradeVenuePhotos(
     baseMenu: Menu,
     scanId: string | null,
     restaurant: RestaurantInfo,
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void,
   ) {
-    const restaurantName = baseMenu.restaurant_name ?? restaurant.name ?? undefined;
-    const website = restaurant.website ?? undefined;
-    const taPhotos = restaurant.tripAdvisor?.photos;
-    const hasVenuePhoto = (it: Menu["sections"][0]["items"][0]) =>
-      !!it.photos?.some((p) => p.fromVenue);
+    const photoNames = restaurant.photoNames ?? [];
+    // Do pobrania po stronie serwera potrzebny ZDALNY URL TripAdvisora (nie lokalny plik).
+    const taPhotos = (restaurant.tripAdvisor?.photos ?? []).map((p) => ({
+      url: p.remoteUrl ?? p.url,
+      caption: p.caption,
+    }));
+    if (photoNames.length === 0 && taPhotos.length === 0) return;
 
-    const jobs: { si: number; ii: number; name: string }[] = [];
+    const dishes: string[] = [];
+    baseMenu.sections.forEach((sec) =>
+      sec.items.forEach((it) => it?.original && dishes.push(it.original)),
+    );
+    if (dishes.length === 0) return;
+
+    const { matches, usage } = await fetchVenuePhotos(
+      photoNames,
+      taPhotos,
+      dishes,
+      baseMenu.cuisine,
+    ).catch(() => ({ matches: [] as VenueMatch[], usage: ZERO_USAGE }));
+
+    // Grupuj po daniu (najpewniejsze pierwsze; serwer już posortował), max 3 zdjęcia/danie.
+    const byDish = new Map<string, DishPhotoLite[]>();
+    for (const m of matches) {
+      const url = m.source === "google" && m.photoName ? placePhotoUrl(m.photoName, 1000) : m.url;
+      if (!url) continue;
+      const arr = byDish.get(m.dish) ?? [];
+      if (arr.length >= 3) continue;
+      arr.push({
+        url,
+        source: m.source,
+        attribution: m.source === "tripadvisor" ? "TripAdvisor" : "Google Maps",
+        verified: true,
+        fromVenue: true,
+      });
+      byDish.set(m.dish, arr);
+    }
+
+    // Indeks danie(oryginalna nazwa) → pozycja w menu.
+    const loc = new Map<string, { si: number; ii: number }>();
     baseMenu.sections.forEach((sec, si) =>
       sec.items.forEach((it, ii) => {
-        if (it && !hasVenuePhoto(it)) jobs.push({ si, ii, name: it.original });
+        if (it?.original && !loc.has(it.original)) loc.set(it.original, { si, ii });
       }),
     );
-    if (jobs.length === 0) return;
 
-    const CONCURRENCY = 3;
-    let next = 0;
-    let totalUsage: Usage = ZERO_USAGE;
-    async function worker() {
-      while (next < jobs.length) {
-        const job = jobs[next++];
-        if (!job) break;
-        // Najpierw darmowo: podpisy TripAdvisora pasujące do dania (zweryfikowane, z lokalu).
-        const matched = matchTaPhotos(job.name, taPhotos);
-        const res =
-          matched.length > 0
-            ? { photos: matched, usage: ZERO_USAGE }
-            : await fetchDishPhotos(job.name, restaurantName, {
-                cuisine: baseMenu.cuisine,
-                website,
-                restaurantName,
-              }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE }));
-        totalUsage = addUsage(totalUsage, res.usage);
-        const real = res.photos;
-        if (real.length === 0) continue; // nic lepszego — zostaw tanie poglądowe
-        const cached = await cachePhotos(real);
-        applyMenu((prev) => {
-          if (!prev) return prev;
-          const cur = prev.sections[job.si]?.items[job.ii];
-          // User mógł w międzyczasie wejść w danie i dostać już potwierdzone (★) — nie psuj.
-          if (cur && hasVenuePhoto(cur)) return prev;
-          return patchItem(prev, job.si, job.ii, { photos: cached, photosUpgraded: true });
-        });
-      }
+    // Pobierz na dysk i przypisz ★ do dań.
+    for (const [dish, photos] of byDish) {
+      const at = loc.get(dish);
+      if (!at) continue;
+      const cached = await cachePhotos(photos);
+      applyMenu((prev) =>
+        prev ? patchItem(prev, at.si, at.ii, { photos: cached, photosUpgraded: true }) : prev,
+      );
     }
-    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
 
     if (scanId) {
       applyMenu((prev) => {
         if (prev) void updateScanMenu(scanId, prev);
         return prev;
       });
-      await addScanUsage(scanId, totalUsage);
+      await addScanUsage(scanId, usage);
       setScans(await listScans());
     }
   }
@@ -1303,7 +1345,49 @@ export default function App() {
                       <Text style={styles.navText}>＋ Nowy skan</Text>
                     </Pressable>
                   </View>
-                  {renderRestaurant(freshRestaurant)}
+                  {!venueConfirmed ? (
+                    <View style={styles.confirmBox}>
+                      <Text style={styles.confirmTitle}>📍 Potwierdź lokal</Text>
+                      <Text style={styles.confirmSub}>
+                        Pewny lokal poprawia zdjęcia (★ z lokalu) i opisy dań. Wybierz właściwy,
+                        wyszukaj inny po nazwie/mieście, albo pomiń — menu i tak jest zapisane.
+                      </Text>
+                      {renderRestaurant(freshRestaurant)}
+                      <View style={styles.venueSearchRow}>
+                        <TextInput
+                          value={venueQuery}
+                          onChangeText={setVenueQuery}
+                          placeholder="Szukaj lokalu: nazwa, miasto…"
+                          placeholderTextColor={colors.muted}
+                          style={styles.venueSearchInput}
+                          returnKeyType="search"
+                          onSubmitEditing={() => searchVenueText(venueQuery)}
+                        />
+                        <Pressable
+                          style={styles.venueSearchBtn}
+                          onPress={() => searchVenueText(venueQuery)}
+                        >
+                          <Text style={styles.venueSearchBtnText}>🔎</Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.confirmActions}>
+                        <Pressable
+                          style={[styles.confirmYes, !freshRestaurant && styles.disabled]}
+                          disabled={!freshRestaurant}
+                          onPress={() => setVenueConfirmed(true)}
+                        >
+                          <Text style={styles.confirmYesText}>
+                            {freshRestaurant ? "✓ Tak, to ten lokal" : "Najpierw wybierz lokal"}
+                          </Text>
+                        </Pressable>
+                        <Pressable style={styles.confirmSkip} onPress={() => setVenueConfirmed(true)}>
+                          <Text style={styles.confirmSkipText}>Pomiń</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : (
+                    renderRestaurant(freshRestaurant)
+                  )}
                   <MenuView
                     menu={menu}
                     infoLoading={infoLoading}
@@ -1447,6 +1531,47 @@ const styles = StyleSheet.create({
   secondaryText: { color: colors.accent, fontSize: 15, fontWeight: "700" },
   disabled: { opacity: 0.4 },
   buttonText: { color: colors.buttonText, fontSize: 16, fontWeight: "700" },
+  // Krok „Potwierdź lokal" po skanie.
+  confirmBox: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+  },
+  confirmTitle: { fontSize: 16, fontWeight: "800", color: colors.accent, marginBottom: 4 },
+  confirmSub: { fontSize: 13, color: colors.muted, marginBottom: 12, lineHeight: 18 },
+  venueSearchRow: { flexDirection: "row", gap: 8, marginTop: 4, marginBottom: 12 },
+  venueSearchInput: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: colors.text,
+    borderWidth: 1,
+    borderColor: colors.badgeBg,
+  },
+  venueSearchBtn: {
+    paddingHorizontal: 16,
+    justifyContent: "center",
+    backgroundColor: colors.badgeBg,
+    borderRadius: 10,
+  },
+  venueSearchBtnText: { color: colors.accent, fontWeight: "700", fontSize: 16 },
+  confirmActions: { flexDirection: "row", gap: 10 },
+  confirmYes: { flex: 1, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  confirmYesText: { color: colors.buttonText, fontWeight: "800", fontSize: 15 },
+  confirmSkip: {
+    paddingHorizontal: 18,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: colors.badgeBg,
+    borderRadius: 10,
+  },
+  confirmSkipText: { color: colors.muted, fontWeight: "700", fontSize: 15 },
   lookupRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
   searchNearbyBtn: {
     flex: 1,

@@ -142,6 +142,32 @@ export function placePhotoUrl(photoName: string, width = 800): string {
   return `${API_BASE}/place-photo?name=${encodeURIComponent(photoName)}&w=${width}${tok}`;
 }
 
+export interface VenueMatch {
+  dish: string;
+  source: "google" | "tripadvisor";
+  photoName?: string; // Google: nazwa zasobu (→ placePhotoUrl)
+  url?: string; // TripAdvisor: bezpośredni URL
+  caption: string | null;
+  confidence: number;
+}
+
+/** Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań. */
+export async function fetchVenuePhotos(
+  photoNames: string[],
+  taPhotos: { url: string; caption: string | null }[],
+  dishes: string[],
+  cuisine?: string,
+): Promise<{ matches: VenueMatch[]; usage: Usage }> {
+  const res = await fetch(`${API_BASE}/venue-photos`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine }),
+  });
+  const json = (await res.json()) as { matches?: VenueMatch[]; usage?: Usage; error?: string };
+  if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return { matches: json.matches ?? [], usage: json.usage ?? ZERO_USAGE };
+}
+
 export async function fetchDishPhotos(
   dish: string,
   restaurantHint?: string,

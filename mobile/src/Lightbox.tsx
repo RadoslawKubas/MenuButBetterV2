@@ -39,6 +39,7 @@ export function Lightbox({
   const [current, setCurrent] = useState(0);
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
+  const openedRef = useRef<LightboxState | null>(null);
 
   // Powrót do stanu neutralnego (gest anulowany / niewystarczający do zamknięcia).
   const resetPan = useRef(() => {
@@ -46,14 +47,23 @@ export function Lightbox({
     Animated.spring(bgOpacity, { toValue: 1, useNativeDriver: true, bounciness: 0 }).start();
   }).current;
 
-  // Reset pozycji/przezroczystości i ustaw stronę startową przy każdym otwarciu.
-  useEffect(() => {
-    if (state) {
+  // Reset pozycji/tła robimy PRZY OTWARCIU (synchronicznie, jeszcze przed pierwszą klatką),
+  // a NIE na koniec zamykania — inaczej snap był widoczny tuż po geście. Zamknięcie zostaje
+  // czyste (zdjęcie wyjeżdża w górę i znika), a kolejne otwarcie startuje od zera.
+  if (state) {
+    if (openedRef.current !== state) {
+      openedRef.current = state;
       translateY.setValue(0);
       bgOpacity.setValue(1);
-      setCurrent(Math.min(state.index, state.photos.length - 1));
     }
-  }, [state, translateY, bgOpacity]);
+  } else {
+    openedRef.current = null;
+  }
+
+  // Ustaw stronę startową przy otwarciu.
+  useEffect(() => {
+    if (state) setCurrent(Math.min(state.index, state.photos.length - 1));
+  }, [state]);
 
   // Gest pionowy w górę → zamknij. Poziome przesuwanie zostawiamy FlatList (paginacja).
   const pan = useRef(
@@ -70,18 +80,12 @@ export function Lightbox({
       },
       onPanResponderRelease: (_, g) => {
         if (g.dy < -110 || g.vy < -0.6) {
-          Animated.timing(translateY, {
-            toValue: -height,
-            duration: 150,
-            useNativeDriver: true,
-          }).start(() => {
-            // Zamknij i ZRESETUJ pozycję/tło — inaczej przy ponownym otwarciu zdjęcie
-            // zostaje wypchnięte poza ekran (puste). Modal i tak jest odmontowany, więc
-            // reset jest niewidoczny.
-            onClose();
-            translateY.setValue(0);
-            bgOpacity.setValue(1);
-          });
+          // Czyste zamknięcie: zdjęcie wyjeżdża w górę, tło gaśnie — BEZ resetu tutaj
+          // (reset robimy przy następnym otwarciu, żeby snap nie był widoczny po geście).
+          Animated.parallel([
+            Animated.timing(translateY, { toValue: -height, duration: 180, useNativeDriver: true }),
+            Animated.timing(bgOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+          ]).start(() => onClose());
         } else {
           resetPan();
         }

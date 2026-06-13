@@ -1,0 +1,199 @@
+// Tier 0 — „pula z lokalu, dopasowana wizją". Najmocniejsze źródło PRAWDZIWYCH zdjęć dań
+// z konkretnej restauracji (wgrane przez ludzi do tego miejsca): Google Places + TripAdvisor.
+// Jedno przejście Claude vision klasyfikuje całą pulę, dopasowuje jedzenie do pozycji z menu
+// i ODRZUCA stock/AI/marketing. Eksperymenty (Cúrcuma, Khan Nawab) potwierdziły 8–10 trafień
+// na lokal przy 1 wywołaniu wizji — taniej i lepiej niż wyszukiwanie per‑danie.
+import Anthropic from "@anthropic-ai/sdk";
+import { fetchPlacePhoto } from "./places.ts";
+import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
+
+const client = new Anthropic();
+const MODEL = "claude-sonnet-4-6";
+
+// Próg pewności dopasowania danie↔zdjęcie. Niżej — zbyt luźne (ryzyko złego dania).
+const MATCH_MIN = 0.5;
+
+export interface VenueTaPhoto {
+  url: string;
+  caption: string | null;
+}
+
+export interface VenueMatch {
+  /** Dokładna nazwa pozycji z menu (oryginalna). */
+  dish: string;
+  source: "google" | "tripadvisor";
+  /** Google: nazwa zasobu zdjęcia (klient buduje proxy URL). */
+  photoName?: string;
+  /** TripAdvisor: bezpośredni URL. */
+  url?: string;
+  caption: string | null;
+  confidence: number;
+}
+
+export interface VenuePhotosInput {
+  photoNames: string[];
+  taPhotos: VenueTaPhoto[];
+  dishes: string[];
+  cuisine?: string;
+}
+
+type ImgMedia = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+function mediaFromCt(ct: string): ImgMedia {
+  return /png/.test(ct) ? "image/png" : /webp/.test(ct) ? "image/webp" : /gif/.test(ct) ? "image/gif" : "image/jpeg";
+}
+
+async function fetchB64(url: string): Promise<{ media_type: ImgMedia; data: string } | null> {
+  try {
+    const r = await fetch(url, {
+      headers: { "User-Agent": "MenuButBetter/1.0 (venue photo matcher; rk@appwithkiss.com)" },
+    });
+    if (!r.ok) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length === 0 || buf.length > 4_500_000) return null;
+    return { media_type: mediaFromCt(r.headers.get("content-type") || ""), data: buf.toString("base64") };
+  } catch {
+    return null;
+  }
+}
+
+// Normalizacja nazwy dania do dopasowania tego, co zwróci model, z listą menu.
+function norm(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
+}
+
+const SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "integer" },
+          category: { type: "string", enum: ["food", "drink", "other"] },
+          dish: { type: "string", description: "Dokładna nazwa z listy menu albo '' gdy nie pasuje." },
+          confidence: { type: "number", description: "0..1 — pewność dopasowania do tej pozycji." },
+          real_food: { type: "boolean", description: "Realne zdjęcie potrawy (nie render/stock/AI)." },
+          stock_or_ai: { type: "boolean", description: "Wygląda na stock / AI / studyjny render marketingowy." },
+        },
+        required: ["index", "category", "dish", "confidence", "real_food", "stock_or_ai"],
+      },
+    },
+  },
+  required: ["results"],
+} as const;
+
+/**
+ * Pobiera pulę zdjęć lokalu (Google Places + TripAdvisor), jednym przejściem wizji
+ * dopasowuje jedzenie do dań z menu (z odrzuceniem stock/AI) i zwraca ★ dopasowania.
+ */
+export async function matchVenuePhotos(
+  input: VenuePhotosInput,
+): Promise<{ matches: VenueMatch[]; usage: Usage }> {
+  const dishes = input.dishes.filter(Boolean);
+  if (dishes.length === 0) return { matches: [], usage: ZERO_USAGE };
+
+  // Zbierz obrazy (z metadanymi pozwalającymi później zbudować URL).
+  type Item = {
+    source: "google" | "tripadvisor";
+    photoName?: string;
+    url?: string;
+    caption: string | null;
+    img: { media_type: ImgMedia; data: string };
+  };
+  const items: Item[] = [];
+
+  await Promise.all(
+    input.photoNames.slice(0, 10).map(async (name) => {
+      try {
+        const { body, contentType } = await fetchPlacePhoto(name, 800);
+        items.push({
+          source: "google",
+          photoName: name,
+          caption: null,
+          img: { media_type: mediaFromCt(contentType), data: Buffer.from(body).toString("base64") },
+        });
+      } catch {
+        // pomiń zdjęcie, którego nie da się pobrać
+      }
+    }),
+  );
+  await Promise.all(
+    input.taPhotos.slice(0, 12).map(async (p) => {
+      const img = await fetchB64(p.url);
+      if (img) items.push({ source: "tripadvisor", url: p.url, caption: p.caption, img });
+    }),
+  );
+
+  if (items.length === 0) return { matches: [], usage: ZERO_USAGE };
+
+  // Mapa znormalizowana → kanoniczna nazwa z menu (do walidacji odpowiedzi modelu).
+  const byNorm = new Map<string, string>();
+  for (const d of dishes) byNorm.set(norm(d), d);
+
+  const content: Anthropic.ContentBlockParam[] = [];
+  items.forEach((it, i) => {
+    const cap = it.caption ? ` podpis:"${it.caption}"` : "";
+    content.push({ type: "text", text: `Zdjęcie ${i} [${it.source}]${cap}` });
+    content.push({ type: "image", source: { type: "base64", media_type: it.img.media_type, data: it.img.data } });
+  });
+  const ctx = input.cuisine ? ` (kuchnia: ${input.cuisine})` : "";
+  content.push({
+    type: "text",
+    text:
+      `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
+      "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
+      "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
+      "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
+      "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
+      "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
+      "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +
+      "LISTA MENU:\n" +
+      dishes.join(" | "),
+  });
+
+  try {
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 2000,
+      system:
+        "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
+        "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.",
+      messages: [{ role: "user", content }],
+      output_config: { format: { type: "json_schema", schema: SCHEMA } },
+    });
+    const usage = usageFrom(MODEL, resp.usage);
+    const text = resp.content.find((b) => b.type === "text");
+    if (!text || text.type !== "text") return { matches: [], usage };
+    const parsed = JSON.parse(text.text) as {
+      results: { index: number; category: string; dish: string; confidence: number; real_food: boolean; stock_or_ai: boolean }[];
+    };
+
+    const matches: VenueMatch[] = [];
+    for (const r of parsed.results) {
+      const it = items[r.index];
+      if (!it) continue;
+      if (r.category !== "food" && r.category !== "drink") continue;
+      if (!r.real_food || r.stock_or_ai) continue; // odrzuć stock/AI
+      if (r.confidence < MATCH_MIN) continue;
+      const canon = byNorm.get(norm(r.dish || ""));
+      if (!canon) continue; // model zwrócił coś spoza menu
+      matches.push({
+        dish: canon,
+        source: it.source,
+        photoName: it.photoName,
+        url: it.url,
+        caption: it.caption,
+        confidence: Math.max(0, Math.min(1, r.confidence)),
+      });
+    }
+    // Najpewniejsze pierwsze (klient grupuje po daniu).
+    matches.sort((a, b) => b.confidence - a.confidence);
+    return { matches, usage };
+  } catch {
+    return { matches: [], usage: ZERO_USAGE };
+  }
+}

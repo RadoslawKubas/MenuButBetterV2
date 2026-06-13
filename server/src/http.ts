@@ -20,6 +20,7 @@ import {
   type DishPhoto,
 } from "./dishPhotos.ts";
 import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
+import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 
 const app = new Hono();
@@ -399,6 +400,28 @@ app.post("/dish-photos", async (c) => {
   } catch (e) {
     console.error("dish-photos error:", e);
     return c.json({ error: `Wyszukiwanie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
+  }
+});
+
+// Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
+app.post("/venue-photos", async (c) => {
+  try {
+    const body = (await c.req.json()) as {
+      photoNames?: string[];
+      taPhotos?: VenueTaPhoto[];
+      dishes?: string[];
+      cuisine?: string;
+    };
+    const { matches, usage } = await matchVenuePhotos({
+      photoNames: Array.isArray(body.photoNames) ? body.photoNames : [],
+      taPhotos: Array.isArray(body.taPhotos) ? body.taPhotos : [],
+      dishes: Array.isArray(body.dishes) ? body.dishes : [],
+      cuisine: body.cuisine,
+    });
+    return c.json({ matches, usage });
+  } catch (e) {
+    console.error("venue-photos error:", e);
+    return c.json({ error: (e as Error).message, matches: [], usage: ZERO_USAGE }, 500);
   }
 });
 
