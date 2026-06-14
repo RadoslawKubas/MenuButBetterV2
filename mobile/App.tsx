@@ -216,6 +216,8 @@ export default function App() {
     useExifLocation: boolean;
     useDeviceLocation: boolean;
     fixedLocation?: { location: GeoPoint | null; locationSource: LocationSource; locationHint?: string };
+    // Replay odtwarza istniejącą migawkę → nie tworzymy kolejnej (uniknięcie duplikatów).
+    recordCapture?: boolean;
   }) {
     if (opts.images.length === 0) return;
     setError(null);
@@ -257,18 +259,21 @@ export default function App() {
       // Tryb testowy: zapisz migawkę tego, co właśnie idzie do serwera (zdjęcia +
       // ustawienia + dokładna pozycja). Id migawki łączymy później ze skanem, żeby
       // eksport dołączył też WYNIK. Nie blokuje skanu krytycznie (przy błędzie → null).
-      const capture = await saveCapture({
-        images: opts.images,
-        targetLang: opts.targetLang,
-        model: opts.model,
-        restaurantHint: opts.hint.trim() || undefined,
-        locationHint,
-        location,
-        locationSource,
-        useExifLocation: opts.useExifLocation,
-        useDeviceLocation: opts.useDeviceLocation,
-      }).catch(() => null);
-      listCaptures().then(setCaptures).catch(() => {});
+      let capture: ScanCapture | null = null;
+      if (opts.recordCapture !== false) {
+        capture = await saveCapture({
+          images: opts.images,
+          targetLang: opts.targetLang,
+          model: opts.model,
+          restaurantHint: opts.hint.trim() || undefined,
+          locationHint,
+          location,
+          locationSource,
+          useExifLocation: opts.useExifLocation,
+          useDeviceLocation: opts.useDeviceLocation,
+        }).catch(() => null);
+        listCaptures().then(setCaptures).catch(() => {});
+      }
 
       // Skan PARTIAMI: dużą liczbę zdjęć dzielimy na partie po SCAN_BATCH i scalamy
       // wyniki z deduplikacją (mniejsze, bezpieczne wywołania + widoczny postęp).
@@ -393,6 +398,7 @@ export default function App() {
       useExifLocation: c.useExifLocation,
       useDeviceLocation: c.useDeviceLocation,
       fixedLocation: { location: c.location, locationSource: c.locationSource, locationHint: c.locationHint },
+      recordCapture: false, // replay nie tworzy nowej migawki — odtwarza istniejącą
     });
   }
 
