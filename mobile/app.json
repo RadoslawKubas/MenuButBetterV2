@@ -19,6 +19,14 @@
         {
           "locationWhenInUsePermission": "MenuButBetter używa lokalizacji tylko gdy zaznaczysz, że jesteś w restauracji, aby ją namierzyć."
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "MenuButBetter potrzebuje dostępu do zdjęć, aby wczytać menu z galerii.",
+          "savePhotosPermission": "MenuButBetter zapisuje zrobione zdjęcia menu w Twojej galerii (tryb testowy).",
+          "isAccessMediaLocationEnabled": false
+        }
       ]
     ],
     "ios": {

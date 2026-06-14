@@ -44,9 +44,17 @@ import {
   clearScanRestaurant,
   type SavedScan,
 } from "./src/storage";
+import {
+  listCaptures,
+  saveCapture,
+  captureImageBase64,
+  resolveCaptureUri,
+  type ScanCapture,
+} from "./src/captures";
 import { MenuView } from "./src/MenuView";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
+import { CapturesView } from "./src/CapturesView";
 import { ApiErrorToast } from "./src/Toast";
 import { friendlyMessage } from "./src/appLog";
 import { RenameModal } from "./src/RenameModal";
@@ -98,6 +106,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
   const [showDiag, setShowDiag] = useState(false);
+  const [showCaptures, setShowCaptures] = useState(false);
+  const [captures, setCaptures] = useState<ScanCapture[]>([]);
 
   const [status, setStatus] = useState<Status>("idle");
   // Postęp analizy gdy skan idzie partiami (duże menu). null = brak/jedna partia.
@@ -144,6 +154,7 @@ export default function App() {
 
   useEffect(() => {
     listScans().then(setScans).catch(() => {});
+    listCaptures().then(setCaptures).catch(() => {});
   }, []);
 
   function addImages(toAdd: PreparedImage[]) {
@@ -174,8 +185,24 @@ export default function App() {
     setImages((prev) => prev.filter((_, i) => i !== index));
   }
 
+  // Skan przy bieżących ustawieniach ekranu (przycisk „Przetłumacz menu").
   async function doScan() {
-    if (images.length === 0) return;
+    await runScan({ images, targetLang, model, hint, useExifLocation, useDeviceLocation });
+  }
+
+  // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
+  // `fixedLocation` (replay) używa DOKŁADNIE tej samej pozycji co zapisana migawka,
+  // żeby ponowny skan szedł na identycznym wejściu (bez ponownego liczenia GPS/EXIF).
+  async function runScan(opts: {
+    images: PreparedImage[];
+    targetLang: string;
+    model: ModelId;
+    hint: string;
+    useExifLocation: boolean;
+    useDeviceLocation: boolean;
+    fixedLocation?: { location: GeoPoint | null; locationSource: LocationSource; locationHint?: string };
+  }) {
+    if (opts.images.length === 0) return;
     setError(null);
     setStatus("scanning");
     try {
@@ -185,60 +212,86 @@ export default function App() {
       //  2) GPS urządzenia — pozycja użytkownika (kraj/miasto, też gdy nie w lokalu).
       let location: GeoPoint | null = null;
       let locationSource: LocationSource = null;
+      let locationHint: string | undefined;
 
-      if (useExifLocation) {
-        const withGeo = images.find((i) => i.exifLocation);
-        if (withGeo?.exifLocation) {
-          location = withGeo.exifLocation;
-          locationSource = "exif";
+      if (opts.fixedLocation) {
+        // Replay: bierzemy zapisaną pozycję 1:1.
+        location = opts.fixedLocation.location;
+        locationSource = opts.fixedLocation.locationSource;
+        locationHint = opts.fixedLocation.locationHint;
+      } else {
+        if (opts.useExifLocation) {
+          const withGeo = opts.images.find((i) => i.exifLocation);
+          if (withGeo?.exifLocation) {
+            location = withGeo.exifLocation;
+            locationSource = "exif";
+          }
         }
-      }
-      if (!location && useDeviceLocation) {
-        try {
-          location = await getCurrentLocation();
-          locationSource = "device";
-        } catch {
-          location = null; // brak zgody/błąd — skanujemy dalej bez lokalizacji
+        if (!location && opts.useDeviceLocation) {
+          try {
+            location = await getCurrentLocation();
+            locationSource = "device";
+          } catch {
+            location = null; // brak zgody/błąd — skanujemy dalej bez lokalizacji
+          }
         }
+        // „Miasto, Kraj" z GPS → pewny kontekst dla modelu przy tłumaczeniu (gdzie jest lokal).
+        locationHint = location ? await reverseGeocode(location) : undefined;
       }
-      // „Miasto, Kraj" z GPS → pewny kontekst dla modelu przy tłumaczeniu (gdzie jest lokal).
-      const locationHint = location ? await reverseGeocode(location) : undefined;
+
+      // Tryb testowy: zapisz migawkę tego, co właśnie idzie do serwera (zdjęcia +
+      // ustawienia + dokładna pozycja). Nie blokuje skanu; odświeża licznik migawek.
+      void saveCapture({
+        images: opts.images,
+        targetLang: opts.targetLang,
+        model: opts.model,
+        restaurantHint: opts.hint.trim() || undefined,
+        locationHint,
+        location,
+        locationSource,
+        useExifLocation: opts.useExifLocation,
+        useDeviceLocation: opts.useDeviceLocation,
+      })
+        .then(() => listCaptures())
+        .then(setCaptures)
+        .catch(() => {});
 
       // Skan PARTIAMI: dużą liczbę zdjęć dzielimy na partie po SCAN_BATCH i scalamy
       // wyniki z deduplikacją (mniejsze, bezpieczne wywołania + widoczny postęp).
       const batches: PreparedImage[][] = [];
-      for (let i = 0; i < images.length; i += SCAN_BATCH) batches.push(images.slice(i, i + SCAN_BATCH));
+      for (let i = 0; i < opts.images.length; i += SCAN_BATCH)
+        batches.push(opts.images.slice(i, i + SCAN_BATCH));
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
-      if (batches.length > 1) setScanProgress({ done: 0, total: images.length });
+      if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
 
       for (let bi = 0; bi < batches.length; bi++) {
         const batch = batches[bi]!;
         // Dla kolejnych partii dajemy modelowi kontekst (nazwa/kuchnia) z dotychczasowego menu.
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
-          : hint.trim() || undefined;
+          : opts.hint.trim() || undefined;
         const { menu: incoming, usage } = await scanMenu({
           images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-          targetLang,
+          targetLang: opts.targetLang,
           restaurantHint: batchHint,
           locationHint,
-          model,
+          model: opts.model,
         });
 
         if (!merged) {
           // Pierwsza partia → bazowe menu + zapis (kolejne tylko dokładają).
           merged = incoming;
-          if (hint.trim()) merged.restaurant_name = hint.trim(); // nazwa od usera ma pierwszeństwo
+          if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
           const saved = await saveScan({
             menu: merged,
-            targetLang,
-            model,
+            targetLang: opts.targetLang,
+            model: opts.model,
             location,
             locationSource,
-            useExifLocation,
-            useDeviceLocation,
+            useExifLocation: opts.useExifLocation,
+            useDeviceLocation: opts.useDeviceLocation,
             usage,
           });
           scanId = saved.id;
@@ -250,7 +303,7 @@ export default function App() {
         }
         setMenu(merged);
         if (batches.length > 1) {
-          setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, images.length), total: images.length });
+          setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, opts.images.length), total: opts.images.length });
         }
         setScans(await listScans());
       }
@@ -268,14 +321,14 @@ export default function App() {
         menu: result,
         location,
         scanId: scanId!,
-        lang: targetLang,
+        lang: opts.targetLang,
         apply: setFreshRestaurant,
         applyMenu: setMenu,
         current: null,
         candidates: [],
       });
       if (result.restaurant_name) {
-        void lookupRestaurant(result, location, scanId!, targetLang, setFreshRestaurant, {
+        void lookupRestaurant(result, location, scanId!, opts.targetLang, setFreshRestaurant, {
           applyMenu: setMenu,
         });
       }
@@ -283,12 +336,47 @@ export default function App() {
       // Tło, równolegle z automatu: (a) tanie zdjęcia poglądowe, (b) pełne opisy dań
       // (gotowe ad-hoc). Lepsze zdjęcia dociągają się dopiero przy wejściu w danie.
       void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
-      void fillDescriptions(result, scanId!, targetLang, model, setMenu);
+      void fillDescriptions(result, scanId!, opts.targetLang, opts.model, setMenu);
     } catch (e) {
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
       setScanProgress(null);
     }
+  }
+
+  // Tryb testowy: odtwórz zapisaną migawkę — wczytaj jej zdjęcia z dysku i wyślij
+  // ponownie z tymi samymi ustawieniami i pozycją (nowy skan od zera).
+  async function replayCapture(c: ScanCapture) {
+    const imgs: PreparedImage[] = [];
+    for (const im of c.images) {
+      const base64 = await captureImageBase64(im);
+      if (!base64) continue;
+      imgs.push({
+        uri: resolveCaptureUri(im.path) ?? im.path,
+        base64,
+        mediaType: "image/jpeg",
+        exifLocation: im.exifLocation,
+      });
+    }
+    if (imgs.length === 0) {
+      Alert.alert("Brak zdjęć", "Pliki tej migawki nie są już dostępne na urządzeniu.");
+      return;
+    }
+    // Przełącz na ekran skanu i wyczyść poprzedni stan, potem odpal skan.
+    setShowCaptures(false);
+    setShowDiag(false);
+    setOpenScan(null);
+    setTab("scan");
+    setImages([]);
+    await runScan({
+      images: imgs,
+      targetLang: c.targetLang,
+      model: c.model,
+      hint: c.restaurantHint ?? "",
+      useExifLocation: c.useExifLocation,
+      useDeviceLocation: c.useDeviceLocation,
+      fixedLocation: { location: c.location, locationSource: c.locationSource, locationHint: c.locationHint },
+    });
   }
 
   function resetScan() {
@@ -1119,9 +1207,11 @@ export default function App() {
 
         <View style={styles.header}>
           <Text style={styles.brand}>MenuButBetter</Text>
-          {showDiag || showingDetail ? (
+          {showDiag || showCaptures || showingDetail ? (
             <Pressable
-              onPress={() => (showDiag ? setShowDiag(false) : setOpenScan(null))}
+              onPress={() =>
+                showDiag ? setShowDiag(false) : showCaptures ? setShowCaptures(false) : setOpenScan(null)
+              }
               style={styles.navBtn}
             >
               <Text style={styles.navText}>‹ Wstecz</Text>
@@ -1136,6 +1226,9 @@ export default function App() {
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
+              <Pressable onPress={() => setShowCaptures(true)} hitSlop={8}>
+                <Text style={styles.tab}>🧪{captures.length ? ` ${captures.length}` : ""}</Text>
+              </Pressable>
               <Pressable onPress={() => setShowDiag(true)} hitSlop={8}>
                 <Text style={styles.tab}>📊</Text>
               </Pressable>
@@ -1145,6 +1238,8 @@ export default function App() {
 
         {showDiag ? (
           <DiagnosticsView />
+        ) : showCaptures ? (
+          <CapturesView onReplay={replayCapture} />
         ) : (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {/* PODGLĄD ZAPISANEGO MENU */}

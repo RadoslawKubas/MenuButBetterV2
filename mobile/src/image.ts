@@ -2,6 +2,7 @@
 // Czytamy też EXIF GPS (jeśli zdjęcie ma zaszyte współrzędne — np. zrobione na miejscu).
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
+import * as MediaLibrary from "expo-media-library";
 import type { GeoPoint } from "./types";
 
 export interface PreparedImage {
@@ -46,6 +47,17 @@ async function compress(uri: string, exif?: Record<string, unknown> | null): Pro
   };
 }
 
+// Tryb testowy: zapisuje ORYGINAŁ zdjęcia (pełna rozdzielczość, z EXIF) w galerii telefonu.
+// Best-effort — brak zgody / błąd NIE blokuje skanu (tylko nie zachowamy kopii w galerii).
+async function saveToGallery(uri: string): Promise<void> {
+  try {
+    const perm = await MediaLibrary.requestPermissionsAsync(true); // writeOnly: tylko dodawanie
+    if (perm.granted) await MediaLibrary.saveToLibraryAsync(uri);
+  } catch {
+    // ignorujemy — galeria to wygoda do debug, nie wymóg
+  }
+}
+
 /** Robi zdjęcie aparatem (jedno). Zwraca null, gdy użytkownik anuluje. */
 export async function captureFromCamera(): Promise<PreparedImage | null> {
   const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -53,6 +65,7 @@ export async function captureFromCamera(): Promise<PreparedImage | null> {
   const res = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1, exif: true });
   if (res.canceled || !res.assets[0]) return null;
   const a = res.assets[0];
+  void saveToGallery(a.uri); // tryb testowy: zachowaj oryginał w galerii (równolegle)
   return compress(a.uri, a.exif);
 }
 
