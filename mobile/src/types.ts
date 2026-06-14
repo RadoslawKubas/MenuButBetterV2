@@ -151,11 +151,13 @@ export interface RestaurantInfo {
   guessedByLocation?: boolean;
 }
 
-export type ModelId = "claude-sonnet-4-6" | "claude-opus-4-8";
+export type ModelId = "claude-sonnet-4-6" | "claude-opus-4-8" | "gpt-5" | "gpt-5-mini";
 
 export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
 
 export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "szybszy · tańszy" },
   { id: "claude-opus-4-8", label: "Opus 4.8", hint: "najlepszy · wolniejszy" },
+  { id: "gpt-5", label: "GPT-5", hint: "OpenAI · flagowy" },
+  { id: "gpt-5-mini", label: "GPT-5 mini", hint: "OpenAI · tańszy" },
 ];

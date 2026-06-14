@@ -1,27 +1,17 @@
-// Rdzeń: jedno lub WIELE zdjęć menu → Claude vision → jedno spójne, strukturyzowane menu.
+// Rdzeń: jedno lub WIELE zdjęć menu → vision (Claude lub OpenAI) → jedno spójne menu.
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
-import { usageFrom, logUsage, type Usage } from "./usage.ts";
+import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
+import { MODELS, DEFAULT_MODEL, isModelId, providerOf, type ModelId } from "./models.ts";
+import { getOpenAI } from "./openaiClient.ts";
+
+// Rejestr modeli + walidator współdzielone z resztą serwera (re-eksport z models.ts).
+export { MODELS, DEFAULT_MODEL, isModelId, type ModelId };
 
 const client = new Anthropic({ maxRetries: 4 }); // klucz z ANTHROPIC_API_KEY (env); retry na sieć/429/5xx
-
-// Dostępne modele (najnowsze) + ich maksymalne wyjście.
-// max_tokens to tylko SUFIT — ustawiony na maksimum modelu nie kosztuje więcej,
-// jeśli model skończy wcześniej; po prostu menu praktycznie nigdy się nie utnie.
-export const MODELS = {
-  "claude-sonnet-4-6": { label: "Sonnet 4.6", maxOutput: 64000 },
-  "claude-opus-4-8": { label: "Opus 4.8", maxOutput: 128000 },
-} as const;
-
-export type ModelId = keyof typeof MODELS;
-export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
-
-export function isModelId(v: unknown): v is ModelId {
-  return typeof v === "string" && v in MODELS;
-}
 
 export type MediaType = "image/jpeg" | "image/png" | "image/webp";
 
@@ -92,6 +82,65 @@ const SYSTEM = [
   "Nie wymyślaj pozycji, których nie ma na zdjęciach. Jeśli ceny nie widać, ustaw null.",
 ].join(" ");
 
+// Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
+function contextText(opts: ExtractOptions, n: number): string {
+  return (
+    `Język docelowy: ${opts.targetLang}.\n` +
+    `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+    (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
+    `Połącz powyższe ${n} zdjęć w jedno menu.`
+  );
+}
+
+/** Ścieżka OpenAI: vision + structured outputs (json_schema strict) — ta sama schema co Claude. */
+async function extractMenuOpenAI(
+  images: InputImage[],
+  opts: ExtractOptions,
+  model: ModelId,
+): Promise<{ menu: Menu; usage: Usage }> {
+  const openai = getOpenAI();
+
+  const parts: import("openai").OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+  images.forEach((img, i) => {
+    parts.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
+    parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } });
+  });
+  parts.push({ type: "text", text: contextText(opts, images.length) });
+
+  const resp = await track("openai", "scan-menu", () =>
+    openai.chat.completions.create({
+      model,
+      max_completion_tokens: MODELS[model].maxOutput,
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: parts },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "menu", strict: true, schema: MENU_SCHEMA as unknown as Record<string, unknown> },
+      },
+    }),
+  );
+
+  const usage = usageFromOpenAI(model, resp.usage);
+  recordUsage("openai", usage.inputTokens, usage.outputTokens, usage.costUsd);
+  logUsage(`menu obrazów=${images.length} (openai)`, model, usage);
+
+  const choice = resp.choices[0];
+  if (choice?.finish_reason === "length") {
+    throw new Error(
+      "Menu jest bardzo duże i przekroczyło limit jednego skanu. Spróbuj zeskanować mniej stron naraz (np. po 3–4).",
+    );
+  }
+  const text = choice?.message?.content;
+  if (!text) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${choice?.finish_reason ?? "?"}).`);
+  try {
+    return { menu: JSON.parse(text) as Menu, usage };
+  } catch {
+    throw new Error("Nie udało się odczytać menu (odpowiedź OpenAI niepełna).");
+  }
+}
+
 /** Główna funkcja: wyciąga jedno menu z dowolnej liczby obrazów (+ zużycie tokenów). */
 export async function extractMenu(
   images: InputImage[],
@@ -100,6 +149,7 @@ export async function extractMenu(
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
 
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
+  if (providerOf(model) === "openai") return extractMenuOpenAI(images, opts, model);
   // max_tokens = maksimum modelu (to tylko sufit; nie kosztuje, gdy model skończy wcześniej).
   const maxTokens = MODELS[model].maxOutput;
 
@@ -112,14 +162,7 @@ export async function extractMenu(
       source: { type: "base64", media_type: img.mediaType, data: img.base64 },
     });
   });
-  content.push({
-    type: "text",
-    text:
-      `Język docelowy: ${opts.targetLang}.\n` +
-      `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
-      (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
-      `Połącz powyższe ${images.length} zdjęć w jedno menu.`,
-  });
+  content.push({ type: "text", text: contextText(opts, images.length) });
 
   // Streaming — duże wyjście nie wpada w timeout, a max_tokens = maksimum modelu zapobiega ucięciu.
   const stream = client.messages.stream({

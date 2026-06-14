@@ -479,6 +479,7 @@ app.get("/diagnostics", (c) => {
   const reps = new Map(snapshot().map((r) => [r.provider, r]));
   const KNOWN: { provider: Provider; label: string; paid: boolean; configured: boolean }[] = [
     { provider: "claude", label: "Claude (Anthropic)", paid: true, configured: !!process.env.ANTHROPIC_API_KEY },
+    { provider: "openai", label: "OpenAI (GPT)", paid: true, configured: !!process.env.OPENAI_API_KEY },
     { provider: "google_places", label: "Google Places", paid: true, configured: !!process.env.GOOGLE_MAPS_KEY },
     { provider: "tripadvisor", label: "TripAdvisor", paid: false, configured: !!process.env.TRIPADVISOR_KEY },
     { provider: "serper", label: "Serper.dev", paid: true, configured: !!process.env.SERPER_KEY },

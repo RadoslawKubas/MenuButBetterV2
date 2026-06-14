@@ -1,10 +1,10 @@
 // Licznik zużycia tokenów i kosztu wywołań modeli (wariant „licznik kosztów").
-// Cennik $ / 1M tokenów — z oficjalnej tabeli Anthropic.
-const PRICING: Record<string, { in: number; out: number }> = {
-  "claude-opus-4-8": { in: 5, out: 25 },
-  "claude-sonnet-4-6": { in: 3, out: 15 },
-  "claude-haiku-4-5": { in: 1, out: 5 },
-};
+// Cennik $ / 1M tokenów — pojedyncze źródło prawdy w models.ts (per model + provider).
+import { MODELS } from "./models.ts";
+
+function priceFor(model: string): { in: number; out: number } {
+  return (MODELS as Record<string, { price: { in: number; out: number } }>)[model]?.price ?? { in: 0, out: 0 };
+}
 
 export interface Usage {
   inputTokens: number;
@@ -21,14 +21,28 @@ type RawUsage = {
   cache_read_input_tokens?: number | null;
 };
 
-/** Buduje Usage (tokeny + koszt $) z surowego `response.usage` dla danego modelu. */
+/** Buduje Usage (tokeny + koszt $) z surowego `response.usage` Anthropic dla danego modelu. */
 export function usageFrom(model: string, raw: RawUsage): Usage {
-  const price = PRICING[model] ?? { in: 0, out: 0 };
+  const price = priceFor(model);
   const inputTokens =
     (raw.input_tokens ?? 0) +
     (raw.cache_creation_input_tokens ?? 0) +
     (raw.cache_read_input_tokens ?? 0);
   const outputTokens = raw.output_tokens ?? 0;
+  const costUsd = (inputTokens / 1e6) * price.in + (outputTokens / 1e6) * price.out;
+  return { inputTokens, outputTokens, costUsd };
+}
+
+type OpenAIRawUsage = {
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+} | null | undefined;
+
+/** Buduje Usage z `response.usage` OpenAI (completion_tokens zawiera też tokeny rozumowania). */
+export function usageFromOpenAI(model: string, raw: OpenAIRawUsage): Usage {
+  const price = priceFor(model);
+  const inputTokens = raw?.prompt_tokens ?? 0;
+  const outputTokens = raw?.completion_tokens ?? 0;
   const costUsd = (inputTokens / 1e6) * price.in + (outputTokens / 1e6) * price.out;
   return { inputTokens, outputTokens, costUsd };
 }

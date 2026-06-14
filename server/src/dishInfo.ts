@@ -1,7 +1,9 @@
 // Rozszerzony, tekstowy opis pojedynczego dania ("więcej info").
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
-import { usageFrom, logUsage, type Usage } from "./usage.ts";
+import { providerOf } from "./models.ts";
+import { getOpenAI } from "./openaiClient.ts";
+import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
@@ -35,24 +37,42 @@ export async function describeDish(
 ): Promise<{ text: string; usage: Usage }> {
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
+  // Treść zapytania (ta sama dla obu providerów).
+  const userText =
+    `Danie: ${input.name}\n` +
+    (input.description ? `Krótki opis z menu: ${input.description}\n` : "") +
+    (input.cuisine ? `Rodzaj kuchni: ${input.cuisine}\n` : "") +
+    (input.location ? `Lokalizacja lokalu: ${input.location}\n` : "") +
+    (input.restaurant ? `Restauracja: ${input.restaurant}\n` : "") +
+    `Język odpowiedzi: ${input.targetLang}\n\n` +
+    "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.";
+
+  if (providerOf(model) === "openai") {
+    const openai = getOpenAI();
+    const resp = await track("openai", "dish-info", () =>
+      openai.chat.completions.create({
+        model,
+        max_completion_tokens: 1500,
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: userText },
+        ],
+      }),
+    );
+    const out = resp.choices[0]?.message?.content;
+    if (!out) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${resp.choices[0]?.finish_reason ?? "?"}).`);
+    const usage = usageFromOpenAI(model, resp.usage);
+    recordUsage("openai", usage.inputTokens, usage.outputTokens, usage.costUsd);
+    logUsage("dish-info (openai)", model, usage);
+    return { text: out, usage };
+  }
+
   const response = await track("claude", "dish-info", () =>
     client.messages.create({
       model,
       max_tokens: 1500,
       system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content:
-            `Danie: ${input.name}\n` +
-            (input.description ? `Krótki opis z menu: ${input.description}\n` : "") +
-            (input.cuisine ? `Rodzaj kuchni: ${input.cuisine}\n` : "") +
-            (input.location ? `Lokalizacja lokalu: ${input.location}\n` : "") +
-            (input.restaurant ? `Restauracja: ${input.restaurant}\n` : "") +
-            `Język odpowiedzi: ${input.targetLang}\n\n` +
-            "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.",
-        },
-      ],
+      messages: [{ role: "user", content: userText }],
     }),
   );
 

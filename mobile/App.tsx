@@ -1624,9 +1624,10 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontWeight: "600" },
   chipTextActive: { color: colors.buttonText },
-  modelRow: { flexDirection: "row", gap: 10, marginBottom: 8 },
+  modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 8 },
   modelCard: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: "46%",
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 12,

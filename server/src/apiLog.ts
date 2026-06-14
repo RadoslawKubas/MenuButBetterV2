@@ -4,6 +4,7 @@
 
 export type Provider =
   | "claude"
+  | "openai"
   | "google_places"
   | "google_cse"
   | "tripadvisor"
