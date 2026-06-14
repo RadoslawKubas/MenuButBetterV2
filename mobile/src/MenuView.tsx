@@ -25,6 +25,12 @@ function toLightbox(photos: MenuItem["photos"]): LightboxPhoto[] {
   }));
 }
 
+// Domena z URL-a (do zwięzłego logu kandydatów, gdy API nie podało `domain`).
+function hostOf(url: string): string {
+  const m = url.match(/^https?:\/\/([^/?#]+)/i);
+  return m ? m[1]!.replace(/^www\./, "") : url.slice(0, 32);
+}
+
 // Lekkie czyszczenie markdownu, żeby tekst czytał się ładnie jako zwykły tekst.
 function clean(md: string): string {
   return md
@@ -78,10 +84,19 @@ function PhotoDebugPanel({ item }: { item: MenuItem }) {
         <Text style={styles.debugDim}>— brak —</Text>
       ) : (
         d.steps.map((st, i) => (
-          <Text key={i} style={styles.debugStep}>
-            • {st.tier} [{st.provider}] „{st.query}" — zwróciło {st.returned}
-            {st.passed != null ? ` → trafne ${st.passed}` : ""}
-          </Text>
+          <View key={i}>
+            <Text style={styles.debugStep}>
+              • {st.tier} [{st.provider}] „{st.query}" — zwróciło {st.returned}
+              {st.passed != null ? ` → trafne ${st.passed}` : ""}
+            </Text>
+            {st.candidates?.map((cand, j) => (
+              <Text key={j} style={styles.debugCand} numberOfLines={1}>
+                {cand.passed === true ? "✓" : cand.passed === false ? "✗" : "·"}{" "}
+                {cand.score != null ? `${cand.score.toFixed(2)} ` : ""}
+                {cand.domain ?? hostOf(cand.url)}
+              </Text>
+            ))}
+          </View>
         ))
       )}
       <Text style={styles.debugLine}>wynik: {d.resultCount} zdjęć</Text>
@@ -425,6 +440,7 @@ const styles = StyleSheet.create({
   debugLine: { fontSize: 11, color: colors.text, marginBottom: 2 },
   debugHdr: { fontSize: 11, color: colors.muted, fontWeight: "700", marginTop: 4, marginBottom: 2 },
   debugStep: { fontSize: 11, color: colors.muted, marginBottom: 1 },
+  debugCand: { fontSize: 10, color: colors.muted, marginLeft: 12, opacity: 0.85 },
   debugDim: { fontSize: 11, color: colors.muted, marginTop: 4, fontStyle: "italic" },
   photoStrip: { marginBottom: 6 },
   dishPhotoWrap: { marginRight: 8, position: "relative" },

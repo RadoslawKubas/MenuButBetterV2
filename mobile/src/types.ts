@@ -37,12 +37,21 @@ export interface MenuItem {
   photoDebug?: PhotoDebug;
 }
 
+/** Co konkretnie zwróciło API w danym kroku + ocena weryfikacji per zdjęcie. */
+export interface PhotoDebugCandidate {
+  url: string;
+  domain?: string;
+  context?: string; // strona, z której pochodzi zdjęcie (gdy znana)
+  score?: number; // ocena vision 0..1 (gdy weryfikowano)
+  passed?: boolean; // czy przeszło próg
+}
 export interface PhotoDebugStep {
   tier: string;
   provider: string;
   query: string;
   returned: number;
   passed?: number;
+  candidates?: PhotoDebugCandidate[];
 }
 export interface PhotoDebug {
   params: Record<string, unknown>;

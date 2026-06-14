@@ -295,7 +295,22 @@ app.post("/dish-photos", async (c) => {
   const venueKey = body.restaurantName?.trim() ? stripAlnum(body.restaurantName) : "";
 
   // Log debugowy ścieżki szukania zdjęć (zwracany w odpowiedzi → przycisk 🐛 przy daniu).
-  type DbgStep = { tier: string; provider: string; query: string; returned: number; passed?: number };
+  // `candidates` = co KONKRETNIE zwróciło API (URL + domena + strona źródłowa) oraz ocena
+  // weryfikacji vision per zdjęcie — żeby dało się analizować, czemu coś przeszło/odpadło.
+  type DbgCandidate = { url: string; domain?: string; context?: string; score?: number; passed?: boolean };
+  type DbgStep = {
+    tier: string;
+    provider: string;
+    query: string;
+    returned: number;
+    passed?: number;
+    candidates?: DbgCandidate[];
+  };
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const candListOf = (list: DishPhoto[]): DbgCandidate[] =>
+    list.map((p) => ({ url: p.url, domain: p.domain, context: p.contextUrl }));
+  const candScoredOf = (list: (DishPhoto & { score: number })[]): DbgCandidate[] =>
+    list.map((p) => ({ url: p.url, domain: p.domain, context: p.contextUrl, score: r2(p.score), passed: p.score >= MATCH_THRESHOLD }));
   const dbg: { params: Record<string, unknown>; steps: DbgStep[]; resultCount: number } = {
     params: {
       dish,
@@ -344,6 +359,7 @@ app.post("/dish-photos", async (c) => {
     const srcOf = (p: DishPhoto) => (p.domain ? photoSourceCategory(p.domain) : p.source);
     if (!verify) {
       step.passed = Math.min(found.length, num);
+      step.candidates = candListOf(found);
       return {
         photos: found.slice(0, num).map((p) => ({
           url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true,
@@ -352,8 +368,9 @@ app.post("/dish-photos", async (c) => {
       };
     }
     const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine });
-    const filtered = found
-      .map((p, i) => ({ ...p, score: scores[i] ?? 0 }))
+    const scored = found.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
+    step.candidates = candScoredOf(scored);
+    const filtered = scored
       .filter((p) => p.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.score - a.score);
     step.passed = filtered.length;
@@ -382,10 +399,9 @@ app.post("/dish-photos", async (c) => {
     async function keepMatching(list: DishPhoto[], term: string = dish) {
       const { scores, usage } = await scoreDishPhotos(term, list.map((p) => p.url), { cuisine });
       total = addUsage(total, usage);
-      return list
-        .map((p, i) => ({ ...p, score: scores[i] ?? 0 }))
-        .filter((p) => p.score >= MATCH_THRESHOLD)
-        .sort((a, b) => b.score - a.score);
+      const scored = list.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
+      const passing = scored.filter((p) => p.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
+      return { passing, scored };
     }
     const cat = (p: DishPhoto) => photoSourceCategory(p.domain, restaurantDomain);
     // POTWIERDZONE „z tego lokalu": własna domena LUB nazwa lokalu w URL strony portalu.
@@ -397,12 +413,12 @@ app.post("/dish-photos", async (c) => {
     const tier1: DishPhoto[] = [];
     if (restaurantDomain) {
       const site = await restaurantSiteImages(dish, restaurantDomain, 6).catch(() => []);
-      dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: dish, returned: site.length });
+      dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: dish, returned: site.length, candidates: candListOf(site) });
       tier1.push(...site);
     }
     for (const p of contextProviders()) {
       const portal = await p.find(dish, hint).catch(() => []);
-      dbg.steps.push({ tier: "Tier1 portale", provider: p.constructor.name, query: dish, returned: portal.length });
+      dbg.steps.push({ tier: "Tier1 portale", provider: p.constructor.name, query: dish, returned: portal.length, candidates: candListOf(portal) });
       if (portal.length > 0) {
         tier1.push(...portal);
         break;
@@ -418,8 +434,8 @@ app.post("/dish-photos", async (c) => {
       return respond(photos, ZERO_USAGE);
     }
     if (verify && ctx.length > 0) {
-      const passing = await keepMatching(ctx);
-      dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: "Sonnet", query: dish, returned: ctx.length, passed: passing.length });
+      const { passing, scored } = await keepMatching(ctx);
+      dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: "Sonnet", query: dish, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
       if (passing.length > 0) {
         const photos = passing
           // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
@@ -436,8 +452,8 @@ app.post("/dish-photos", async (c) => {
     if (verify) {
       const generic = await genericWebImages(genericTerm, 6);
       if (generic.length > 0) {
-        const passing = await keepMatching(generic, genericTerm);
-        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length });
+        const { passing, scored } = await keepMatching(generic, genericTerm);
+        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length, candidates: candScoredOf(scored) });
         if (passing.length > 0) {
           const photos = passing.slice(0, num).map((p) => ({
             url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: true,
