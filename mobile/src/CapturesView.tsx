@@ -12,6 +12,7 @@ import {
   type ScanCapture,
 } from "./captures";
 import { MODEL_OPTIONS, type ModelId } from "./types";
+import { Lightbox, type LightboxState } from "./Lightbox";
 import { colors } from "./theme";
 
 function fmtWhen(ts: number): string {
@@ -38,6 +39,8 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
   const [busy, setBusy] = useState<string | null>(null);
   // Co teraz pakujemy: "all" | id konkretnej migawki | null. Blokuje pozostałe przyciski.
   const [exporting, setExporting] = useState<string | null>(null);
+  // Podgląd powiększonych zdjęć menu danej migawki (galeria ze swipe).
+  const [preview, setPreview] = useState<LightboxState | null>(null);
 
   async function load() {
     setCaptures(await listCaptures().catch(() => []));
@@ -96,6 +99,7 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
   }
 
   return (
+    <>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.h1}>Tryb testowy — migawki skanów</Text>
       <Text style={styles.sub}>
@@ -125,7 +129,17 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
             {c.images.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbRow}>
                 {c.images.map((im, i) => (
-                  <Image key={i} source={{ uri: resolveCaptureUri(im.path) }} style={styles.thumb} />
+                  <Pressable
+                    key={i}
+                    onPress={() =>
+                      setPreview({
+                        photos: c.images.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })),
+                        index: i,
+                      })
+                    }
+                  >
+                    <Image source={{ uri: resolveCaptureUri(im.path) }} style={styles.thumb} />
+                  </Pressable>
                 ))}
               </ScrollView>
             ) : null}
@@ -173,6 +187,8 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
         ))
       )}
     </ScrollView>
+    <Lightbox state={preview} onClose={() => setPreview(null)} />
+    </>
   );
 }
 

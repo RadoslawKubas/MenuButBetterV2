@@ -64,13 +64,21 @@ export async function listCaptures(): Promise<ScanCapture[]> {
   }
 }
 
-// Kopiuje plik zdjęcia menu do katalogu migawek i zwraca referencję względną.
+// Zapisuje zdjęcie menu do katalogu migawek i zwraca referencję względną.
+// Piszemy DOKŁADNIE ten base64, który poszedł do modelu (mamy go w pamięci) — dzięki
+// temu plik = bajt w bajt to, co zeskanowano, a ponowny odczyt daje identyczne wejście.
 function persistImage(captureId: string, idx: number, img: PreparedImage): CaptureImage {
   ensureDir();
   const name = `${captureId}-${idx}.jpg`;
   const dest = new File(DIR, name);
   if (dest.exists) dest.delete();
-  new File(img.uri).copy(dest);
+  dest.create();
+  if (img.base64) {
+    dest.write(img.base64, { encoding: "base64" });
+  } else {
+    // Awaryjnie: gdy z jakiegoś powodu brak base64, skopiuj plik źródłowy.
+    new File(img.uri).copy(dest);
+  }
   return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
 }
 
