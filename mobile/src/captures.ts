@@ -8,6 +8,7 @@
 // bazowy katalog kontenera iOS zmienia się między uruchomieniami (jak w imageCache.ts).
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
+import JSZip from "jszip";
 import type { PreparedImage } from "./image";
 import type { GeoPoint, LocationSource, ModelId } from "./types";
 
@@ -147,50 +148,55 @@ export async function captureImageBase64(im: CaptureImage): Promise<string | nul
   }
 }
 
-/** Format pliku eksportu — samodzielny (zdjęcia inline w base64). */
-export interface CaptureExport {
-  format: "menubutbetter.captures";
-  version: 1;
-  exportedAt: number;
-  count: number;
-  captures: (Omit<ScanCapture, "images"> & {
-    images: { mediaType: string; exifLocation?: GeoPoint; base64: string }[];
-  })[];
+/** Wpis w `metadata.json` archiwum — zdjęcia jako osobne pliki w `images/`. */
+export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
+  images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
 }
 
 /**
- * Eksportuje WSZYSTKIE migawki do jednego samodzielnego pliku JSON (zdjęcia inline
- * w base64) i zwraca jego file:// URI. Plik trafia do katalogu cache — gotowy do
- * wysłania przez systemowy arkusz udostępniania. Zwraca null, gdy brak migawek.
+ * Eksportuje WSZYSTKIE migawki do jednego pliku ZIP i zwraca jego file:// URI:
+ *   - images/<id>-<n>.jpg  — surowe zdjęcia menu (gotowe do obejrzenia po rozpakowaniu),
+ *   - metadata.json        — ustawienia + pozycja GPS każdej migawki (odwołania do plików).
+ * Mniejszy i czytelniejszy niż base64 inline. Plik trafia do cache, gotowy do
+ * udostępnienia. Zwraca null, gdy brak migawek.
  */
 export async function exportCaptures(): Promise<string | null> {
   const captures = await listCaptures();
   if (captures.length === 0) return null;
 
-  const out: CaptureExport["captures"] = [];
+  const zip = new JSZip();
+  const imagesDir = zip.folder("images")!;
+  const entries: CaptureExportEntry[] = [];
+
   for (const c of captures) {
-    const images: CaptureExport["captures"][number]["images"] = [];
-    for (const im of c.images) {
+    const images: CaptureExportEntry["images"] = [];
+    for (let i = 0; i < c.images.length; i++) {
+      const im = c.images[i]!;
       const base64 = await captureImageBase64(im);
       if (!base64) continue;
-      images.push({ mediaType: im.mediaType, exifLocation: im.exifLocation, base64 });
+      const fname = `${c.id}-${i}.jpg`;
+      imagesDir.file(fname, base64, { base64: true });
+      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation });
     }
     const { images: _drop, ...meta } = c;
-    out.push({ ...meta, images });
+    entries.push({ ...meta, images });
   }
 
-  const payload: CaptureExport = {
-    format: "menubutbetter.captures",
-    version: 1,
-    exportedAt: Date.now(),
-    count: out.length,
-    captures: out,
-  };
+  zip.file(
+    "metadata.json",
+    JSON.stringify(
+      { format: "menubutbetter.captures", version: 1, exportedAt: Date.now(), count: entries.length, captures: entries },
+      null,
+      2,
+    ),
+  );
 
+  // JPEG już skompresowany → STORE (bez deflate): szybciej, rozmiar i tak ten sam.
+  const bytes = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = new File(Paths.cache, `mbb-captures-${stamp}.json`);
+  const file = new File(Paths.cache, `mbb-captures-${stamp}.zip`);
   if (file.exists) file.delete();
   file.create();
-  await file.write(JSON.stringify(payload));
+  await file.write(bytes);
   return file.uri;
 }

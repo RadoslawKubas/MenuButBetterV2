@@ -60,9 +60,9 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
         return;
       }
       await Sharing.shareAsync(uri, {
-        mimeType: "application/json",
-        dialogTitle: "Wyślij próbki skanów (JSON)",
-        UTI: "public.json",
+        mimeType: "application/zip",
+        dialogTitle: "Wyślij próbki skanów (ZIP)",
+        UTI: "public.zip-archive",
       });
     } catch (e) {
       Alert.alert("Nie udało się wyeksportować", e instanceof Error ? e.message : "Spróbuj ponownie.");
@@ -105,7 +105,7 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
       {captures.length > 0 ? (
         <Pressable style={[styles.export, exporting && styles.disabled]} disabled={exporting} onPress={doExport}>
           <Text style={styles.exportText}>
-            {exporting ? "⏳ Pakuję…" : `⬆︎ Wyeksportuj wszystkie (${captures.length}) do pliku`}
+            {exporting ? "⏳ Pakuję ZIP…" : `⬆︎ Wyeksportuj wszystkie (${captures.length}) do ZIP`}
           </Text>
         </Pressable>
       ) : null}

@@ -1,9 +1,19 @@
 # Próbki skanów (captures)
 
-Tu wrzucaj pliki wyeksportowane z aplikacji: ekran **🧪 Tryb testowy → ⬆︎ Wyeksportuj
-wszystkie do pliku**. Każdy plik to samodzielny JSON `mbb-captures-<data>.json`.
+Tu wrzucaj archiwa wyeksportowane z aplikacji: ekran **🧪 Tryb testowy → ⬆︎ Wyeksportuj
+wszystkie do ZIP**. Każdy plik to `mbb-captures-<data>.zip`.
 
-## Format
+## Zawartość archiwum
+
+```
+mbb-captures-2026-06-14T10-00-00.zip
+├── metadata.json          # ustawienia + pozycja GPS każdej migawki
+└── images/
+    ├── <id>-0.jpg         # surowe zdjęcia menu (gotowe do obejrzenia)
+    └── <id>-1.jpg
+```
+
+## metadata.json
 
 ```jsonc
 {
@@ -24,13 +34,13 @@ wszystkie do pliku**. Każdy plik to samodzielny JSON `mbb-captures-<data>.json`
       "useExifLocation": true,
       "useDeviceLocation": true,
       "images": [
-        { "mediaType": "image/jpeg", "exifLocation": { "lat": …, "lng": … }, "base64": "<JPEG inline>" }
+        { "file": "images/<id>-0.jpg", "mediaType": "image/jpeg", "exifLocation": { "lat": …, "lng": … } }
       ]
     }
   ]
 }
 ```
 
-Zdjęcia menu są inline w base64 — plik jest samowystarczalny (nie potrzeba osobnych
-plików). To dokładnie to, co poleciało do `/scan`, więc na tym można odtwarzać i
+Zdjęcia menu leżą jako osobne pliki w `images/` (odwołania w `metadata.json` przez pole
+`file`). To dokładnie to, co poleciało do `/scan`, więc na tym można odtwarzać i
 debugować skany lokalnie.
