@@ -62,6 +62,7 @@ import {
   type LocationSource,
   type Menu,
   type ModelId,
+  type PhotoDebug,
   type RestaurantInfo,
   type TripAdvisorPhoto,
   type Usage,
@@ -657,9 +658,19 @@ export default function App() {
       try {
         // Podpisy TripAdvisora (zweryfikowane) → pełne wyszukiwanie (z lokalu/web).
         const matched = matchTaPhotos(item.original, opts.taPhotos);
-        const realRes =
+        const realRes: { photos: DishPhotoLite[]; usage: Usage; debug?: PhotoDebug } =
           matched.length > 0
-            ? { photos: matched, usage: ZERO_USAGE }
+            ? {
+                photos: matched,
+                usage: ZERO_USAGE,
+                debug: {
+                  params: { dish: item.original, source: "TripAdvisor (podpisy zdjęć)" },
+                  steps: [
+                    { tier: "TripAdvisor podpisy", provider: "TA API", query: item.original, returned: matched.length, passed: matched.length },
+                  ],
+                  resultCount: matched.length,
+                },
+              }
             : await fetchDishPhotos(
                 item.original,
                 opts.photoHint ?? opts.menu.restaurant_name ?? undefined,
@@ -669,15 +680,15 @@ export default function App() {
                   restaurantName: opts.menu.restaurant_name ?? undefined,
                   photoQuery: item.photo_query,
                 },
-              ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE }));
+              ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
         const real = realRes.photos;
         // LEPSZE zdjęcia z przodu, dotychczasowe (poglądowe) zostają na końcu — nic nie znika.
         // Jak nic nowego → tylko oznacz, by nie szukać znów (zostają obecne).
         const existing = opts.menu.sections[si]?.items[ii]?.photos ?? [];
         const patch =
           real.length > 0
-            ? { photos: mergePhotos(await cachePhotos(real), existing), photosUpgraded: true }
-            : { photosUpgraded: true };
+            ? { photos: mergePhotos(await cachePhotos(real), existing), photosUpgraded: true, photoDebug: realRes.debug }
+            : { photosUpgraded: true, photoDebug: realRes.debug ?? item.photoDebug };
         opts.applyMenu((prev) => (prev ? patchItem(prev, si, ii, patch) : prev));
         if (scanId) {
           await updateScanItem(scanId, si, ii, patch);
@@ -720,21 +731,25 @@ export default function App() {
       while (next < jobs.length) {
         const job = jobs[next++];
         if (!job) break;
-        const { photos, usage } = await fetchDishPhotos(job.name, undefined, {
+        const { photos, usage, debug } = await fetchDishPhotos(job.name, undefined, {
           representativeOnly: true, // tanio: zdjęcie poglądowe (Serper→Wiki) + weryfikacja
           cuisine: baseMenu.cuisine,
           photoQuery: job.photoQuery,
           num: 1,
-        }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE }));
+        }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));
         totalUsage = addUsage(totalUsage, usage);
-        if (photos.length === 0) continue;
+        if (photos.length === 0) {
+          // Brak zdjęcia, ale zapisz debug, żeby było widać czemu (jakie API, ile zwróciły).
+          if (debug) applyMenu((prev) => (prev ? patchItem(prev, job.si, job.ii, { photoDebug: debug }) : prev));
+          continue;
+        }
         const cached = await cachePhotos(photos); // pobierz na dysk (offline + brak rotacji linków)
         applyMenu((prev) => {
           if (!prev) return prev;
           const cur = prev.sections[job.si]?.items[job.ii];
           // Nie nadpisuj, jeśli user zdążył dostać LEPSZE zdjęcia z dotknięcia.
           if (cur?.photosUpgraded || (cur?.photos && cur.photos.length > 0)) return prev;
-          return patchItem(prev, job.si, job.ii, { photos: cached });
+          return patchItem(prev, job.si, job.ii, { photos: cached, photoDebug: debug });
         });
       }
     }

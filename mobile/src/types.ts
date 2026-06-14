@@ -33,6 +33,21 @@ export interface MenuItem {
   photos?: DishPhotoLite[];
   /** Czy próbowano już dociągnąć PRAWDZIWE zdjęcie z restauracji (na dotknięcie). */
   photosUpgraded?: boolean;
+  /** Debug ostatniego wyszukiwania zdjęć dla tego dania (przycisk 🐛). */
+  photoDebug?: PhotoDebug;
+}
+
+export interface PhotoDebugStep {
+  tier: string;
+  provider: string;
+  query: string;
+  returned: number;
+  passed?: number;
+}
+export interface PhotoDebug {
+  params: Record<string, unknown>;
+  steps: PhotoDebugStep[];
+  resultCount: number;
 }
 
 export interface DishPhotoLite {

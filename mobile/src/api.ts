@@ -2,7 +2,7 @@
 // Expo (żeby działało na fizycznym telefonie bez ręcznego wpisywania IP).
 import Constants from "expo-constants";
 import * as appLog from "./appLog";
-import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type RestaurantInfo, type Usage } from "./types";
+import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type PhotoDebug, type RestaurantInfo, type Usage } from "./types";
 
 const API_PORT = 8787;
 
@@ -195,7 +195,7 @@ export async function fetchDishPhotos(
   dish: string,
   restaurantHint?: string,
   opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string; photoQuery?: string },
-): Promise<{ photos: DishPhotoLite[]; usage: Usage }> {
+): Promise<{ photos: DishPhotoLite[]; usage: Usage; debug?: PhotoDebug }> {
   const res = await loggedFetch("dish-photos", `${API_BASE}/dish-photos`, {
     method: "POST",
     headers: jsonHeaders(),
@@ -210,9 +210,9 @@ export async function fetchDishPhotos(
       representativeOnly: opts?.representativeOnly,
     }),
   });
-  const json = (await res.json()) as { photos?: DishPhotoLite[]; usage?: Usage; error?: string };
+  const json = (await res.json()) as { photos?: DishPhotoLite[]; usage?: Usage; debug?: PhotoDebug; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
-  return { photos: json.photos ?? [], usage: json.usage ?? ZERO_USAGE };
+  return { photos: json.photos ?? [], usage: json.usage ?? ZERO_USAGE, debug: json.debug };
 }
 
 // --- Diagnostyka: zewnętrzne API używane przez serwer ---

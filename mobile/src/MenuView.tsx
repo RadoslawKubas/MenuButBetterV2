@@ -53,6 +53,42 @@ function Badges({ item }: { item: MenuItem }) {
   );
 }
 
+// Panel debug wyszukiwania zdjęć: jakie API użyto, ile zwróciły, ile trafnych, parametry.
+function PhotoDebugPanel({ item }: { item: MenuItem }) {
+  const d = item.photoDebug;
+  if (!d) {
+    return <Text style={styles.debugDim}>Brak danych — zdjęcia jeszcze nie szukane dla tej pozycji.</Text>;
+  }
+  const p = d.params;
+  const s = (v: unknown) => (v == null || v === "" ? "—" : String(v));
+  return (
+    <View style={styles.debugBox}>
+      <Text style={styles.debugLine}>
+        zapytanie: „{s(p.dish)}"{p.photoQuery ? `  ·  photo_query: „${s(p.photoQuery)}"` : ""}
+      </Text>
+      <Text style={styles.debugLine}>
+        lokal: {s(p.restaurantName)} · domena: {s(p.restaurantDomain)} · kuchnia: {s(p.cuisine)}
+      </Text>
+      <Text style={styles.debugLine}>
+        tryb: {p.representativeOnly ? "poglądowe (start)" : "pełne (na dotknięcie)"} · weryfikacja:{" "}
+        {p.verify ? "tak" : "nie"}
+      </Text>
+      <Text style={styles.debugHdr}>kroki (API · zwróciło → trafne):</Text>
+      {d.steps.length === 0 ? (
+        <Text style={styles.debugDim}>— brak —</Text>
+      ) : (
+        d.steps.map((st, i) => (
+          <Text key={i} style={styles.debugStep}>
+            • {st.tier} [{st.provider}] „{st.query}" — zwróciło {st.returned}
+            {st.passed != null ? ` → trafne ${st.passed}` : ""}
+          </Text>
+        ))
+      )}
+      <Text style={styles.debugLine}>wynik: {d.resultCount} zdjęć</Text>
+    </View>
+  );
+}
+
 function InfoFooter({
   item,
   expanded,
@@ -66,6 +102,7 @@ function InfoFooter({
   photoLoading: boolean; // doszukiwanie LEPSZYCH zdjęć (w tle, nie blokuje)
   onPhotoOpen: (state: LightboxState) => void;
 }) {
+  const [showDebug, setShowDebug] = useState(false);
   const photos = item.photos ?? [];
   const hasCache = !!item.extraInfo || photos.length > 0;
   const anyRepresentative = photos.some((p) => p.representative);
@@ -121,6 +158,11 @@ function InfoFooter({
             <Text style={styles.infoHint}>  Generuję opis…</Text>
           </View>
         ) : null}
+        {/* Debug wyszukiwania zdjęć (małe 🐛). */}
+        <Pressable onPress={() => setShowDebug((v) => !v)} hitSlop={6}>
+          <Text style={styles.debugBtn}>🐛 debug zdjęć {showDebug ? "▲" : "▾"}</Text>
+        </Pressable>
+        {showDebug ? <PhotoDebugPanel item={item} /> : null}
         <Text style={styles.infoToggle}>▲ Zwiń</Text>
       </View>
     );
@@ -376,6 +418,12 @@ const styles = StyleSheet.create({
   infoBox: { marginTop: 10, borderTopWidth: 1, borderTopColor: colors.badgeBg, paddingTop: 10 },
   infoText: { fontSize: 14, color: colors.text, lineHeight: 21 },
   infoToggle: { fontSize: 13, color: colors.accent, fontWeight: "700", marginTop: 10 },
+  debugBtn: { fontSize: 11, color: colors.muted, fontWeight: "700", marginTop: 10 },
+  debugBox: { marginTop: 6, backgroundColor: colors.bg, borderRadius: 8, padding: 8, borderWidth: 1, borderColor: colors.badgeBg },
+  debugLine: { fontSize: 11, color: colors.text, marginBottom: 2 },
+  debugHdr: { fontSize: 11, color: colors.muted, fontWeight: "700", marginTop: 4, marginBottom: 2 },
+  debugStep: { fontSize: 11, color: colors.muted, marginBottom: 1 },
+  debugDim: { fontSize: 11, color: colors.muted, marginTop: 4, fontStyle: "italic" },
   photoStrip: { marginBottom: 6 },
   dishPhotoWrap: { marginRight: 8, position: "relative" },
   dishPhoto: { width: 150, height: 110, borderRadius: 10, backgroundColor: colors.badgeBg },

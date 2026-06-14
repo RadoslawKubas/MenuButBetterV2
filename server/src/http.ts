@@ -294,6 +294,29 @@ app.post("/dish-photos", async (c) => {
   // Klucz nazwy lokalu (np. „curcuma") do potwierdzenia, że strona portalu jest TEGO lokalu.
   const venueKey = body.restaurantName?.trim() ? stripAlnum(body.restaurantName) : "";
 
+  // Log debugowy ścieżki szukania zdjęć (zwracany w odpowiedzi → przycisk 🐛 przy daniu).
+  type DbgStep = { tier: string; provider: string; query: string; returned: number; passed?: number };
+  const dbg: { params: Record<string, unknown>; steps: DbgStep[]; resultCount: number } = {
+    params: {
+      dish,
+      photoQuery: body.photoQuery?.trim() || null,
+      genericTerm,
+      restaurantName: body.restaurantName || null,
+      restaurantDomain: restaurantDomain || null,
+      cuisine: cuisine || null,
+      num,
+      verify: body.verify !== false,
+      representativeOnly: !!body.representativeOnly,
+    },
+    steps: [],
+    resultCount: 0,
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const respond = (photos: any[], usage: Usage) => {
+    dbg.resultCount = photos.length;
+    return c.json({ photos, usage, debug: dbg });
+  };
+
   // Zdjęcia POGLĄDOWE (typ dania): Serper (Google Images) → Wikimedia → Openverse fallback.
   // Serper ma dużo wyższe pokrycie trafnych zdjęć dań niż Commons (zmierzone: 93% vs 60%);
   // Commons często zwraca mapy/budynki/przypadkowe pliki, więc był słabym źródłem startowym.
@@ -303,14 +326,24 @@ app.post("/dish-photos", async (c) => {
     usage: Usage;
   }> {
     const pool = Math.max(num * 2, 6);
+    let provider = "Serper (web)";
     let found = await genericWebImages(genericTerm, pool).catch(() => []);
-    if (found.length === 0) found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
-    if (found.length === 0) found = await new OpenverseProvider(pool).find(genericTerm).catch(() => []);
+    if (found.length === 0) {
+      provider = "Wikimedia";
+      found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
+    }
+    if (found.length === 0) {
+      provider = "Openverse";
+      found = await new OpenverseProvider(pool).find(genericTerm).catch(() => []);
+    }
+    const step: DbgStep = { tier: "Poglądowe (typ dania)", provider, query: genericTerm, returned: found.length };
+    dbg.steps.push(step);
     if (found.length === 0) return { photos: [], usage: ZERO_USAGE };
     // Etykieta źródła: dla wyników z domeną (Serper) → kategoria (web/tripadvisor…),
     // dla Wikimedia/Openverse (bez domeny) → ich własny source.
     const srcOf = (p: DishPhoto) => (p.domain ? photoSourceCategory(p.domain) : p.source);
     if (!verify) {
+      step.passed = Math.min(found.length, num);
       return {
         photos: found.slice(0, num).map((p) => ({
           url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true,
@@ -319,10 +352,12 @@ app.post("/dish-photos", async (c) => {
       };
     }
     const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine });
-    const photos = found
+    const filtered = found
       .map((p, i) => ({ ...p, score: scores[i] ?? 0 }))
       .filter((p) => p.score >= MATCH_THRESHOLD)
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.score - a.score);
+    step.passed = filtered.length;
+    const photos = filtered
       .slice(0, num)
       .map((p) => ({ url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true }));
     return { photos, usage };
@@ -332,7 +367,7 @@ app.post("/dish-photos", async (c) => {
   if (body.representativeOnly) {
     try {
       const { photos, usage } = await representatives(body.verify !== false);
-      return c.json({ photos, usage });
+      return respond(photos, usage);
     } catch (e) {
       return c.json({ error: (e as Error).message }, 502);
     }
@@ -361,10 +396,13 @@ app.post("/dish-photos", async (c) => {
     // TIER 1: „z lokalu" — OSOBNO strona lokalu (site:domena) + OSOBNO portale recenzenckie, scalone.
     const tier1: DishPhoto[] = [];
     if (restaurantDomain) {
-      tier1.push(...(await restaurantSiteImages(dish, restaurantDomain, 6).catch(() => [])));
+      const site = await restaurantSiteImages(dish, restaurantDomain, 6).catch(() => []);
+      dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: dish, returned: site.length });
+      tier1.push(...site);
     }
     for (const p of contextProviders()) {
       const portal = await p.find(dish, hint).catch(() => []);
+      dbg.steps.push({ tier: "Tier1 portale", provider: p.constructor.name, query: dish, returned: portal.length });
       if (portal.length > 0) {
         tier1.push(...portal);
         break;
@@ -377,10 +415,11 @@ app.post("/dish-photos", async (c) => {
       const photos = ctx.slice(0, num).map((p) => ({
         url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: false, fromVenue: fromVenue(p),
       }));
-      return c.json({ photos, usage: ZERO_USAGE });
+      return respond(photos, ZERO_USAGE);
     }
     if (verify && ctx.length > 0) {
       const passing = await keepMatching(ctx);
+      dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: "Sonnet", query: dish, returned: ctx.length, passed: passing.length });
       if (passing.length > 0) {
         const photos = passing
           // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
@@ -389,7 +428,7 @@ app.post("/dish-photos", async (c) => {
           .map((p) => ({
             url: p.url, source: cat(p), attribution: p.attribution, verified: true, representative: false, fromVenue: fromVenue(p),
           }));
-        return c.json({ photos, usage: total });
+        return respond(photos, total);
       }
     }
 
@@ -398,18 +437,21 @@ app.post("/dish-photos", async (c) => {
       const generic = await genericWebImages(genericTerm, 6);
       if (generic.length > 0) {
         const passing = await keepMatching(generic, genericTerm);
+        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length });
         if (passing.length > 0) {
           const photos = passing.slice(0, num).map((p) => ({
             url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: true,
           }));
-          return c.json({ photos, usage: total });
+          return respond(photos, total);
         }
+      } else {
+        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: 0, passed: 0 });
       }
     }
 
-    // TIER 3: Wikimedia/Openverse (free, do sklepu) — ostatnia deska; źródło z p.source.
+    // TIER 3: poglądowe (Serper→Wikimedia→Openverse) — ostatnia deska.
     const rep = await representatives(verify);
-    return c.json({ photos: rep.photos, usage: addUsage(total, rep.usage) });
+    return respond(rep.photos, addUsage(total, rep.usage));
   } catch (e) {
     console.error("dish-photos error:", e);
     return c.json({ error: `Wyszukiwanie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
