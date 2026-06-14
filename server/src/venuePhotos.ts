@@ -6,7 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
-import { track } from "./apiLog.ts";
+import { track, recordUsage } from "./apiLog.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6";
@@ -169,6 +169,7 @@ export async function matchVenuePhotos(
       }),
     );
     const usage = usageFrom(MODEL, resp.usage);
+    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
     const text = resp.content.find((b) => b.type === "text");
     if (!text || text.type !== "text") return { matches: [], usage };
     const parsed = JSON.parse(text.text) as {

@@ -2,7 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
-import { track } from "./apiLog.ts";
+import { track, recordUsage } from "./apiLog.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 
@@ -61,6 +61,7 @@ export async function describeDish(
     throw new Error(`Brak odpowiedzi (stop_reason=${response.stop_reason}).`);
   }
   const usage = usageFrom(model, response.usage);
+  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
   logUsage("dish-info", model, usage);
   return { text: text.text, usage };
 }

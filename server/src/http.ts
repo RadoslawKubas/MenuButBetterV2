@@ -485,6 +485,9 @@ app.get("/diagnostics", (c) => {
       errors: r?.errors ?? 0,
       lastAt: r?.lastAt ?? null,
       lastError: r?.lastError ?? null,
+      inputTokens: r?.inputTokens ?? 0,
+      outputTokens: r?.outputTokens ?? 0,
+      costUsd: r?.costUsd ?? 0,
       entries: r?.entries ?? [],
     };
   });

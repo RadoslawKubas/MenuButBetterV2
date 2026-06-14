@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
 import { usageFrom, logUsage, type Usage } from "./usage.ts";
-import { track } from "./apiLog.ts";
+import { track, recordUsage } from "./apiLog.ts";
 
 const client = new Anthropic({ maxRetries: 4 }); // klucz z ANTHROPIC_API_KEY (env); retry na sieć/429/5xx
 
@@ -131,8 +131,9 @@ export async function extractMenu(
   });
   const response = await track("claude", "scan-menu", () => stream.finalMessage());
 
-  // Zużycie tokenów + koszt (do licznika w apce).
+  // Zużycie tokenów + koszt (do licznika w apce + diagnostyki).
   const usage = usageFrom(model, response.usage);
+  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
   logUsage(`menu obrazów=${images.length} stop=${response.stop_reason}`, model, usage);
 
   if (response.stop_reason === "max_tokens") {

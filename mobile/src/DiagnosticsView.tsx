@@ -15,6 +15,15 @@ function fmtTime(ts: number): string {
   }
 }
 
+function fmtTok(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return String(n);
+}
+function fmtUsd(n: number): string {
+  return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
+}
+
 export function DiagnosticsView() {
   const [providers, setProviders] = useState<DiagProvider[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,6 +64,19 @@ export function DiagnosticsView() {
         <ActivityIndicator color={colors.accent} style={{ marginVertical: 24 }} />
       ) : null}
 
+      {/* Łączny koszt AI = to, co realnie kosztuje (tokeny), nie liczba wywołań. */}
+      {providers.some((p) => p.costUsd > 0) ? (
+        <View style={styles.costBox}>
+          <Text style={styles.costBig}>
+            💰 Koszt AI: {fmtUsd(providers.reduce((n, p) => n + p.costUsd, 0))}
+          </Text>
+          <Text style={styles.costSub}>
+            {fmtTok(providers.reduce((n, p) => n + p.inputTokens, 0))} in ·{" "}
+            {fmtTok(providers.reduce((n, p) => n + p.outputTokens, 0))} out · ta sesja serwera
+          </Text>
+        </View>
+      ) : null}
+
       {providers.map((p) => {
         const isOpen = open === p.provider;
         // Czy OSTATNIE zapytanie do tego API poszło błędem (≠ „kiedykolwiek był błąd").
@@ -92,6 +114,11 @@ export function DiagnosticsView() {
                 </Text>
                 <Text style={styles.dim}>{p.lastAt ? fmtTime(p.lastAt) : "—"}</Text>
               </View>
+              {p.costUsd > 0 || p.inputTokens > 0 ? (
+                <Text style={styles.tokens}>
+                  🔢 {fmtTok(p.inputTokens)} in · {fmtTok(p.outputTokens)} out · 💰 {fmtUsd(p.costUsd)}
+                </Text>
+              ) : null}
               {p.lastError ? (
                 <Text style={styles.lastErr} numberOfLines={2}>
                   {p.lastError}
@@ -151,6 +178,10 @@ const styles = StyleSheet.create({
   refresh: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 },
   refreshText: { color: colors.accent, fontWeight: "700" },
   error: { color: colors.error, marginBottom: 8 },
+  costBox: { backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.accent },
+  costBig: { fontSize: 18, fontWeight: "800", color: colors.accent },
+  costSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  tokens: { fontSize: 12, color: colors.text, fontWeight: "600", marginTop: 6 },
   card: {
     backgroundColor: colors.card,
     borderRadius: 12,

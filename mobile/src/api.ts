@@ -233,6 +233,9 @@ export interface DiagProvider {
   errors: number;
   lastAt: number | null;
   lastError: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
   entries: DiagEntry[];
 }
 

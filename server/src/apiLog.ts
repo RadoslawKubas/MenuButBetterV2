@@ -25,21 +25,38 @@ interface State {
   entries: ApiLogEntry[];
   total: number;
   errors: number;
+  // Zużycie tokenów + koszt (dla AI — to ono robi koszt, nie liczba wywołań).
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
+function getState(provider: Provider): State {
+  let s = store.get(provider);
+  if (!s) {
+    s = { entries: [], total: 0, errors: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    store.set(provider, s);
+  }
+  return s;
 }
 
 const MAX = 40; // ostatnich wpisów na providera
 const store = new Map<Provider, State>();
 
 export function record(provider: Provider, op: string, ok: boolean, ms: number, detail?: string): void {
-  let s = store.get(provider);
-  if (!s) {
-    s = { entries: [], total: 0, errors: 0 };
-    store.set(provider, s);
-  }
+  const s = getState(provider);
   s.total++;
   if (!ok) s.errors++;
   s.entries.unshift({ ts: Date.now(), op, ok, ms: Math.round(ms), detail: detail?.slice(0, 300) });
   if (s.entries.length > MAX) s.entries.length = MAX;
+}
+
+/** Dokłada zużycie tokenów + koszt do providera (dla AI). Wołane po policzeniu usage. */
+export function recordUsage(provider: Provider, inputTokens: number, outputTokens: number, costUsd: number): void {
+  const s = getState(provider);
+  s.inputTokens += inputTokens;
+  s.outputTokens += outputTokens;
+  s.costUsd += costUsd;
 }
 
 /** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude). Re-rzuca błąd. */
@@ -112,6 +129,9 @@ export interface ProviderReport {
   errors: number;
   lastAt: number | null;
   lastError: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
   entries: ApiLogEntry[];
 }
 
@@ -125,6 +145,9 @@ export function snapshot(): ProviderReport[] {
       errors: s.errors,
       lastAt: s.entries[0]?.ts ?? null,
       lastError: s.entries.find((e) => !e.ok)?.detail ?? null,
+      inputTokens: s.inputTokens,
+      outputTokens: s.outputTokens,
+      costUsd: s.costUsd,
       entries: s.entries,
     }))
     .sort((a, b) => b.total - a.total);
