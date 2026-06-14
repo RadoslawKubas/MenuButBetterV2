@@ -180,8 +180,9 @@ export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
  * Mniejszy i czytelniejszy niż base64 inline. Plik trafia do cache, gotowy do
  * udostępnienia. Zwraca null, gdy brak migawek.
  */
-export async function exportCaptures(): Promise<string | null> {
-  const captures = await listCaptures();
+export async function exportCaptures(ids?: string[]): Promise<string | null> {
+  const all = await listCaptures();
+  const captures = ids && ids.length ? all.filter((c) => ids.includes(c.id)) : all;
   if (captures.length === 0) return null;
 
   // Wyniki skanów (z historii) — dołączamy je po scanId, żeby w eksporcie było widać
@@ -229,7 +230,8 @@ export async function exportCaptures(): Promise<string | null> {
   // JPEG już skompresowany → STORE (bez deflate): szybciej, rozmiar i tak ten sam.
   const bytes = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = new File(Paths.cache, `mbb-captures-${stamp}.zip`);
+  const prefix = captures.length === 1 ? "mbb-capture" : "mbb-captures";
+  const file = new File(Paths.cache, `${prefix}-${stamp}.zip`);
   if (file.exists) file.delete();
   file.create();
   await file.write(bytes);

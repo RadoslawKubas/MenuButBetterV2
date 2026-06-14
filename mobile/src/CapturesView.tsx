@@ -36,7 +36,8 @@ function sourceLabel(c: ScanCapture): string {
 export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void }) {
   const [captures, setCaptures] = useState<ScanCapture[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  // Co teraz pakujemy: "all" | id konkretnej migawki | null. Blokuje pozostałe przyciski.
+  const [exporting, setExporting] = useState<string | null>(null);
 
   async function load() {
     setCaptures(await listCaptures().catch(() => []));
@@ -45,12 +46,12 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
     void load();
   }, []);
 
-  // Eksport WSZYSTKICH migawek do jednego pliku JSON (zdjęcia inline) + arkusz
-  // udostępniania — żeby wysłać próbki z telefonu (Pliki / AirDrop / mail).
-  async function doExport() {
-    setExporting(true);
+  // Pakuje ZIP (wszystkie albo wskazane id) i otwiera arkusz udostępniania —
+  // żeby wysłać próbki z telefonu (Pliki / AirDrop / mail).
+  async function doExport(key: string, ids?: string[]) {
+    setExporting(key);
     try {
-      const uri = await exportCaptures();
+      const uri = await exportCaptures(ids);
       if (!uri) {
         Alert.alert("Brak migawek", "Nie ma jeszcze nic do wyeksportowania.");
         return;
@@ -67,7 +68,7 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
     } catch (e) {
       Alert.alert("Nie udało się wyeksportować", e instanceof Error ? e.message : "Spróbuj ponownie.");
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   }
 
@@ -103,9 +104,13 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
       </Text>
 
       {captures.length > 0 ? (
-        <Pressable style={[styles.export, exporting && styles.disabled]} disabled={exporting} onPress={doExport}>
+        <Pressable
+          style={[styles.export, !!exporting && styles.disabled]}
+          disabled={!!exporting}
+          onPress={() => doExport("all")}
+        >
           <Text style={styles.exportText}>
-            {exporting ? "⏳ Pakuję ZIP…" : `⬆︎ Wyeksportuj wszystkie (${captures.length}) do ZIP`}
+            {exporting === "all" ? "⏳ Pakuję ZIP…" : `⬆︎ Wyeksportuj wszystkie (${captures.length}) do ZIP`}
           </Text>
         </Pressable>
       ) : null}
@@ -153,8 +158,15 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
               >
                 <Text style={styles.replayText}>▶︎ Wyślij ponownie (nowy skan)</Text>
               </Pressable>
-              <Pressable style={styles.del} onPress={() => confirmDelete(c)}>
-                <Text style={styles.delText}>🗑</Text>
+              <Pressable
+                style={[styles.iconAction, !!exporting && styles.disabled]}
+                disabled={!!exporting}
+                onPress={() => doExport(c.id, [c.id])}
+              >
+                <Text style={styles.iconActionText}>{exporting === c.id ? "⏳" : "⬆︎"}</Text>
+              </Pressable>
+              <Pressable style={styles.iconAction} onPress={() => confirmDelete(c)}>
+                <Text style={styles.iconActionText}>🗑</Text>
               </Pressable>
             </View>
           </View>
@@ -207,13 +219,13 @@ const styles = StyleSheet.create({
   replay: { flex: 1, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
   replayText: { color: colors.buttonText, fontWeight: "800", fontSize: 14 },
   disabled: { opacity: 0.4 },
-  del: {
-    paddingHorizontal: 16,
+  iconAction: {
+    paddingHorizontal: 14,
     paddingVertical: 12,
     backgroundColor: colors.badgeBg,
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
   },
-  delText: { fontSize: 16 },
+  iconActionText: { fontSize: 16 },
 });
