@@ -247,6 +247,7 @@ app.post("/restaurant", async (c) => {
 
 interface DishPhotosBody {
   dish?: string;
+  photoQuery?: string; // generyczna nazwa dania (EN) do szukania OGÓLNEGO zdjęcia (lepsze trafienia)
   restaurantHint?: string;
   restaurantName?: string; // czysta nazwa lokalu — do POTWIERDZENIA, że zdjęcie jest z jego strony
   cuisine?: string; // kontekst kuchni — poprawia trafność weryfikacji
@@ -275,6 +276,9 @@ app.post("/dish-photos", async (c) => {
   if (!body.dish?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
   const dish = body.dish.trim();
+  // Termin do OGÓLNEGO szukania (typ dania) — generyczny `photo_query` z menu, jeśli jest.
+  // Lokalna/markowa nazwa „Nordic Taste" trafia gorzej niż „smoked salmon avocado toast".
+  const genericTerm = body.photoQuery?.trim() || dish;
   const hint = body.restaurantHint?.trim() || undefined;
   const cuisine = body.cuisine?.trim() || undefined;
   const num = body.num ?? 4;
@@ -299,9 +303,9 @@ app.post("/dish-photos", async (c) => {
     usage: Usage;
   }> {
     const pool = Math.max(num * 2, 6);
-    let found = await genericWebImages(dish, pool).catch(() => []);
-    if (found.length === 0) found = await new WikimediaProvider(pool).find(dish).catch(() => []);
-    if (found.length === 0) found = await new OpenverseProvider(pool).find(dish).catch(() => []);
+    let found = await genericWebImages(genericTerm, pool).catch(() => []);
+    if (found.length === 0) found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
+    if (found.length === 0) found = await new OpenverseProvider(pool).find(genericTerm).catch(() => []);
     if (found.length === 0) return { photos: [], usage: ZERO_USAGE };
     // Etykieta źródła: dla wyników z domeną (Serper) → kategoria (web/tripadvisor…),
     // dla Wikimedia/Openverse (bez domeny) → ich własny source.
@@ -314,7 +318,7 @@ app.post("/dish-photos", async (c) => {
         usage: ZERO_USAGE,
       };
     }
-    const { scores, usage } = await scoreDishPhotos(dish, found.map((p) => p.url), { cuisine });
+    const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine });
     const photos = found
       .map((p, i) => ({ ...p, score: scores[i] ?? 0 }))
       .filter((p) => p.score >= MATCH_THRESHOLD)
@@ -339,8 +343,9 @@ app.post("/dish-photos", async (c) => {
     const verify = body.verify !== false;
 
     // Weryfikuje listę i zwraca te, które pokazują danie (≥ próg), posortowane po trafności.
-    async function keepMatching(list: DishPhoto[]) {
-      const { scores, usage } = await scoreDishPhotos(dish, list.map((p) => p.url), { cuisine });
+    // `term` = po czym weryfikować (oryginał dla „z lokalu", generyczny dla web).
+    async function keepMatching(list: DishPhoto[], term: string = dish) {
+      const { scores, usage } = await scoreDishPhotos(term, list.map((p) => p.url), { cuisine });
       total = addUsage(total, usage);
       return list
         .map((p, i) => ({ ...p, score: scores[i] ?? 0 }))
@@ -390,9 +395,9 @@ app.post("/dish-photos", async (c) => {
 
     // TIER 2: SZEROKO z sieci (bez restauracji) — realne zdjęcia tego dania/produktu jako „typ dania".
     if (verify) {
-      const generic = await genericWebImages(dish, 6);
+      const generic = await genericWebImages(genericTerm, 6);
       if (generic.length > 0) {
-        const passing = await keepMatching(generic);
+        const passing = await keepMatching(generic, genericTerm);
         if (passing.length > 0) {
           const photos = passing.slice(0, num).map((p) => ({
             url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: true,

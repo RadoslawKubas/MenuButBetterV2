@@ -22,6 +22,7 @@ export type DishCategory = (typeof DISH_CATEGORIES)[number];
 export interface MenuItem {
   original: string;
   translated: string;
+  photo_query: string;
   description: string;
   ingredients: string[];
   allergens: string[];
@@ -84,6 +85,11 @@ export const MENU_SCHEMA = {
               properties: {
                 original: { type: "string", description: "Nazwa dania w oryginale." },
                 translated: { type: "string", description: "Nazwa dania po przetłumaczeniu." },
+                photo_query: {
+                  type: "string",
+                  description:
+                    "Krótka, GENERYCZNA nazwa dania PO ANGIELSKU do wyszukania zdjęcia w internecie — opisz, CZYM danie jest (typ potrawy), a NIE markową/lokalną nazwą z menu. Przykłady: 'Nordic Taste' → 'smoked salmon avocado toast'; 'Cúrcuma Platter' → 'indian mixed appetizer platter'; 'Patates Braves' → 'patatas bravas'; 'Double Smash BBQ' → 'bbq smash burger'. Dla zwykłych, jednoznacznych nazw może to być po prostu ta nazwa po angielsku.",
+                },
                 description: {
                   type: "string",
                   description:
@@ -121,6 +127,7 @@ export const MENU_SCHEMA = {
               required: [
                 "original",
                 "translated",
+                "photo_query",
                 "description",
                 "ingredients",
                 "allergens",

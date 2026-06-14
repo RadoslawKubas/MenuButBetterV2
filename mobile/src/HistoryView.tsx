@@ -2,6 +2,26 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { SavedScan } from "./storage";
 import { colors } from "./theme";
+import { CachedImage } from "./CachedImage";
+import { placePhotoUrl } from "./api";
+
+/** Miniaturka do wiersza: zdjęcie lokalu → albo pierwsze zdjęcie dania → albo nic. */
+function thumbForScan(scan: SavedScan): { uri?: string; remoteUrl?: string } | null {
+  const r = scan.restaurant;
+  if (r?.photoUris?.[0]) {
+    return { uri: r.photoUris[0], remoteUrl: r.photoNames?.[0] ? placePhotoUrl(r.photoNames[0], 300) : undefined };
+  }
+  if (r?.photoNames?.[0]) {
+    const u = placePhotoUrl(r.photoNames[0], 300);
+    return { uri: u, remoteUrl: u };
+  }
+  for (const s of scan.menu.sections) {
+    for (const it of s.items) {
+      if (it.photos?.[0]) return { uri: it.photos[0].url, remoteUrl: it.photos[0].remoteUrl };
+    }
+  }
+  return null;
+}
 
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleDateString("pl-PL", {
@@ -46,8 +66,19 @@ export function HistoryView({
 
   return (
     <View>
-      {scans.map((scan) => (
+      {scans.map((scan) => {
+        const thumb = thumbForScan(scan);
+        return (
         <View key={scan.id} style={styles.row}>
+          <Pressable onPress={() => onOpen(scan)}>
+            {thumb ? (
+              <CachedImage uri={thumb.uri} remoteUrl={thumb.remoteUrl} style={styles.thumb} />
+            ) : (
+              <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                <Text style={styles.thumbGlyph}>🍽️</Text>
+              </View>
+            )}
+          </Pressable>
           <Pressable style={styles.rowMain} onPress={() => onOpen(scan)}>
             <Text style={styles.name}>
               {scan.restaurantName || scan.restaurant?.name || "Menu bez nazwy"}
@@ -67,7 +98,8 @@ export function HistoryView({
             <Text style={styles.delText}>🗑</Text>
           </Pressable>
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -81,6 +113,9 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
   },
+  thumb: { width: 52, height: 52, borderRadius: 10, backgroundColor: colors.badgeBg, marginRight: 12 },
+  thumbPlaceholder: { alignItems: "center", justifyContent: "center", opacity: 0.5 },
+  thumbGlyph: { fontSize: 22, opacity: 0.4 },
   rowMain: { flex: 1 },
   name: { fontSize: 17, fontWeight: "700", color: colors.text },
   meta: { fontSize: 13, color: colors.muted, marginTop: 3 },

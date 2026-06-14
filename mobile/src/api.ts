@@ -194,7 +194,7 @@ export async function fetchVenuePhotos(
 export async function fetchDishPhotos(
   dish: string,
   restaurantHint?: string,
-  opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string },
+  opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string; photoQuery?: string },
 ): Promise<{ photos: DishPhotoLite[]; usage: Usage }> {
   const res = await loggedFetch("dish-photos", `${API_BASE}/dish-photos`, {
     method: "POST",
@@ -203,6 +203,7 @@ export async function fetchDishPhotos(
       dish,
       restaurantHint,
       restaurantName: opts?.restaurantName,
+      photoQuery: opts?.photoQuery,
       cuisine: opts?.cuisine,
       website: opts?.website,
       num: opts?.num ?? 4,

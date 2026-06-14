@@ -17,6 +17,8 @@ export type DishCategory =
 export interface MenuItem {
   original: string;
   translated: string;
+  /** Generyczna nazwa dania (EN) do wyszukiwania zdjęcia — lepsze trafienia. */
+  photo_query?: string;
   description: string;
   ingredients: string[];
   allergens: string[];

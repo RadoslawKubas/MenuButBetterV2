@@ -106,7 +106,12 @@ function InfoFooter({
               {anyRepresentative ? "🔸 Poglądowe (typ dania) · " : "📷 "}dotknij, by powiększyć
             </Text>
           </>
-        ) : null}
+        ) : (
+          // Wyblakły placeholder — stały rozmiar, layout się nie przesuwa gdy zdjęcie się ładuje.
+          <View style={[styles.dishPhoto, styles.thumbPlaceholder, styles.photoStrip]}>
+            <Text style={styles.thumbPlaceholderGlyph}>🍽️</Text>
+          </View>
+        )}
         {photoLoading ? <Text style={styles.photoNote}>⏳ Doszukuję lepszych zdjęć…</Text> : null}
         {item.extraInfo ? (
           <Text style={styles.infoText}>{clean(item.extraInfo)}</Text>
@@ -159,8 +164,18 @@ export function MenuView({
   nameFallback?: string;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [preview, setPreview] = useState<LightboxState | null>(null);
   const headerName = menu.restaurant_name || nameFallback || null;
+
+  function toggleSection(si: number) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(si)) next.delete(si);
+      else next.add(si);
+      return next;
+    });
+  }
 
   function press(si: number, ii: number, item: MenuItem) {
     const key = `${si}-${ii}`;
@@ -186,11 +201,21 @@ export function MenuView({
         </View>
       ) : null}
 
-      {menu.sections.map((section, si) => (
+      {menu.sections.map((section, si) => {
+        const isCollapsed = collapsed.has(si);
+        return (
         <View key={si} style={styles.section}>
-          <Text style={styles.sectionTitle}>{section.name_translated}</Text>
-          <Text style={styles.sectionOriginal}>{section.name}</Text>
-          {section.items.map((item, ii) => {
+          <Pressable onPress={() => toggleSection(si)} style={styles.sectionHeader}>
+            <Text style={styles.sectionChevron}>{isCollapsed ? "▸" : "▾"}</Text>
+            <View style={styles.sectionHeaderText}>
+              <Text style={styles.sectionTitle}>
+                {section.name_translated}
+                <Text style={styles.sectionCount}>  ({section.items.length})</Text>
+              </Text>
+              <Text style={styles.sectionOriginal}>{section.name}</Text>
+            </View>
+          </Pressable>
+          {!isCollapsed && section.items.map((item, ii) => {
             const key = `${si}-${ii}`;
             return (
               <Pressable key={ii} style={styles.card} onPress={() => press(si, ii, item)}>
@@ -269,7 +294,8 @@ export function MenuView({
             );
           })}
         </View>
-      ))}
+        );
+      })}
 
       {/* Podgląd zdjęć w aplikacji (swipe lewo/prawo w obrębie dania) */}
       <Lightbox state={preview} onClose={() => setPreview(null)} />
@@ -282,8 +308,13 @@ const styles = StyleSheet.create({
   restaurantName: { fontSize: 26, fontWeight: "800", color: colors.accent },
   restaurantAddress: { fontSize: 14, color: colors.muted, marginTop: 2 },
   section: { marginBottom: 24 },
+  // Nagłówek sekcji — klikalny (zwija/rozwija grupę).
+  sectionHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 6 },
+  sectionChevron: { fontSize: 15, color: colors.accent, width: 16, marginTop: 6 },
+  sectionHeaderText: { flex: 1 },
+  sectionCount: { fontSize: 14, fontWeight: "600", color: colors.muted },
   sectionTitle: { fontSize: 22, fontWeight: "700", color: colors.accent },
-  sectionOriginal: { fontSize: 13, color: colors.muted, marginBottom: 10, fontStyle: "italic" },
+  sectionOriginal: { fontSize: 13, color: colors.muted, marginBottom: 4, fontStyle: "italic" },
   card: {
     backgroundColor: colors.card,
     borderRadius: 12,

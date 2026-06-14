@@ -584,6 +584,14 @@ export default function App() {
     if (openScan?.id === id) setOpenScan(null);
   }
 
+  // Scala zdjęcia: LEPSZE (świeże) z przodu, dotychczasowe na końcu — bez duplikatów i bez
+  // znikania już wyszukanych. Dedup po remoteUrl/url (te same źródła = ten sam plik cache).
+  function mergePhotos(fresh: DishPhotoLite[], old: DishPhotoLite[]): DishPhotoLite[] {
+    const key = (p: DishPhotoLite) => p.remoteUrl ?? p.url;
+    const seen = new Set(fresh.map(key));
+    return [...fresh, ...old.filter((p) => !seen.has(key(p)))];
+  }
+
   function patchItem(m: Menu, si: number, ii: number, patch: Partial<Menu["sections"][0]["items"][0]>): Menu {
     return {
       ...m,
@@ -659,13 +667,16 @@ export default function App() {
                   cuisine: opts.menu.cuisine,
                   website: opts.website,
                   restaurantName: opts.menu.restaurant_name ?? undefined,
+                  photoQuery: item.photo_query,
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE }));
         const real = realRes.photos;
-        // Lepsze zdjęcia zastępują tanie tło; jak nic nie ma → oznacz, by nie szukać znów.
+        // LEPSZE zdjęcia z przodu, dotychczasowe (poglądowe) zostają na końcu — nic nie znika.
+        // Jak nic nowego → tylko oznacz, by nie szukać znów (zostają obecne).
+        const existing = opts.menu.sections[si]?.items[ii]?.photos ?? [];
         const patch =
           real.length > 0
-            ? { photos: await cachePhotos(real), photosUpgraded: true }
+            ? { photos: mergePhotos(await cachePhotos(real), existing), photosUpgraded: true }
             : { photosUpgraded: true };
         opts.applyMenu((prev) => (prev ? patchItem(prev, si, ii, patch) : prev));
         if (scanId) {
@@ -694,10 +705,11 @@ export default function App() {
     _hint: string | undefined,
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void,
   ) {
-    const jobs: { si: number; ii: number; name: string }[] = [];
+    const jobs: { si: number; ii: number; name: string; photoQuery?: string }[] = [];
     baseMenu.sections.forEach((sec, si) =>
       sec.items.forEach((it, ii) => {
-        if (it && !(it.photos && it.photos.length > 0)) jobs.push({ si, ii, name: it.original });
+        if (it && !(it.photos && it.photos.length > 0))
+          jobs.push({ si, ii, name: it.original, photoQuery: it.photo_query });
       }),
     );
 
@@ -709,8 +721,9 @@ export default function App() {
         const job = jobs[next++];
         if (!job) break;
         const { photos, usage } = await fetchDishPhotos(job.name, undefined, {
-          representativeOnly: true, // tanio: tylko Wikimedia/Openverse + weryfikacja
+          representativeOnly: true, // tanio: zdjęcie poglądowe (Serper→Wiki) + weryfikacja
           cuisine: baseMenu.cuisine,
+          photoQuery: job.photoQuery,
           num: 1,
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE }));
         totalUsage = addUsage(totalUsage, usage);
@@ -830,9 +843,13 @@ export default function App() {
       const at = loc.get(dish);
       if (!at) continue;
       const cached = await cachePhotos(photos);
-      applyMenu((prev) =>
-        prev ? patchItem(prev, at.si, at.ii, { photos: cached, photosUpgraded: true }) : prev,
-      );
+      applyMenu((prev) => {
+        if (!prev) return prev;
+        const cur = prev.sections[at.si]?.items[at.ii];
+        // ★ z lokalu z przodu, dotychczasowe poglądowe zostają na końcu (nie znikają).
+        const merged = mergePhotos(cached, cur?.photos ?? []);
+        return patchItem(prev, at.si, at.ii, { photos: merged, photosUpgraded: true });
+      });
     }
 
     if (scanId) {
