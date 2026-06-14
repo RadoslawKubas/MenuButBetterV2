@@ -35,9 +35,20 @@ export interface SavedScan {
 }
 
 const KEY = "mbb.scans.v1";
+const PREF_MODEL_KEY = "mbb.pref.model.v1";
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Ostatnio wybrany model AI — żeby przy następnym skanie był domyślnie ten sam. */
+export async function loadModelPref(): Promise<ModelId | null> {
+  const raw = await AsyncStorage.getItem(PREF_MODEL_KEY);
+  return (raw as ModelId) || null;
+}
+
+export async function saveModelPref(model: ModelId): Promise<void> {
+  await AsyncStorage.setItem(PREF_MODEL_KEY, model);
 }
 
 export async function listScans(): Promise<SavedScan[]> {

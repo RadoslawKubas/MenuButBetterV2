@@ -42,11 +42,14 @@ import {
   addScanUsage,
   renameScan,
   clearScanRestaurant,
+  loadModelPref,
+  saveModelPref,
   type SavedScan,
 } from "./src/storage";
 import {
   listCaptures,
   saveCapture,
+  updateCaptureScanId,
   captureImageBase64,
   resolveCaptureUri,
   type ScanCapture,
@@ -155,7 +158,19 @@ export default function App() {
   useEffect(() => {
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
+    // Przywróć ostatnio wybrany model (jeśli wciąż jest na liście dostępnych).
+    loadModelPref()
+      .then((m) => {
+        if (m && MODEL_OPTIONS.some((o) => o.id === m)) setModel(m);
+      })
+      .catch(() => {});
   }, []);
+
+  // Wybór modelu + zapamiętanie na następny raz.
+  function chooseModel(m: ModelId) {
+    setModel(m);
+    void saveModelPref(m).catch(() => {});
+  }
 
   function addImages(toAdd: PreparedImage[]) {
     if (toAdd.length === 0) return;
@@ -240,8 +255,9 @@ export default function App() {
       }
 
       // Tryb testowy: zapisz migawkę tego, co właśnie idzie do serwera (zdjęcia +
-      // ustawienia + dokładna pozycja). Nie blokuje skanu; odświeża licznik migawek.
-      void saveCapture({
+      // ustawienia + dokładna pozycja). Id migawki łączymy później ze skanem, żeby
+      // eksport dołączył też WYNIK. Nie blokuje skanu krytycznie (przy błędzie → null).
+      const capture = await saveCapture({
         images: opts.images,
         targetLang: opts.targetLang,
         model: opts.model,
@@ -251,10 +267,8 @@ export default function App() {
         locationSource,
         useExifLocation: opts.useExifLocation,
         useDeviceLocation: opts.useDeviceLocation,
-      })
-        .then(() => listCaptures())
-        .then(setCaptures)
-        .catch(() => {});
+      }).catch(() => null);
+      listCaptures().then(setCaptures).catch(() => {});
 
       // Skan PARTIAMI: dużą liczbę zdjęć dzielimy na partie po SCAN_BATCH i scalamy
       // wyniki z deduplikacją (mniejsze, bezpieczne wywołania + widoczny postęp).
@@ -313,6 +327,9 @@ export default function App() {
       setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
       setVenueQuery("");
       const result = merged!;
+
+      // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
+      if (capture && scanId) void updateCaptureScanId(capture.id, scanId).catch(() => {});
 
       // Namierzenie lokalu: mamy nazwę → automatycznie po nazwie (pewne). Brak nazwy →
       // NIE zgadujemy po GPS automatycznie; ustawiamy tylko kontekst, a user kliknie.
@@ -1206,17 +1223,30 @@ export default function App() {
         <StatusBar style="dark" />
 
         <View style={styles.header}>
-          <Text style={styles.brand}>MenuButBetter</Text>
-          {showDiag || showCaptures || showingDetail ? (
-            <Pressable
-              onPress={() =>
-                showDiag ? setShowDiag(false) : showCaptures ? setShowCaptures(false) : setOpenScan(null)
-              }
-              style={styles.navBtn}
-            >
-              <Text style={styles.navText}>‹ Wstecz</Text>
-            </Pressable>
-          ) : (
+          <View style={styles.headerTop}>
+            <Text style={styles.brand}>MenuButBetter</Text>
+            {showDiag || showCaptures || showingDetail ? (
+              <Pressable
+                onPress={() =>
+                  showDiag ? setShowDiag(false) : showCaptures ? setShowCaptures(false) : setOpenScan(null)
+                }
+                style={styles.navBtn}
+              >
+                <Text style={styles.navText}>‹ Wstecz</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.iconRow}>
+                <Pressable onPress={() => setShowCaptures(true)} hitSlop={8} style={styles.iconBtn}>
+                  <Text style={styles.icon}>🧪</Text>
+                  {captures.length ? <Text style={styles.iconBadge}>{captures.length}</Text> : null}
+                </Pressable>
+                <Pressable onPress={() => setShowDiag(true)} hitSlop={8} style={styles.iconBtn}>
+                  <Text style={styles.icon}>📊</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+          {!(showDiag || showCaptures || showingDetail) ? (
             <View style={styles.tabs}>
               <Pressable onPress={() => setTab("scan")}>
                 <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skanuj</Text>
@@ -1226,14 +1256,8 @@ export default function App() {
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
-              <Pressable onPress={() => setShowCaptures(true)} hitSlop={8}>
-                <Text style={styles.tab}>🧪{captures.length ? ` ${captures.length}` : ""}</Text>
-              </Pressable>
-              <Pressable onPress={() => setShowDiag(true)} hitSlop={8}>
-                <Text style={styles.tab}>📊</Text>
-              </Pressable>
             </View>
-          )}
+          ) : null}
         </View>
 
         {showDiag ? (
@@ -1341,7 +1365,7 @@ export default function App() {
                     {MODEL_OPTIONS.map((m) => (
                       <Pressable
                         key={m.id}
-                        onPress={() => setModel(m.id)}
+                        onPress={() => chooseModel(m.id)}
                         style={[styles.modelCard, model === m.id && styles.modelCardActive]}
                       >
                         <Text style={[styles.modelLabel, model === m.id && styles.modelLabelActive]}>
@@ -1574,12 +1598,14 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingVertical: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
   },
+  headerTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   brand: { fontSize: 22, fontWeight: "800", color: colors.accent },
-  tabs: { flexDirection: "row", gap: 16 },
+  iconRow: { flexDirection: "row", alignItems: "center", gap: 18 },
+  iconBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
+  icon: { fontSize: 20 },
+  iconBadge: { fontSize: 13, fontWeight: "800", color: colors.accent },
+  tabs: { flexDirection: "row", gap: 20, marginTop: 12 },
   tab: { fontSize: 15, fontWeight: "700", color: colors.muted },
   tabActive: { color: colors.accent, textDecorationLine: "underline" },
   navBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.badgeBg, borderRadius: 999 },

@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
 import type { PreparedImage } from "./image";
+import { listScans } from "./storage";
 import type { GeoPoint, LocationSource, ModelId } from "./types";
 
 const DIR = new Directory(Paths.document, "captures");
@@ -45,6 +46,8 @@ export interface ScanCapture {
   useDeviceLocation: boolean;
   // — Zdjęcia menu (wejście do modelu) —
   images: CaptureImage[];
+  /** Powiązany skan w historii — przez niego dołączamy WYNIK przy eksporcie. */
+  scanId?: string | null;
 }
 
 function newId(): string {
@@ -110,6 +113,15 @@ export async function saveCapture(input: {
   return capture;
 }
 
+/** Łączy migawkę z zapisanym skanem — przez niego eksport dołącza WYNIK skanu. */
+export async function updateCaptureScanId(id: string, scanId: string): Promise<void> {
+  const all = await listCaptures();
+  const c = all.find((c) => c.id === id);
+  if (!c) return;
+  c.scanId = scanId;
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+}
+
 export async function deleteCapture(id: string): Promise<void> {
   const all = await listCaptures();
   const cap = all.find((c) => c.id === id);
@@ -151,6 +163,14 @@ export async function captureImageBase64(im: CaptureImage): Promise<string | nul
 /** Wpis w `metadata.json` archiwum — zdjęcia jako osobne pliki w `images/`. */
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
   images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
+  /** WYNIK skanu (z historii): przetłumaczone menu + dopasowany lokal + koszt. */
+  result?: {
+    restaurantName: string | null;
+    cuisine?: string;
+    restaurant?: unknown;
+    usage?: unknown;
+    menu: unknown;
+  };
 }
 
 /**
@@ -163,6 +183,11 @@ export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
 export async function exportCaptures(): Promise<string | null> {
   const captures = await listCaptures();
   if (captures.length === 0) return null;
+
+  // Wyniki skanów (z historii) — dołączamy je po scanId, żeby w eksporcie było widać
+  // co model zwrócił (do analizy „co poszło nie tak").
+  const scans = await listScans().catch(() => []);
+  const scanById = new Map(scans.map((s) => [s.id, s]));
 
   const zip = new JSZip();
   const imagesDir = zip.folder("images")!;
@@ -179,7 +204,17 @@ export async function exportCaptures(): Promise<string | null> {
       images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation });
     }
     const { images: _drop, ...meta } = c;
-    entries.push({ ...meta, images });
+    const scan = c.scanId ? scanById.get(c.scanId) : undefined;
+    const result: CaptureExportEntry["result"] = scan
+      ? {
+          restaurantName: scan.menu.restaurant_name,
+          cuisine: scan.menu.cuisine,
+          restaurant: scan.restaurant ?? undefined,
+          usage: scan.usage,
+          menu: scan.menu,
+        }
+      : undefined;
+    entries.push({ ...meta, images, result });
   }
 
   zip.file(
