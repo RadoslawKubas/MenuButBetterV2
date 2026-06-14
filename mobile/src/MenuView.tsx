@@ -266,7 +266,7 @@ export function MenuView({
                     <View style={styles.cardHeader}>
                       <Text style={styles.itemName}>{item.translated}</Text>
                       {item.price ? (
-                        <Text style={styles.price}>
+                        <Text style={styles.price} numberOfLines={2}>
                           {item.price}
                           {item.currency ? ` ${item.currency}` : ""}
                         </Text>
@@ -403,9 +403,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cardThumbVenueText: { color: "#fff", fontSize: 10, fontWeight: "800" },
-  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  itemName: { fontSize: 17, fontWeight: "700", color: colors.text, flex: 1, paddingRight: 8 },
-  price: { fontSize: 16, fontWeight: "700", color: colors.text },
+  cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  itemName: { fontSize: 17, fontWeight: "700", color: colors.text, flex: 1 },
+  // flexShrink:0 + maxWidth → cena nie zjada miejsca nazwie (długie/nietypowe ceny
+  // zawijają się do 2 linii zamiast spychać nazwę w wąską kolumnę). textAlign do prawej.
+  price: { fontSize: 16, fontWeight: "700", color: colors.text, flexShrink: 0, maxWidth: 120, textAlign: "right" },
   original: { fontSize: 13, color: colors.muted, marginTop: 2, fontStyle: "italic" },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   badge: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
