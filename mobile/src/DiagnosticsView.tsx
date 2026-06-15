@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
-import { fetchDiagnostics, API_BASE, type DiagProvider } from "./api";
+import { fetchDiagnostics, fetchStats, fetchEvents, API_BASE, type DiagProvider, type DiagStats } from "./api";
 import { getCalls, classifyError, type ClientCall } from "./appLog";
 import { colors } from "./theme";
 
@@ -32,6 +32,7 @@ export function DiagnosticsView() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [calls, setCalls] = useState<ClientCall[]>(getCalls());
+  const [stats, setStats] = useState<DiagStats | null>(null);
   const [exporting, setExporting] = useState(false);
 
   // Eksport WSZYSTKICH logów do pliku JSON (statystyki + wpisy per API z serwera oraz
@@ -48,6 +49,9 @@ export function DiagnosticsView() {
       } catch (e) {
         diagError = e instanceof Error ? e.message : "fetchDiagnostics failed";
       }
+      // Trwałe statystyki + surowe zdarzenia (gdy DB włączona) — best-effort.
+      const stats = await fetchStats().catch(() => null);
+      const events = await fetchEvents(1000).catch(() => []);
       const payload = {
         format: "menubutbetter.logs",
         version: 1,
@@ -56,6 +60,8 @@ export function DiagnosticsView() {
         diagError,
         serverProviders: provs,
         clientCalls: getCalls(),
+        persistentStats: stats,
+        persistentEvents: events,
       };
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const file = new File(Paths.cache, `mbb-logs-${stamp}.json`);
@@ -85,6 +91,7 @@ export function DiagnosticsView() {
       const { providers } = await fetchDiagnostics();
       setProviders(providers);
       setCalls(getCalls());
+      fetchStats().then(setStats).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : "Nie udało się pobrać diagnostyki.");
       setCalls(getCalls());
@@ -114,6 +121,26 @@ export function DiagnosticsView() {
       {error ? <Text style={styles.error}>⚠️ {error}</Text> : null}
       {loading && providers.length === 0 ? (
         <ActivityIndicator color={colors.accent} style={{ marginVertical: 24 }} />
+      ) : null}
+
+      {/* Trwałe statystyki (Postgres) — przeżywają redeploy, w przeciwieństwie do liczb wyżej. */}
+      {stats?.enabled ? (
+        <View style={styles.statsBox}>
+          <Text style={styles.statsTitle}>📈 Statystyki (trwałe)</Text>
+          <Text style={styles.statsLine}>
+            Skany: {stats.totalScans ?? 0} · Dania: {stats.totalDishes ?? 0} · Błędy: {stats.errors ?? 0}
+          </Text>
+          <Text style={styles.statsLine}>
+            Koszt łączny: {fmtUsd(stats.totalCostUsd ?? 0)} ·{" "}
+            {fmtTok(stats.totalInputTokens ?? 0)} in · {fmtTok(stats.totalOutputTokens ?? 0)} out
+          </Text>
+          {(stats.byModel ?? []).map((m) => (
+            <Text key={m.model ?? "?"} style={styles.statsSub}>
+              • {m.model ?? "—"}: {m.scans} skan(y) · {fmtUsd(m.cost)}
+            </Text>
+          ))}
+          {stats.since ? <Text style={styles.statsSince}>od {stats.since.slice(0, 10)}</Text> : null}
+        </View>
       ) : null}
 
       {/* Łączny koszt AI = to, co realnie kosztuje (tokeny), nie liczba wywołań. */}
@@ -235,6 +262,11 @@ const styles = StyleSheet.create({
   costBig: { fontSize: 18, fontWeight: "800", color: colors.accent },
   costSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   tokens: { fontSize: 12, color: colors.text, fontWeight: "600", marginTop: 6 },
+  statsBox: { backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.accent },
+  statsTitle: { fontSize: 15, fontWeight: "800", color: colors.accent, marginBottom: 4 },
+  statsLine: { fontSize: 13, color: colors.text, fontWeight: "600", marginTop: 2 },
+  statsSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  statsSince: { fontSize: 11, color: colors.muted, marginTop: 4, fontStyle: "italic" },
   card: {
     backgroundColor: colors.card,
     borderRadius: 12,

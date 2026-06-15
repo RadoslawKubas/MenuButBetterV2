@@ -1,4 +1,6 @@
 // Diagnostyka: lekki, w pamięci log wywołań ZEWNĘTRZNYCH API (per provider, ring buffer).
+import { logEvent } from "./db.ts";
+
 // Cel — wgląd w to, których serwerów używamy, ile było zapytań i czy ostatnie odpowiedzi
 // były OK/error (do wychwytywania problemów przy testach). Resetuje się po restarcie serwera.
 
@@ -50,6 +52,8 @@ export function record(provider: Provider, op: string, ok: boolean, ms: number, 
   if (!ok) s.errors++;
   s.entries.unshift({ ts: Date.now(), op, ok, ms: Math.round(ms), detail: detail?.slice(0, 300) });
   if (s.entries.length > MAX) s.entries.length = MAX;
+  // Błędy trafiają też do TRWAŁEGO logu (przeżywają redeploy) — do diagnostyki później.
+  if (!ok) logEvent({ type: "error", provider, op, data: { ms: Math.round(ms), detail: detail?.slice(0, 300) ?? null } });
 }
 
 /** Dokłada zużycie tokenów + koszt do providera (dla AI). Wołane po policzeniu usage. */

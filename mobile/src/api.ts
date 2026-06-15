@@ -246,3 +246,32 @@ export async function fetchDiagnostics(): Promise<{ now: number; providers: Diag
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
   return { now: json.now ?? Date.now(), providers: json.providers ?? [] };
 }
+
+// --- Trwałe statystyki (Postgres) — przeżywają redeploy ---
+export interface DiagStats {
+  enabled: boolean;
+  since?: string | null;
+  totalScans?: number;
+  totalDishes?: number;
+  totalCostUsd?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  byModel?: { model: string | null; scans: number; cost: number }[];
+  byDay?: { day: string; scans: number }[];
+  errors?: number;
+}
+
+export async function fetchStats(): Promise<DiagStats> {
+  const res = await loggedFetch("stats", `${API_BASE}/stats`, { headers: jsonHeaders() });
+  const json = (await res.json()) as DiagStats & { error?: string };
+  if (!res.ok) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return json;
+}
+
+/** Surowe ostatnie zdarzenia z trwałego logu (do eksportu debug). */
+export async function fetchEvents(limit = 500): Promise<unknown[]> {
+  const res = await loggedFetch("events", `${API_BASE}/events?limit=${limit}`, { headers: jsonHeaders() });
+  const json = (await res.json()) as { events?: unknown[]; error?: string };
+  if (!res.ok) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return json.events ?? [];
+}

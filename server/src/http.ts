@@ -23,8 +23,13 @@ import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
+import { initDb, logEvent, getStats, getRecentEvents } from "./db.ts";
+import { DEFAULT_MODEL } from "./models.ts";
 
 const app = new Hono();
+
+// Trwałe logi (Postgres) — inicjalizacja na starcie; bez DATABASE_URL to no‑op.
+void initDb();
 
 // CORS — żeby appka (Expo web / urządzenie) mogła wołać endpoint w devie.
 app.use("/*", cors());
@@ -121,11 +126,32 @@ app.post("/scan", async (c) => {
       s.write(" ").catch(() => {});
     }, 5000);
     try {
+      const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
       const { menu, usage } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
-        model: isModelId(body.model) ? body.model : undefined,
+        model,
+      });
+      // Trwały log skanu — do statystyk „ile menu / dań / koszt per model".
+      const items = menu.sections.reduce((n, sec) => n + sec.items.length, 0);
+      logEvent({
+        type: "scan",
+        op: "scan",
+        model,
+        provider: model.startsWith("gpt") ? "openai" : "claude",
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        costUsd: usage.costUsd,
+        data: {
+          images: images.length,
+          sections: menu.sections.length,
+          items,
+          targetLang: body.targetLang?.trim() || "polski",
+          locationHint: body.locationHint?.trim() || null,
+          restaurant: menu.restaurant_name ?? null,
+          cuisine: menu.cuisine ?? null,
+        },
       });
       await s.write(JSON.stringify({ menu, usage }));
     } catch (e) {
@@ -157,6 +183,7 @@ app.post("/dish-info", async (c) => {
   if (!body.name?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
   try {
+    const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
     const { text: info, usage } = await describeDish({
       name: body.name.trim(),
       description: body.description?.trim() || undefined,
@@ -164,7 +191,17 @@ app.post("/dish-info", async (c) => {
       cuisine: body.cuisine?.trim() || undefined,
       location: body.location?.trim() || undefined,
       targetLang: body.targetLang?.trim() || "polski",
-      model: isModelId(body.model) ? body.model : undefined,
+      model,
+    });
+    logEvent({
+      type: "ai",
+      op: "dish-info",
+      model,
+      provider: model.startsWith("gpt") ? "openai" : "claude",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: usage.costUsd,
+      data: { dish: body.name.trim() },
     });
     return c.json({ info, usage });
   } catch (e) {
@@ -329,6 +366,16 @@ app.post("/dish-photos", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const respond = (photos: any[], usage: Usage) => {
     dbg.resultCount = photos.length;
+    logEvent({
+      type: "ai",
+      op: "dish-photos",
+      model: "claude-sonnet-4-6", // weryfikacja zdjęć zawsze na Sonnet
+      provider: "claude",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: usage.costUsd,
+      data: { dish, resultCount: photos.length, representativeOnly: !!body.representativeOnly },
+    });
     return c.json({ photos, usage, debug: dbg });
   };
 
@@ -515,6 +562,25 @@ app.get("/diagnostics", (c) => {
   return c.json({ now: Date.now(), providers });
 });
 
+// Trwałe statystyki (Postgres) — agregaty przeżywające redeploy. enabled:false bez DB.
+app.get("/stats", async (c) => {
+  try {
+    return c.json(await getStats());
+  } catch (e) {
+    return c.json({ enabled: false, error: (e as Error).message }, 200);
+  }
+});
+
+// Ostatnie surowe zdarzenia z trwałego logu (do debug/eksportu). ?limit=200.
+app.get("/events", async (c) => {
+  try {
+    const limit = Number(c.req.query("limit")) || 200;
+    return c.json({ events: await getRecentEvents(limit) });
+  } catch (e) {
+    return c.json({ events: [], error: (e as Error).message }, 200);
+  }
+});
+
 // Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
 app.post("/venue-photos", async (c) => {
   try {
@@ -529,6 +595,16 @@ app.post("/venue-photos", async (c) => {
       taPhotos: Array.isArray(body.taPhotos) ? body.taPhotos : [],
       dishes: Array.isArray(body.dishes) ? body.dishes : [],
       cuisine: body.cuisine,
+    });
+    logEvent({
+      type: "ai",
+      op: "venue-photos",
+      model: "claude-sonnet-4-6",
+      provider: "claude",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: usage.costUsd,
+      data: { dishes: Array.isArray(body.dishes) ? body.dishes.length : 0, matches: matches.length },
     });
     return c.json({ matches, usage });
   } catch (e) {
