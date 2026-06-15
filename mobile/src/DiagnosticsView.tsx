@@ -2,8 +2,10 @@
 // (liczby zapytań, ok/błędy, ostatni błąd) + drill‑in w log ostatnich odpowiedzi.
 // Na dole log wywołań NASZEGO API z telefonu (co apka wysyłała i czy przeszło).
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { fetchDiagnostics, type DiagProvider } from "./api";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { File, Paths } from "expo-file-system";
+import * as Sharing from "expo-sharing";
+import { fetchDiagnostics, API_BASE, type DiagProvider } from "./api";
 import { getCalls, classifyError, type ClientCall } from "./appLog";
 import { colors } from "./theme";
 
@@ -30,6 +32,51 @@ export function DiagnosticsView() {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [calls, setCalls] = useState<ClientCall[]>(getCalls());
+  const [exporting, setExporting] = useState(false);
+
+  // Eksport WSZYSTKICH logów do pliku JSON (statystyki + wpisy per API z serwera oraz
+  // log wywołań z telefonu) i arkusz udostępniania — do wysłania na debug.
+  async function exportLogs() {
+    setExporting(true);
+    try {
+      // Pobierz najświeższą diagnostykę (fallback: bieżący stan, gdy sieć padnie).
+      let provs = providers;
+      let diagError: string | null = null;
+      try {
+        provs = (await fetchDiagnostics()).providers;
+        setProviders(provs);
+      } catch (e) {
+        diagError = e instanceof Error ? e.message : "fetchDiagnostics failed";
+      }
+      const payload = {
+        format: "menubutbetter.logs",
+        version: 1,
+        exportedAt: Date.now(),
+        apiBase: API_BASE,
+        diagError,
+        serverProviders: provs,
+        clientCalls: getCalls(),
+      };
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const file = new File(Paths.cache, `mbb-logs-${stamp}.json`);
+      if (file.exists) file.delete();
+      file.create();
+      file.write(JSON.stringify(payload, null, 2));
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert("Eksport gotowy", `Plik zapisany: ${file.uri}`);
+        return;
+      }
+      await Sharing.shareAsync(file.uri, {
+        mimeType: "application/json",
+        dialogTitle: "Wyślij logi (JSON)",
+        UTI: "public.json",
+      });
+    } catch (e) {
+      Alert.alert("Nie udało się wyeksportować logów", e instanceof Error ? e.message : "Spróbuj ponownie.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -54,9 +101,14 @@ export function DiagnosticsView() {
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.headerRow}>
         <Text style={styles.h1}>Zewnętrzne API (serwer)</Text>
-        <Pressable style={styles.refresh} onPress={load} disabled={loading}>
-          <Text style={styles.refreshText}>{loading ? "…" : "↻ Odśwież"}</Text>
-        </Pressable>
+        <View style={styles.headerBtns}>
+          <Pressable style={styles.refresh} onPress={exportLogs} disabled={exporting || loading}>
+            <Text style={styles.refreshText}>{exporting ? "…" : "⬆︎ Logi"}</Text>
+          </Pressable>
+          <Pressable style={styles.refresh} onPress={load} disabled={loading}>
+            <Text style={styles.refreshText}>{loading ? "…" : "↻ Odśwież"}</Text>
+          </Pressable>
+        </View>
       </View>
 
       {error ? <Text style={styles.error}>⚠️ {error}</Text> : null}
@@ -173,6 +225,7 @@ export function DiagnosticsView() {
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 48 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  headerBtns: { flexDirection: "row", gap: 8 },
   h1: { fontSize: 18, fontWeight: "800", color: colors.accent },
   sub: { fontSize: 12, color: colors.muted, marginBottom: 8 },
   refresh: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 },
