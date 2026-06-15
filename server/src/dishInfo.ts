@@ -52,7 +52,11 @@ export async function describeDish(
     const resp = await track("openai", "dish-info", () =>
       openai.chat.completions.create({
         model,
-        max_completion_tokens: 1500,
+        // GPT-5 to model ROZUMUJĄCY: max_completion_tokens obejmuje też tokeny rozumowania.
+        // Przy 1500 całość szła na rozumowanie → finish=length i PUSTA treść. Prosty opis nie
+        // wymaga rozumowania, więc minimalizujemy je i dajemy zapas na samą odpowiedź.
+        reasoning_effort: "minimal",
+        max_completion_tokens: 4000,
         messages: [
           { role: "system", content: SYSTEM },
           { role: "user", content: userText },
