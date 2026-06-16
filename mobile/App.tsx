@@ -285,8 +285,6 @@ export default function App() {
       if (opts.recordCapture !== false) {
         capture = await saveCapture({
           images: opts.images,
-          targetLang: opts.targetLang,
-          model: opts.models.scan,
           restaurantHint: opts.hint.trim() || undefined,
           locationHint,
           location,
@@ -389,8 +387,10 @@ export default function App() {
     }
   }
 
-  // Tryb testowy: odtwórz zapisaną migawkę — wczytaj jej zdjęcia z dysku i wyślij
-  // ponownie z tymi samymi ustawieniami i pozycją (nowy skan od zera).
+  // Tryb testowy: WCZYTAJ migawkę do ekranu skanu (zdjęcia + podpowiedź + przełączniki
+  // lokalizacji) — ale NIE startuj skanu. Dzięki temu możesz najpierw zmienić ustawienia
+  // (modele/język w Ustawieniach), a potem sam kliknąć „Przetłumacz menu". Skan pójdzie wtedy
+  // wg AKTUALNYCH ustawień (porównania tego samego wejścia różnymi modelami).
   async function replayCapture(c: ScanCapture) {
     const imgs: PreparedImage[] = [];
     for (const im of c.images) {
@@ -407,24 +407,18 @@ export default function App() {
       Alert.alert("Brak zdjęć", "Pliki tej migawki nie są już dostępne na urządzeniu.");
       return;
     }
-    // Przełącz na ekran skanu i wyczyść poprzedni stan, potem odpal skan.
+    // Przełącz na ekran skanu i przygotuj go w trybie wyboru (resetScan → idle).
     setShowCaptures(false);
     setShowDiag(false);
+    setShowSettings(false);
     setOpenScan(null);
     setTab("scan");
-    setImages([]);
-    await runScan({
-      images: imgs,
-      // Replay = NOWY skan wg AKTUALNYCH ustawień (modele + język), żeby porównać to samo
-      // wejście różnymi modelami. Wejście (zdjęcia + pozycja) bierzemy 1:1 z migawki.
-      targetLang,
-      models,
-      hint: c.restaurantHint ?? "",
-      useExifLocation: c.useExifLocation,
-      useDeviceLocation: c.useDeviceLocation,
-      fixedLocation: { location: c.location, locationSource: c.locationSource, locationHint: c.locationHint },
-      recordCapture: false, // replay nie tworzy nowej migawki — odtwarza istniejącą
-    });
+    resetScan();
+    // Wstaw dane migawki do formularza skanu (bez startu — czekamy na klik użytkownika).
+    setImages(imgs);
+    setHint(c.restaurantHint ?? "");
+    setUseExifLocation(c.useExifLocation);
+    setUseDeviceLocation(c.useDeviceLocation);
   }
 
   function resetScan() {

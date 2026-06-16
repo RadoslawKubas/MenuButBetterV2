@@ -11,7 +11,7 @@ import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
 import type { PreparedImage } from "./image";
 import { listScans } from "./storage";
-import type { GeoPoint, LocationSource, ModelId } from "./types";
+import type { GeoPoint, LocationSource, ModelId, ModelRole } from "./types";
 
 const DIR = new Directory(Paths.document, "captures");
 const KEY = "mbb.captures.v1";
@@ -33,9 +33,9 @@ export interface CaptureImage {
 export interface ScanCapture {
   id: string;
   createdAt: number; // epoch ms
-  // — Ustawienia użyte do zapytania —
-  targetLang: string;
-  model: ModelId;
+  // — Podpowiedzi przekazane modelowi (część WEJŚCIA, nie zależą od wyboru modelu) —
+  // UWAGA: język i model NIE są tu trzymane celowo — „Wyślij ponownie" robi nowy skan wg
+  // AKTUALNYCH ustawień, a język/modele użyte do WYNIKU są przy powiązanym skanie w historii.
   restaurantHint?: string;
   /** „Miasto, Kraj" przekazane modelowi (z reverseGeocode). */
   locationHint?: string;
@@ -84,8 +84,6 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
 
 export async function saveCapture(input: {
   images: PreparedImage[];
-  targetLang: string;
-  model: ModelId;
   restaurantHint?: string;
   locationHint?: string;
   location: GeoPoint | null;
@@ -105,8 +103,6 @@ export async function saveCapture(input: {
   const capture: ScanCapture = {
     id,
     createdAt: Date.now(),
-    targetLang: input.targetLang,
-    model: input.model,
     restaurantHint: input.restaurantHint,
     locationHint: input.locationHint,
     location: input.location,
@@ -171,8 +167,11 @@ export async function captureImageBase64(im: CaptureImage): Promise<string | nul
 /** Wpis w `metadata.json` archiwum — zdjęcia jako osobne pliki w `images/`. */
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
   images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
-  /** WYNIK skanu (z historii): przetłumaczone menu + dopasowany lokal + koszt. */
+  /** WYNIK skanu (z historii): ustawienia użyte do WYNIKU + przetłumaczone menu + lokal + koszt. */
   result?: {
+    targetLang?: string;
+    models?: Record<ModelRole, ModelId>;
+    model?: ModelId;
     restaurantName: string | null;
     cuisine?: string;
     restaurant?: unknown;
@@ -216,6 +215,9 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
     const scan = c.scanId ? scanById.get(c.scanId) : undefined;
     const result: CaptureExportEntry["result"] = scan
       ? {
+          targetLang: scan.targetLang,
+          models: scan.models,
+          model: scan.model,
           restaurantName: scan.menu.restaurant_name,
           cuisine: scan.menu.cuisine,
           restaurant: scan.restaurant ?? undefined,

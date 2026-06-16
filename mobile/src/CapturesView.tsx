@@ -1,6 +1,7 @@
 // Ekran „Tryb testowy" — lista zapisanych migawek skanów (co poszło do serwera).
 // Dla każdej: czas, ustawienia, pozycja GPS + locationHint, miniatury zdjęć menu.
-// „▶︎ Wyślij ponownie" odtwarza skan na identycznych danych (nowy wynik od zera).
+// „📥 Wczytaj do skanu" wstawia zdjęcia + podpowiedzi migawki na ekran skanu (bez startu) —
+// user może zmienić ustawienia (modele/język) i sam kliknąć „Przetłumacz menu".
 import { useEffect, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Sharing from "expo-sharing";
@@ -11,7 +12,6 @@ import {
   resolveCaptureUri,
   type ScanCapture,
 } from "./captures";
-import { MODEL_OPTIONS, type ModelId } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
 import { colors } from "./theme";
 
@@ -21,10 +21,6 @@ function fmtWhen(ts: number): string {
   } catch {
     return new Date(ts).toISOString();
   }
-}
-
-function modelLabel(id: ModelId): string {
-  return MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id;
 }
 
 function sourceLabel(c: ScanCapture): string {
@@ -103,8 +99,9 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.h1}>Tryb testowy — migawki skanów</Text>
       <Text style={styles.sub}>
-        Każdy skan zapisuje tu komplet danych wysłanych do serwera. Możesz wysłać dowolny
-        zestaw ponownie, by wygenerować nowy wynik na identycznym wejściu.
+        Każdy skan zapisuje tu komplet danych wysłanych do serwera. „Wczytaj do skanu" wstawia
+        zestaw na ekran skanu — zmień ustawienia (modele/język) i sam kliknij „Przetłumacz menu",
+        by porównać to samo wejście różnymi modelami.
       </Text>
 
       {captures.length > 0 ? (
@@ -146,8 +143,6 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
 
             <View style={styles.metaGrid}>
               <Meta k="Zdjęcia" v={`${c.images.length}`} />
-              <Meta k="Język" v={c.targetLang} />
-              <Meta k="Model" v={modelLabel(c.model)} />
               {c.restaurantHint ? <Meta k="Lokal (hint)" v={c.restaurantHint} /> : null}
               <Meta
                 k="GPS"
@@ -170,7 +165,7 @@ export function CapturesView({ onReplay }: { onReplay: (c: ScanCapture) => void 
                 disabled={busy === c.id}
                 onPress={() => replay(c)}
               >
-                <Text style={styles.replayText}>▶︎ Wyślij ponownie (nowy skan)</Text>
+                <Text style={styles.replayText}>📥 Wczytaj do skanu</Text>
               </Pressable>
               <Pressable
                 style={[styles.iconAction, !!exporting && styles.disabled]}
