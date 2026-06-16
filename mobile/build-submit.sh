@@ -12,6 +12,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")" # katalog mobile/
 
+# Konto Apple z góry (zamiast pytania „Apple ID?" / „to konto?"). Sam e-mail nie jest sekretem.
+export EXPO_APPLE_ID="rk@appwithkiss.com"
+# Opcjonalnie hasło app-specific (do auto-auth, GDY trzeba odświeżyć poświadczenia) — trzymaj
+# je w NIEśledzonym pliku mobile/.apple-secrets:  export EXPO_APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+# (wygeneruj na https://appleid.apple.com → Sign-In and Security → App-Specific Passwords)
+# shellcheck disable=SC1091
+[ -f .apple-secrets ] && source .apple-secrets
+
 echo "▸ Sprzątam stare .ipa…"
 rm -f build-*.ipa
 
