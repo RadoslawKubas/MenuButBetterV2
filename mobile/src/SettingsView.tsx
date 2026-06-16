@@ -1,18 +1,22 @@
 // Ekran „Ustawienia": wybór modelu AI OSOBNO dla każdego miejsca użycia (skan / opisy /
 // weryfikacja zdjęć / dopasowanie zdjęć z lokalu) + wejścia do Diagnostyki i Migawek.
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { MODEL_OPTIONS, MODEL_ROLES, type ModelId, type ModelRole } from "./types";
+import { LANGUAGES, MODEL_OPTIONS, MODEL_ROLES, type ModelId, type ModelRole } from "./types";
 import { colors } from "./theme";
 
 export function SettingsView({
   models,
   onChangeModel,
+  targetLang,
+  onChangeLang,
   onOpenDiagnostics,
   onOpenCaptures,
   capturesCount,
 }: {
   models: Record<ModelRole, ModelId>;
   onChangeModel: (role: ModelRole, model: ModelId) => void;
+  targetLang: string;
+  onChangeLang: (lang: string) => void;
   onOpenDiagnostics: () => void;
   onOpenCaptures: () => void;
   capturesCount: number;
@@ -20,6 +24,22 @@ export function SettingsView({
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.h1}>Ustawienia</Text>
+
+      <Text style={styles.section}>Język tłumaczenia</Text>
+      <View style={styles.chips}>
+        {LANGUAGES.map((lang) => {
+          const active = targetLang === lang;
+          return (
+            <Pressable
+              key={lang}
+              onPress={() => onChangeLang(lang)}
+              style={[styles.chip, active && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{lang}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       <Text style={styles.section}>Model AI per miejsce</Text>
       <Text style={styles.sub}>

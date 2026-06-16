@@ -57,6 +57,17 @@ export async function saveModelPrefs(models: Record<ModelRole, ModelId>): Promis
   await AsyncStorage.setItem(PREF_MODELS_KEY, JSON.stringify(models));
 }
 
+const PREF_LANG_KEY = "mbb.pref.lang.v1";
+
+/** Domyślny język tłumaczenia (ustawiany w Ustawieniach) — zapamiętany. */
+export async function loadLangPref(): Promise<string | null> {
+  return (await AsyncStorage.getItem(PREF_LANG_KEY)) || null;
+}
+
+export async function saveLangPref(lang: string): Promise<void> {
+  await AsyncStorage.setItem(PREF_LANG_KEY, lang);
+}
+
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];

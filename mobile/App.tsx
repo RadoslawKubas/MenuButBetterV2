@@ -44,6 +44,8 @@ import {
   clearScanRestaurant,
   loadModelPrefs,
   saveModelPrefs,
+  loadLangPref,
+  saveLangPref,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -104,8 +106,6 @@ function matchTaPhotos(dishName: string, taPhotos: TripAdvisorPhoto[] | undefine
 type Status = "idle" | "scanning" | "done" | "error";
 type Tab = "scan" | "history";
 
-const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
-
 export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
@@ -165,6 +165,11 @@ export default function App() {
     loadModelPrefs()
       .then((saved) => setModels((prev) => ({ ...prev, ...saved })))
       .catch(() => {});
+    loadLangPref()
+      .then((l) => {
+        if (l) setTargetLang(l);
+      })
+      .catch(() => {});
   }, []);
 
   // Zmiana modelu dla jednego miejsca + zapamiętanie.
@@ -174,6 +179,12 @@ export default function App() {
       void saveModelPrefs(next).catch(() => {});
       return next;
     });
+  }
+
+  // Zmiana domyślnego języka tłumaczenia + zapamiętanie.
+  function changeLang(lang: string) {
+    setTargetLang(lang);
+    void saveLangPref(lang).catch(() => {});
   }
 
   function addImages(toAdd: PreparedImage[]) {
@@ -1270,6 +1281,8 @@ export default function App() {
           <SettingsView
             models={models}
             onChangeModel={changeModel}
+            targetLang={targetLang}
+            onChangeLang={changeLang}
             onOpenDiagnostics={() => setShowDiag(true)}
             onOpenCaptures={() => setShowCaptures(true)}
             capturesCount={captures.length}
@@ -1355,24 +1368,9 @@ export default function App() {
                     przetłumaczone menu, które zapiszę w historii.
                   </Text>
 
-                  <Text style={styles.label}>Język tłumaczenia</Text>
-                  <View style={styles.chipRow}>
-                    {LANGUAGES.map((lang) => (
-                      <Pressable
-                        key={lang}
-                        onPress={() => setTargetLang(lang)}
-                        style={[styles.chip, targetLang === lang && styles.chipActive]}
-                      >
-                        <Text style={[styles.chipText, targetLang === lang && styles.chipTextActive]}>
-                          {lang}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-
                   <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
                     <Text style={styles.modelsLinkText}>
-                      ⚙️ Modele: skan {models.scan} · opisy {models.describe} — zmień w Ustawieniach
+                      ⚙️ Język: {targetLang} · modele: skan {models.scan} — zmień w Ustawieniach
                     </Text>
                   </Pressable>
 

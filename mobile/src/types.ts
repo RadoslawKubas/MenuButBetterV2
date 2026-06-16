@@ -162,6 +162,9 @@ export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
   { id: "gpt-5-mini", label: "GPT-5 mini", hint: "OpenAI · tańszy" },
 ];
 
+// Języki tłumaczenia menu (wybór w Ustawieniach).
+export const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
+
 // Miejsca, w których używamy modelu — każde można skonfigurować osobno (ekran Ustawienia).
 export type ModelRole = "scan" | "describe" | "verify" | "venue";
 
