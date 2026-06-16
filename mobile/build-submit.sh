@@ -36,6 +36,10 @@ if [ -z "$IPA" ]; then
 fi
 
 echo "▸ Wysyłam na TestFlight: $IPA"
-eas submit --platform ios --profile production --path "$IPA" --non-interactive
+# Submit BEZ --non-interactive: w trybie nieinteraktywnym eas-cli wymaga ascAppId
+# w eas.json (a Twoja wersja go nie akceptuje). Interaktywnie eas sam znajdzie
+# ASC App ID, a sesję Apple bierze z keychain (EXPO_APPLE_ID ustawiony wyżej) —
+# w praktyce i tak leci bez wpisywania niczego.
+eas submit --platform ios --profile production --path "$IPA"
 
 echo "✓ Gotowe — $IPA wysłany. Apple przetworzy build za ~5–10 min (dostaniesz maila)."
