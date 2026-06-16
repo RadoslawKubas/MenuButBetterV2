@@ -21,7 +21,11 @@ export interface SavedScan {
   createdAt: number; // epoch ms
   restaurantName: string | null;
   targetLang: string;
+  /** Model SKANU (back-compat; pełny zestaw per rola jest w `models`). */
   model: ModelId;
+  /** Zamrożony zestaw modeli per rola, którymi zrobiono to menu (skan/opisy/weryfikacja/venue).
+   *  Opcjonalny — starsze skany go nie mają (wtedy w UI używamy bieżących ustawień). */
+  models?: Record<ModelRole, ModelId>;
   menu: Menu;
   /** Lokalizacja powiązana ze skanem (z GPS użytkownika lub EXIF zdjęcia). */
   location: GeoPoint | null;
@@ -82,6 +86,7 @@ export async function saveScan(input: {
   menu: Menu;
   targetLang: string;
   model: ModelId;
+  models?: Record<ModelRole, ModelId>;
   location: GeoPoint | null;
   locationSource: LocationSource;
   useExifLocation?: boolean;
@@ -94,6 +99,7 @@ export async function saveScan(input: {
     restaurantName: input.menu.restaurant_name,
     targetLang: input.targetLang,
     model: input.model,
+    models: input.models,
     menu: input.menu,
     location: input.location,
     locationSource: input.locationSource,

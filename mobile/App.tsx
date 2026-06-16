@@ -68,6 +68,7 @@ import { RestaurantCard } from "./src/RestaurantCard";
 import { colors } from "./src/theme";
 import {
   DEFAULT_MODELS,
+  MODEL_OPTIONS,
   ZERO_USAGE,
   addUsage,
   type DishPhotoLite,
@@ -84,6 +85,12 @@ import {
 
 // Domyślny zasięg szukania lokalu „w pobliżu" (m). Można zwiększać „szerszym zasięgiem".
 const DEFAULT_NEARBY_RADIUS = 800;
+
+// Czytelna etykieta modelu (np. „Gemini 2.5 Flash”) z id — do panelu „Ustawienia menu”.
+function modelLabel(id: ModelId | undefined | null): string {
+  if (!id) return "—";
+  return MODEL_OPTIONS.find((o) => o.id === id)?.label ?? id;
+}
 
 // Normalizacja do dopasowania nazwy dania z podpisem zdjęcia TripAdvisor.
 function norm(s: string): string {
@@ -217,7 +224,7 @@ export default function App() {
 
   // Skan przy bieżących ustawieniach ekranu (przycisk „Przetłumacz menu").
   async function doScan() {
-    await runScan({ images, targetLang, model: models.scan, hint, useExifLocation, useDeviceLocation });
+    await runScan({ images, targetLang, models, hint, useExifLocation, useDeviceLocation });
   }
 
   // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
@@ -226,7 +233,7 @@ export default function App() {
   async function runScan(opts: {
     images: PreparedImage[];
     targetLang: string;
-    model: ModelId;
+    models: Record<ModelRole, ModelId>;
     hint: string;
     useExifLocation: boolean;
     useDeviceLocation: boolean;
@@ -279,7 +286,7 @@ export default function App() {
         capture = await saveCapture({
           images: opts.images,
           targetLang: opts.targetLang,
-          model: opts.model,
+          model: opts.models.scan,
           restaurantHint: opts.hint.trim() || undefined,
           locationHint,
           location,
@@ -311,7 +318,7 @@ export default function App() {
           targetLang: opts.targetLang,
           restaurantHint: batchHint,
           locationHint,
-          model: opts.model,
+          model: opts.models.scan,
         });
 
         if (!merged) {
@@ -321,7 +328,8 @@ export default function App() {
           const saved = await saveScan({
             menu: merged,
             targetLang: opts.targetLang,
-            model: opts.model,
+            model: opts.models.scan,
+            models: opts.models,
             location,
             locationSource,
             useExifLocation: opts.useExifLocation,
@@ -407,8 +415,10 @@ export default function App() {
     setImages([]);
     await runScan({
       images: imgs,
-      targetLang: c.targetLang,
-      model: c.model,
+      // Replay = NOWY skan wg AKTUALNYCH ustawień (modele + język), żeby porównać to samo
+      // wejście różnymi modelami. Wejście (zdjęcia + pozycja) bierzemy 1:1 z migawki.
+      targetLang,
+      models,
       hint: c.restaurantHint ?? "",
       useExifLocation: c.useExifLocation,
       useDeviceLocation: c.useDeviceLocation,
@@ -730,6 +740,46 @@ export default function App() {
     };
   }
 
+  // Modele OBOWIĄZUJĄCE dla akcji w obrębie danego skanu: ZAMROŻONE z chwili skanu
+  // (gdy zapisane), inaczej bieżące ustawienia (starsze skany / świeży skan przed odświeżeniem
+  // stanu — wtedy zamrożone == bieżące, więc bezpiecznie). Dzięki temu opisy/zdjęcia w zapisanym
+  // menu lecą tym samym modelem co pierwotnie, nawet jeśli zmieniłeś ustawienia globalne.
+  function modelsForScan(scanId: string | null): Record<ModelRole, ModelId> {
+    if (scanId) {
+      const s = openScan?.id === scanId ? openScan : scans.find((x) => x.id === scanId);
+      if (s?.models) return s.models;
+    }
+    return models;
+  }
+
+  // Panel „czym zrobiono to menu": data, język i modele per rola (lub starszy zapis bez pełnych).
+  function renderScanMeta(scan: SavedScan) {
+    const m = scan.models;
+    return (
+      <View style={styles.metaCard}>
+        <Text style={styles.metaTitle}>⚙️ Ustawienia tego menu</Text>
+        <Text style={styles.metaRow}>📅 {new Date(scan.createdAt).toLocaleString("pl-PL")}</Text>
+        <Text style={styles.metaRow}>🌐 Język: {scan.targetLang}</Text>
+        {m ? (
+          <>
+            <Text style={styles.metaRow}>🔍 Skan menu: {modelLabel(m.scan)}</Text>
+            <Text style={styles.metaRow}>📝 Opisy dań: {modelLabel(m.describe)}</Text>
+            <Text style={styles.metaRow}>✅ Weryfikacja zdjęć: {modelLabel(m.verify)}</Text>
+            <Text style={styles.metaRow}>🏠 Zdjęcia z lokalu: {modelLabel(m.venue)}</Text>
+          </>
+        ) : (
+          <Text style={styles.metaRow}>
+            🔍 Model skanu: {modelLabel(scan.model)} · (starszy zapis — bez pełnych ustawień)
+          </Text>
+        )}
+        <Text style={styles.metaHint}>
+          Akcje w tym menu (opisy, dociąganie zdjęć) używają tych modeli. „Wyślij ponownie" z migawki
+          robi nowy skan wg AKTUALNYCH ustawień.
+        </Text>
+      </View>
+    );
+  }
+
   async function loadInfo(opts: {
     menu: Menu;
     scanId: string | null;
@@ -745,6 +795,7 @@ export default function App() {
     const item = opts.menu.sections[opts.si]?.items[opts.ii];
     if (!item) return;
     const { si, ii, scanId } = opts;
+    const eff = modelsForScan(scanId); // modele zamrożone z tego menu (opisy + weryfikacja zdjęć)
     const key = `${si}-${ii}`;
 
     // === FAZA 1: OPIS — natychmiast. Blokuje (spinner) tylko, gdy opisu jeszcze nie ma. ===
@@ -758,7 +809,7 @@ export default function App() {
           cuisine: opts.menu.cuisine,
           location: opts.location,
           targetLang: opts.targetLang,
-          model: models.describe,
+          model: eff.describe,
         });
         opts.applyMenu((prev) => (prev ? patchItem(prev, si, ii, { extraInfo: info }) : prev));
         if (scanId) {
@@ -804,7 +855,7 @@ export default function App() {
                   website: opts.website,
                   restaurantName: opts.menu.restaurant_name ?? undefined,
                   photoQuery: item.photo_query,
-                  verifyModel: models.verify,
+                  verifyModel: eff.verify,
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
         const real = realRes.photos;
@@ -850,6 +901,7 @@ export default function App() {
       }),
     );
 
+    const eff = modelsForScan(scanId); // weryfikacja zdjęć — model zamrożony z tego menu
     const CONCURRENCY = 4;
     let next = 0;
     let totalUsage: Usage = ZERO_USAGE;
@@ -862,7 +914,7 @@ export default function App() {
           cuisine: baseMenu.cuisine,
           photoQuery: job.photoQuery,
           num: 1,
-          verifyModel: models.verify,
+          verifyModel: eff.verify,
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));
         totalUsage = addUsage(totalUsage, usage);
         if (photos.length === 0) {
@@ -953,7 +1005,7 @@ export default function App() {
       taPhotos,
       dishes,
       baseMenu.cuisine,
-      models.venue,
+      modelsForScan(scanId).venue, // zdjęcia z lokalu — model zamrożony z tego menu
     ).catch(() => ({ matches: [] as VenueMatch[], usage: ZERO_USAGE }));
 
     // Grupuj po daniu (najpewniejsze pierwsze; serwer już posortował), max 3 zdjęcia/danie.
@@ -1036,7 +1088,7 @@ export default function App() {
           cuisine: baseMenu.cuisine,
           location,
           targetLang: lang,
-          model: models.describe,
+          model: modelsForScan(scanId).describe,
         }).catch(() => ({ info: "", usage: ZERO_USAGE }));
         totalUsage = addUsage(totalUsage, usage);
         if (!info) continue;
@@ -1077,7 +1129,7 @@ export default function App() {
         images: newImages.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
         targetLang: scanLang,
         restaurantHint: hint,
-        model: models.scan,
+        model: modelsForScan(scanId).scan, // dokładanie do zapisanego menu — model zamrożony
       });
       const { menu: merged, addedItems, addedSections } = mergeMenus(baseMenu, incoming);
       await updateScanMenu(scanId, merged);
@@ -1317,6 +1369,7 @@ export default function App() {
                     : ""}
                 </Text>
               )}
+              {renderScanMeta(openScan)}
               <Pressable
                 style={[styles.button, styles.secondary, appending && styles.disabled]}
                 disabled={appending}
@@ -1756,6 +1809,18 @@ const styles = StyleSheet.create({
   savedRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
   savedNote: { color: colors.accent, fontWeight: "700", fontSize: 15 },
   geo: { fontSize: 13, color: colors.muted, marginTop: 12 },
+  metaCard: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 14,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: colors.badgeBg,
+  },
+  metaTitle: { fontSize: 14, fontWeight: "800", color: colors.text, marginBottom: 6 },
+  metaRow: { fontSize: 13, color: colors.text, marginTop: 2 },
+  metaHint: { fontSize: 11, color: colors.muted, marginTop: 8, lineHeight: 16 },
   center: { alignItems: "center", paddingVertical: 48 },
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },

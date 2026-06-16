@@ -1,9 +1,19 @@
 // Lista zapisanych skanów — historia menu, do której można wrócić bez ponownego skanu.
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { SavedScan } from "./storage";
+import { MODEL_OPTIONS } from "./types";
 import { colors } from "./theme";
 import { CachedImage } from "./CachedImage";
 import { placePhotoUrl } from "./api";
+
+/** Krótki opis modeli skanu do wiersza: jedna etykieta, a przy mieszanych „+N”. */
+function modelSummary(scan: SavedScan): string {
+  const label = (id?: string) => MODEL_OPTIONS.find((o) => o.id === id)?.label ?? id ?? "—";
+  const m = scan.models;
+  if (!m) return label(scan.model);
+  const uniq = new Set([m.scan, m.describe, m.verify, m.venue]);
+  return uniq.size === 1 ? label(m.scan) : `${label(m.scan)} +${uniq.size - 1}`;
+}
 
 /** Miniaturka do wiersza: zdjęcie lokalu → albo pierwsze zdjęcie dania → albo nic. */
 function thumbForScan(scan: SavedScan): { uri?: string; remoteUrl?: string } | null {
@@ -87,6 +97,7 @@ export function HistoryView({
               {formatDate(scan.createdAt)} · {itemCount(scan)} pozycji · {scan.targetLang}
               {scan.location ? "  📍" : ""}
             </Text>
+            <Text style={styles.meta}>🤖 {modelSummary(scan)}</Text>
             {formatCost(scan) ? (
               <Text style={styles.cost}>💰 {formatCost(scan)}</Text>
             ) : null}
