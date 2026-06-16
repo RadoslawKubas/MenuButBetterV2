@@ -9,6 +9,7 @@ import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
+import { usesOpenAiApi } from "./models.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model dopasowania (gdy nie podano innego)
@@ -140,7 +141,7 @@ export async function matchVenuePhotos(
   for (const d of dishes) byNorm.set(norm(d), d);
 
   const model = input.model || MODEL;
-  const isOpenAI = model.startsWith("gpt");
+  const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
   const ctx = input.cuisine ? ` (kuchnia: ${input.cuisine})` : "";
   const instruction =
     `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +

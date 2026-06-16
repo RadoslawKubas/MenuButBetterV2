@@ -24,7 +24,7 @@ import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents } from "./db.ts";
-import { DEFAULT_MODEL } from "./models.ts";
+import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
 const app = new Hono();
 
@@ -139,7 +139,7 @@ app.post("/scan", async (c) => {
         type: "scan",
         op: "scan",
         model,
-        provider: model.startsWith("gpt") ? "openai" : "claude",
+        provider: apiTag(model),
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         costUsd: usage.costUsd,
@@ -197,7 +197,7 @@ app.post("/dish-info", async (c) => {
       type: "ai",
       op: "dish-info",
       model,
-      provider: model.startsWith("gpt") ? "openai" : "claude",
+      provider: apiTag(model),
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
@@ -372,7 +372,7 @@ app.post("/dish-photos", async (c) => {
       type: "ai",
       op: "dish-photos",
       model: verifyModel,
-      provider: verifyModel.startsWith("gpt") ? "openai" : "claude",
+      provider: apiTag(verifyModel),
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
@@ -529,6 +529,7 @@ app.get("/diagnostics", (c) => {
   const KNOWN: { provider: Provider; label: string; paid: boolean; configured: boolean }[] = [
     { provider: "claude", label: "Claude (Anthropic)", paid: true, configured: !!process.env.ANTHROPIC_API_KEY },
     { provider: "openai", label: "OpenAI (GPT)", paid: true, configured: !!process.env.OPENAI_API_KEY },
+    { provider: "google", label: "Google Gemini", paid: true, configured: !!process.env.GEMINI_API_KEY },
     { provider: "google_places", label: "Google Places", paid: true, configured: !!process.env.GOOGLE_MAPS_KEY },
     { provider: "tripadvisor", label: "TripAdvisor", paid: false, configured: !!process.env.TRIPADVISOR_KEY },
     { provider: "serper", label: "Serper.dev", paid: true, configured: !!process.env.SERPER_KEY },
@@ -605,7 +606,7 @@ app.post("/venue-photos", async (c) => {
       type: "ai",
       op: "venue-photos",
       model: venueModel,
-      provider: venueModel.startsWith("gpt") ? "openai" : "claude",
+      provider: apiTag(venueModel),
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,

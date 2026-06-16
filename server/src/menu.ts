@@ -5,8 +5,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
 import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
-import { MODELS, DEFAULT_MODEL, isModelId, providerOf, type ModelId } from "./models.ts";
-import { getOpenAI } from "./openaiClient.ts";
+import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, apiTag, type ModelId } from "./models.ts";
+import { getClientForModel } from "./openaiClient.ts";
 
 // Rejestr modeli + walidator współdzielone z resztą serwera (re-eksport z models.ts).
 export { MODELS, DEFAULT_MODEL, isModelId, type ModelId };
@@ -92,13 +92,14 @@ function contextText(opts: ExtractOptions, n: number): string {
   );
 }
 
-/** Ścieżka OpenAI: vision + structured outputs (json_schema strict) — ta sama schema co Claude. */
+/** Ścieżka OpenAI-compatible (OpenAI / Gemini): vision + structured outputs — ta sama schema co Claude. */
 async function extractMenuOpenAI(
   images: InputImage[],
   opts: ExtractOptions,
   model: ModelId,
 ): Promise<{ menu: Menu; usage: Usage }> {
-  const openai = getOpenAI();
+  const openai = getClientForModel(model);
+  const tag = apiTag(model); // "openai" albo "google" — do diagnostyki
 
   const parts: import("openai").OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
   images.forEach((img, i) => {
@@ -107,7 +108,7 @@ async function extractMenuOpenAI(
   });
   parts.push({ type: "text", text: contextText(opts, images.length) });
 
-  const resp = await track("openai", "scan-menu", () =>
+  const resp = await track(tag, "scan-menu", () =>
     openai.chat.completions.create({
       model,
       max_completion_tokens: MODELS[model].maxOutput,
@@ -116,15 +117,16 @@ async function extractMenuOpenAI(
         { role: "user", content: parts },
       ],
       response_format: {
+        // strict tylko dla OpenAI (gpt-5*); Gemini compat bez strict (bywa restrykcyjny).
         type: "json_schema",
-        json_schema: { name: "menu", strict: true, schema: MENU_SCHEMA as unknown as Record<string, unknown> },
+        json_schema: { name: "menu", strict: tag === "openai", schema: MENU_SCHEMA as unknown as Record<string, unknown> },
       },
     }),
   );
 
   const usage = usageFromOpenAI(model, resp.usage);
-  recordUsage("openai", usage.inputTokens, usage.outputTokens, usage.costUsd);
-  logUsage(`menu obrazów=${images.length} (openai)`, model, usage);
+  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+  logUsage(`menu obrazów=${images.length} (${tag})`, model, usage);
 
   const choice = resp.choices[0];
   if (choice?.finish_reason === "length") {
@@ -149,7 +151,7 @@ export async function extractMenu(
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
 
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
-  if (providerOf(model) === "openai") return extractMenuOpenAI(images, opts, model);
+  if (usesOpenAiApi(model)) return extractMenuOpenAI(images, opts, model);
   // max_tokens = maksimum modelu (to tylko sufit; nie kosztuje, gdy model skończy wcześniej).
   const maxTokens = MODELS[model].maxOutput;
 

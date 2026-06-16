@@ -1,8 +1,8 @@
 // Rozszerzony, tekstowy opis pojedynczego dania ("więcej info").
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
-import { providerOf } from "./models.ts";
-import { getOpenAI } from "./openaiClient.ts";
+import { usesOpenAiApi, isOpenAiReasoning, apiTag } from "./models.ts";
+import { getClientForModel } from "./openaiClient.ts";
 import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 
@@ -47,27 +47,27 @@ export async function describeDish(
     `Język odpowiedzi: ${input.targetLang}\n\n` +
     "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.";
 
-  if (providerOf(model) === "openai") {
-    const openai = getOpenAI();
-    const resp = await track("openai", "dish-info", () =>
-      openai.chat.completions.create({
-        model,
-        // GPT-5 to model ROZUMUJĄCY: max_completion_tokens obejmuje też tokeny rozumowania.
-        // Przy 1500 całość szła na rozumowanie → finish=length i PUSTA treść. Prosty opis nie
-        // wymaga rozumowania, więc minimalizujemy je i dajemy zapas na samą odpowiedź.
-        reasoning_effort: "minimal",
-        max_completion_tokens: 4000,
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: userText },
-        ],
-      }),
-    );
+  if (usesOpenAiApi(model)) {
+    const openai = getClientForModel(model);
+    const tag = apiTag(model); // "openai" albo "google"
+    const params: import("openai").OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+      model,
+      // GPT-5 to model ROZUMUJĄCY: max_completion_tokens obejmuje też tokeny rozumowania.
+      // Przy 1500 całość szła na rozumowanie → finish=length i PUSTA treść. Prosty opis nie
+      // wymaga rozumowania, więc minimalizujemy je i dajemy zapas na samą odpowiedź.
+      max_completion_tokens: 4000,
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: userText },
+      ],
+    };
+    if (isOpenAiReasoning(model)) params.reasoning_effort = "minimal"; // Gemini bez tego pola
+    const resp = await track(tag, "dish-info", () => openai.chat.completions.create(params));
     const out = resp.choices[0]?.message?.content;
-    if (!out) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${resp.choices[0]?.finish_reason ?? "?"}).`);
+    if (!out) throw new Error(`Brak odpowiedzi modelu (${tag}, finish=${resp.choices[0]?.finish_reason ?? "?"}).`);
     const usage = usageFromOpenAI(model, resp.usage);
-    recordUsage("openai", usage.inputTokens, usage.outputTokens, usage.costUsd);
-    logUsage("dish-info (openai)", model, usage);
+    recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+    logUsage(`dish-info (${tag})`, model, usage);
     return { text: out, usage };
   }
 

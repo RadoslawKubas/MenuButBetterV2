@@ -7,6 +7,7 @@ import { logEvent } from "./db.ts";
 export type Provider =
   | "claude"
   | "openai"
+  | "google"
   | "google_places"
   | "google_cse"
   | "tripadvisor"

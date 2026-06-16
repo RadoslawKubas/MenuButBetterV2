@@ -1,17 +1,44 @@
-// Klient OpenAI — tworzony LENIWIE przy pierwszym użyciu, żeby brak OPENAI_API_KEY
-// nie wywalał startu serwera (modele OpenAI są opcjonalne, do porównań).
+// Klient OpenAI-compatible — tworzony LENIWIE przy pierwszym użyciu, żeby brak klucza
+// nie wywalał startu serwera (modele OpenAI/Gemini są opcjonalne, do porównań).
+// Google (Gemini) używa TEGO SAMEGO SDK OpenAI, tylko z innym baseURL + GEMINI_API_KEY.
 import OpenAI from "openai";
 import { usageFromOpenAI, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
+import { compatProvider, isOpenAiReasoning, apiTag } from "./models.ts";
 
-let client: OpenAI | null = null;
+type CompatProvider = "openai" | "google";
+
+const PROVIDER_CONFIG: Record<CompatProvider, { baseURL?: string; apiKeyEnv: string; label: string }> = {
+  openai: { apiKeyEnv: "OPENAI_API_KEY", label: "OpenAI" },
+  google: {
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    apiKeyEnv: "GEMINI_API_KEY",
+    label: "Gemini",
+  },
+};
+
+const clients = new Map<CompatProvider, OpenAI>();
+
+/** Klient OpenAI-compatible dla danego providera (osobny baseURL + klucz). */
+export function getOpenAICompatible(provider: CompatProvider): OpenAI {
+  const cfg = PROVIDER_CONFIG[provider];
+  const apiKey = process.env[cfg.apiKeyEnv];
+  if (!apiKey) throw new Error(`Brak ${cfg.apiKeyEnv} na serwerze — model ${cfg.label} niedostępny.`);
+  let c = clients.get(provider);
+  if (!c) {
+    c = new OpenAI({ apiKey, baseURL: cfg.baseURL, maxRetries: 4 });
+    clients.set(provider, c);
+  }
+  return c;
+}
+
+/** Skrót: klient dla konkretnego modelu (po jego providerze). */
+export function getClientForModel(model: string): OpenAI {
+  return getOpenAICompatible(compatProvider(model));
+}
 
 export function getOpenAI(): OpenAI {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("Brak OPENAI_API_KEY na serwerze — model OpenAI niedostępny.");
-  }
-  if (!client) client = new OpenAI({ maxRetries: 4 });
-  return client;
+  return getOpenAICompatible("openai");
 }
 
 /**
@@ -29,24 +56,26 @@ export async function openaiVisionJson(opts: {
   schema: Record<string, unknown>;
   maxCompletionTokens?: number;
 }): Promise<{ json: string | null; usage: Usage }> {
-  const openai = getOpenAI();
-  const resp = await track("openai", opts.op, () =>
-    openai.chat.completions.create({
-      model: opts.model,
-      reasoning_effort: "minimal",
-      max_completion_tokens: opts.maxCompletionTokens ?? 2000,
-      messages: [
-        { role: "system", content: opts.system },
-        { role: "user", content: opts.content },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: opts.schemaName, strict: true, schema: opts.schema },
-      },
-    }),
-  );
+  const openai = getClientForModel(opts.model);
+  const tag = apiTag(opts.model);
+  const reasoning = isOpenAiReasoning(opts.model); // tylko gpt-5* dostaje reasoning_effort
+  const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+    model: opts.model,
+    max_completion_tokens: opts.maxCompletionTokens ?? 2000,
+    messages: [
+      { role: "system", content: opts.system },
+      { role: "user", content: opts.content },
+    ],
+    response_format: {
+      type: "json_schema",
+      // strict tylko dla OpenAI; Gemini (compat) bywa bardziej restrykcyjny → bez strict.
+      json_schema: { name: opts.schemaName, strict: reasoning, schema: opts.schema },
+    },
+  };
+  if (reasoning) params.reasoning_effort = "minimal";
+  const resp = await track(tag, opts.op, () => openai.chat.completions.create(params));
   const usage = usageFromOpenAI(opts.model, resp.usage);
-  recordUsage("openai", usage.inputTokens, usage.outputTokens, usage.costUsd);
+  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
   const choice = resp.choices[0];
   return { json: choice?.message?.content ?? null, usage };
 }

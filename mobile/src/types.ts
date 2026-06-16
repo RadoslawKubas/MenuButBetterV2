@@ -151,15 +151,27 @@ export interface RestaurantInfo {
   guessedByLocation?: boolean;
 }
 
-export type ModelId = "claude-sonnet-4-6" | "claude-opus-4-8" | "gpt-5" | "gpt-5-mini";
+export type ModelId =
+  | "claude-sonnet-4-6"
+  | "claude-opus-4-8"
+  | "claude-haiku-4-5"
+  | "gpt-5"
+  | "gpt-5-mini"
+  | "gpt-5-nano"
+  | "gemini-2.5-flash-lite"
+  | "gemini-2.5-flash";
 
 export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
 
 export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "szybszy · tańszy" },
-  { id: "claude-opus-4-8", label: "Opus 4.8", hint: "najlepszy · wolniejszy" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "Claude · zbalansowany" },
+  { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Claude · najlepszy" },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "Claude · najtańszy" },
   { id: "gpt-5", label: "GPT-5", hint: "OpenAI · flagowy" },
   { id: "gpt-5-mini", label: "GPT-5 mini", hint: "OpenAI · tańszy" },
+  { id: "gpt-5-nano", label: "GPT-5 nano", hint: "OpenAI · grosze" },
+  { id: "gemini-2.5-flash-lite", label: "Gemini Flash-Lite", hint: "Google · najtaniej" },
+  { id: "gemini-2.5-flash", label: "Gemini Flash", hint: "Google · tani vision" },
 ];
 
 // Języki tłumaczenia menu (wybór w Ustawieniach).

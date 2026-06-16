@@ -7,6 +7,7 @@ import type OpenAI from "openai";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
+import { usesOpenAiApi } from "./models.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model weryfikacji (gdy nie podano innego)
@@ -91,7 +92,7 @@ export async function scoreDishPhotos(
 ): Promise<{ scores: number[]; usage: Usage }> {
   if (urls.length === 0) return { scores: [], usage: ZERO_USAGE };
   const model = opts.model || MODEL;
-  const isOpenAI = model.startsWith("gpt");
+  const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
   const scores = new Array<number>(urls.length).fill(0);
 
   // Pobierz wszystkie miniaturki równolegle (base64). Nieudane pomijamy — zostaną z oceną 0.
