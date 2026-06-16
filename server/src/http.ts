@@ -291,6 +291,7 @@ interface DishPhotosBody {
   website?: string; // strona lokalu (z Google Places) — dodatkowe źródło zdjęć
   num?: number;
   verify?: boolean; // weryfikacja vision (DOMYŚLNIE WŁĄCZONA; wyłącz przez verify:false)
+  verifyModel?: string; // model weryfikacji zdjęć (Claude/GPT). Domyślnie Sonnet.
   representativeOnly?: boolean; // tylko poglądowe (Wikimedia, free, bez SerpApi/vision) — do tła
 }
 
@@ -316,6 +317,7 @@ app.post("/dish-photos", async (c) => {
   // Termin do OGÓLNEGO szukania (typ dania) — generyczny `photo_query` z menu, jeśli jest.
   // Lokalna/markowa nazwa „Nordic Taste" trafia gorzej niż „smoked salmon avocado toast".
   const genericTerm = body.photoQuery?.trim() || dish;
+  const verifyModel = body.verifyModel?.trim() || "claude-sonnet-4-6";
   const hint = body.restaurantHint?.trim() || undefined;
   const cuisine = body.cuisine?.trim() || undefined;
   const num = body.num ?? 4;
@@ -369,8 +371,8 @@ app.post("/dish-photos", async (c) => {
     logEvent({
       type: "ai",
       op: "dish-photos",
-      model: "claude-sonnet-4-6", // weryfikacja zdjęć zawsze na Sonnet
-      provider: "claude",
+      model: verifyModel,
+      provider: verifyModel.startsWith("gpt") ? "openai" : "claude",
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
@@ -414,7 +416,7 @@ app.post("/dish-photos", async (c) => {
         usage: ZERO_USAGE,
       };
     }
-    const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine });
+    const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine, model: verifyModel });
     const scored = found.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
     step.candidates = candScoredOf(scored);
     const filtered = scored
@@ -444,7 +446,7 @@ app.post("/dish-photos", async (c) => {
     // Weryfikuje listę i zwraca te, które pokazują danie (≥ próg), posortowane po trafności.
     // `term` = po czym weryfikować (oryginał dla „z lokalu", generyczny dla web).
     async function keepMatching(list: DishPhoto[], term: string = dish) {
-      const { scores, usage } = await scoreDishPhotos(term, list.map((p) => p.url), { cuisine });
+      const { scores, usage } = await scoreDishPhotos(term, list.map((p) => p.url), { cuisine, model: verifyModel });
       total = addUsage(total, usage);
       const scored = list.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
       const passing = scored.filter((p) => p.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
@@ -589,18 +591,21 @@ app.post("/venue-photos", async (c) => {
       taPhotos?: VenueTaPhoto[];
       dishes?: string[];
       cuisine?: string;
+      model?: string;
     };
+    const venueModel = body.model?.trim() || "claude-sonnet-4-6";
     const { matches, usage } = await matchVenuePhotos({
       photoNames: Array.isArray(body.photoNames) ? body.photoNames : [],
       taPhotos: Array.isArray(body.taPhotos) ? body.taPhotos : [],
       dishes: Array.isArray(body.dishes) ? body.dishes : [],
       cuisine: body.cuisine,
+      model: venueModel,
     });
     logEvent({
       type: "ai",
       op: "venue-photos",
-      model: "claude-sonnet-4-6",
-      provider: "claude",
+      model: venueModel,
+      provider: venueModel.startsWith("gpt") ? "openai" : "claude",
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,

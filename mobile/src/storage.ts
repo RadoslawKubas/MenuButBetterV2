@@ -9,6 +9,7 @@ import {
   type LocationSource,
   type Menu,
   type ModelId,
+  type ModelRole,
   type RestaurantInfo,
   type Usage,
 } from "./types";
@@ -35,20 +36,25 @@ export interface SavedScan {
 }
 
 const KEY = "mbb.scans.v1";
-const PREF_MODEL_KEY = "mbb.pref.model.v1";
+const PREF_MODELS_KEY = "mbb.pref.models.v1";
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Ostatnio wybrany model AI — żeby przy następnym skanie był domyślnie ten sam. */
-export async function loadModelPref(): Promise<ModelId | null> {
-  const raw = await AsyncStorage.getItem(PREF_MODEL_KEY);
-  return (raw as ModelId) || null;
+/** Wybór modelu PER miejsce użycia (skan / opisy / weryfikacja / venue) — zapamiętany. */
+export async function loadModelPrefs(): Promise<Partial<Record<ModelRole, ModelId>>> {
+  const raw = await AsyncStorage.getItem(PREF_MODELS_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Partial<Record<ModelRole, ModelId>>;
+  } catch {
+    return {};
+  }
 }
 
-export async function saveModelPref(model: ModelId): Promise<void> {
-  await AsyncStorage.setItem(PREF_MODEL_KEY, model);
+export async function saveModelPrefs(models: Record<ModelRole, ModelId>): Promise<void> {
+  await AsyncStorage.setItem(PREF_MODELS_KEY, JSON.stringify(models));
 }
 
 export async function listScans(): Promise<SavedScan[]> {

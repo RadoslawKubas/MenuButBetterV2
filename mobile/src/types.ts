@@ -161,3 +161,20 @@ export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
   { id: "gpt-5", label: "GPT-5", hint: "OpenAI · flagowy" },
   { id: "gpt-5-mini", label: "GPT-5 mini", hint: "OpenAI · tańszy" },
 ];
+
+// Miejsca, w których używamy modelu — każde można skonfigurować osobno (ekran Ustawienia).
+export type ModelRole = "scan" | "describe" | "verify" | "venue";
+
+export const MODEL_ROLES: { role: ModelRole; label: string; hint: string }[] = [
+  { role: "scan", label: "Skan menu", hint: "Odczyt zdjęć menu → pozycje" },
+  { role: "describe", label: "Opisy dań", hint: "Rozszerzone „więcej info”" },
+  { role: "verify", label: "Weryfikacja zdjęć", hint: "Czy zdjęcie pasuje do dania" },
+  { role: "venue", label: "Zdjęcia z lokalu", hint: "Dopasowanie foto z Google / TripAdvisor" },
+];
+
+export const DEFAULT_MODELS: Record<ModelRole, ModelId> = {
+  scan: "claude-sonnet-4-6",
+  describe: "claude-sonnet-4-6",
+  verify: "claude-sonnet-4-6",
+  venue: "claude-sonnet-4-6",
+};

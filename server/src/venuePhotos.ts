@@ -4,12 +4,14 @@
 // i ODRZUCA stock/AI/marketing. Eksperymenty (Cúrcuma, Khan Nawab) potwierdziły 8–10 trafień
 // na lokal przy 1 wywołaniu wizji — taniej i lepiej niż wyszukiwanie per‑danie.
 import Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
 import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
+import { openaiVisionJson } from "./openaiClient.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-sonnet-4-6"; // domyślny model dopasowania (gdy nie podano innego)
 
 // Próg pewności dopasowania danie↔zdjęcie. Niżej — zbyt luźne (ryzyko złego dania).
 const MATCH_MIN = 0.5;
@@ -36,6 +38,8 @@ export interface VenuePhotosInput {
   taPhotos: VenueTaPhoto[];
   dishes: string[];
   cuisine?: string;
+  /** Model dopasowania (Claude lub GPT). Domyślnie Sonnet. */
+  model?: string;
 }
 
 type ImgMedia = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
@@ -135,44 +139,71 @@ export async function matchVenuePhotos(
   const byNorm = new Map<string, string>();
   for (const d of dishes) byNorm.set(norm(d), d);
 
-  const content: Anthropic.ContentBlockParam[] = [];
-  items.forEach((it, i) => {
-    const cap = it.caption ? ` podpis:"${it.caption}"` : "";
-    content.push({ type: "text", text: `Zdjęcie ${i} [${it.source}]${cap}` });
-    content.push({ type: "image", source: { type: "base64", media_type: it.img.media_type, data: it.img.data } });
-  });
+  const model = input.model || MODEL;
+  const isOpenAI = model.startsWith("gpt");
   const ctx = input.cuisine ? ` (kuchnia: ${input.cuisine})` : "";
-  content.push({
-    type: "text",
-    text:
-      `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
-      "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
-      "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
-      "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
-      "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
-      "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
-      "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +
-      "LISTA MENU:\n" +
-      dishes.join(" | "),
-  });
+  const instruction =
+    `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
+    "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
+    "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
+    "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
+    "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
+    "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
+    "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +
+    "LISTA MENU:\n" +
+    dishes.join(" | ");
+  const system =
+    "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
+    "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.";
 
   try {
-    const resp = await track("claude", "venue-photos", () =>
-      client.messages.create({
-        model: MODEL,
-        max_tokens: 2000,
-        system:
-          "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
-          "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.",
-        messages: [{ role: "user", content }],
-        output_config: { format: { type: "json_schema", schema: SCHEMA } },
-      }),
-    );
-    const usage = usageFrom(MODEL, resp.usage);
-    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
-    const text = resp.content.find((b) => b.type === "text");
-    if (!text || text.type !== "text") return { matches: [], usage };
-    const parsed = JSON.parse(text.text) as {
+    let jsonText: string | null = null;
+    let usage: Usage = ZERO_USAGE;
+
+    if (isOpenAI) {
+      const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+      items.forEach((it, i) => {
+        const cap = it.caption ? ` podpis:"${it.caption}"` : "";
+        content.push({ type: "text", text: `Zdjęcie ${i} [${it.source}]${cap}` });
+        content.push({ type: "image_url", image_url: { url: `data:${it.img.media_type};base64,${it.img.data}` } });
+      });
+      content.push({ type: "text", text: instruction });
+      const r = await openaiVisionJson({
+        op: "venue-photos",
+        model,
+        system,
+        content,
+        schemaName: "venue_matches",
+        schema: SCHEMA as unknown as Record<string, unknown>,
+        maxCompletionTokens: 3000,
+      });
+      jsonText = r.json;
+      usage = r.usage;
+    } else {
+      const content: Anthropic.ContentBlockParam[] = [];
+      items.forEach((it, i) => {
+        const cap = it.caption ? ` podpis:"${it.caption}"` : "";
+        content.push({ type: "text", text: `Zdjęcie ${i} [${it.source}]${cap}` });
+        content.push({ type: "image", source: { type: "base64", media_type: it.img.media_type, data: it.img.data } });
+      });
+      content.push({ type: "text", text: instruction });
+      const resp = await track("claude", "venue-photos", () =>
+        client.messages.create({
+          model,
+          max_tokens: 2000,
+          system,
+          messages: [{ role: "user", content }],
+          output_config: { format: { type: "json_schema", schema: SCHEMA } },
+        }),
+      );
+      usage = usageFrom(model, resp.usage);
+      recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+      const text = resp.content.find((b) => b.type === "text");
+      jsonText = text && text.type === "text" ? text.text : null;
+    }
+
+    if (!jsonText) return { matches: [], usage };
+    const parsed = JSON.parse(jsonText) as {
       results: { index: number; category: string; dish: string; confidence: number; real_food: boolean; stock_or_ai: boolean }[];
     };
 

@@ -42,8 +42,8 @@ import {
   addScanUsage,
   renameScan,
   clearScanRestaurant,
-  loadModelPref,
-  saveModelPref,
+  loadModelPrefs,
+  saveModelPrefs,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -58,14 +58,14 @@ import { MenuView } from "./src/MenuView";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
 import { CapturesView } from "./src/CapturesView";
+import { SettingsView } from "./src/SettingsView";
 import { ApiErrorToast } from "./src/Toast";
 import { friendlyMessage } from "./src/appLog";
 import { RenameModal } from "./src/RenameModal";
 import { RestaurantCard } from "./src/RestaurantCard";
 import { colors } from "./src/theme";
 import {
-  DEFAULT_MODEL,
-  MODEL_OPTIONS,
+  DEFAULT_MODELS,
   ZERO_USAGE,
   addUsage,
   type DishPhotoLite,
@@ -73,6 +73,7 @@ import {
   type LocationSource,
   type Menu,
   type ModelId,
+  type ModelRole,
   type PhotoDebug,
   type RestaurantInfo,
   type TripAdvisorPhoto,
@@ -110,6 +111,7 @@ export default function App() {
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
   const [showDiag, setShowDiag] = useState(false);
   const [showCaptures, setShowCaptures] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [captures, setCaptures] = useState<ScanCapture[]>([]);
 
   const [status, setStatus] = useState<Status>("idle");
@@ -122,7 +124,8 @@ export default function App() {
   const [hint, setHint] = useState("");
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
-  const [model, setModel] = useState<ModelId>(DEFAULT_MODEL);
+  // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
+  const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
   const [scans, setScans] = useState<SavedScan[]>([]);
   const [freshScanId, setFreshScanId] = useState<string | null>(null);
@@ -158,18 +161,19 @@ export default function App() {
   useEffect(() => {
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
-    // Przywróć ostatnio wybrany model (jeśli wciąż jest na liście dostępnych).
-    loadModelPref()
-      .then((m) => {
-        if (m && MODEL_OPTIONS.some((o) => o.id === m)) setModel(m);
-      })
+    // Przywróć zapamiętane modele per miejsce (brakujące pola uzupełniamy domyślnymi).
+    loadModelPrefs()
+      .then((saved) => setModels((prev) => ({ ...prev, ...saved })))
       .catch(() => {});
   }, []);
 
-  // Wybór modelu + zapamiętanie na następny raz.
-  function chooseModel(m: ModelId) {
-    setModel(m);
-    void saveModelPref(m).catch(() => {});
+  // Zmiana modelu dla jednego miejsca + zapamiętanie.
+  function changeModel(role: ModelRole, m: ModelId) {
+    setModels((prev) => {
+      const next = { ...prev, [role]: m };
+      void saveModelPrefs(next).catch(() => {});
+      return next;
+    });
   }
 
   function addImages(toAdd: PreparedImage[]) {
@@ -202,7 +206,7 @@ export default function App() {
 
   // Skan przy bieżących ustawieniach ekranu (przycisk „Przetłumacz menu").
   async function doScan() {
-    await runScan({ images, targetLang, model, hint, useExifLocation, useDeviceLocation });
+    await runScan({ images, targetLang, model: models.scan, hint, useExifLocation, useDeviceLocation });
   }
 
   // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
@@ -358,7 +362,7 @@ export default function App() {
       // Tło, równolegle z automatu: (a) tanie zdjęcia poglądowe, (b) pełne opisy dań
       // (gotowe ad-hoc). Lepsze zdjęcia dociągają się dopiero przy wejściu w danie.
       void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
-      void fillDescriptions(result, scanId!, opts.targetLang, opts.model, setMenu);
+      void fillDescriptions(result, scanId!, opts.targetLang, setMenu);
     } catch (e) {
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
@@ -721,7 +725,6 @@ export default function App() {
     si: number;
     ii: number;
     targetLang: string;
-    model: ModelId;
     taPhotos?: TripAdvisorPhoto[];
     photoHint?: string;
     location?: string;
@@ -744,7 +747,7 @@ export default function App() {
           cuisine: opts.menu.cuisine,
           location: opts.location,
           targetLang: opts.targetLang,
-          model: opts.model,
+          model: models.describe,
         });
         opts.applyMenu((prev) => (prev ? patchItem(prev, si, ii, { extraInfo: info }) : prev));
         if (scanId) {
@@ -790,6 +793,7 @@ export default function App() {
                   website: opts.website,
                   restaurantName: opts.menu.restaurant_name ?? undefined,
                   photoQuery: item.photo_query,
+                  verifyModel: models.verify,
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
         const real = realRes.photos;
@@ -847,6 +851,7 @@ export default function App() {
           cuisine: baseMenu.cuisine,
           photoQuery: job.photoQuery,
           num: 1,
+          verifyModel: models.verify,
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));
         totalUsage = addUsage(totalUsage, usage);
         if (photos.length === 0) {
@@ -937,6 +942,7 @@ export default function App() {
       taPhotos,
       dishes,
       baseMenu.cuisine,
+      models.venue,
     ).catch(() => ({ matches: [] as VenueMatch[], usage: ZERO_USAGE }));
 
     // Grupuj po daniu (najpewniejsze pierwsze; serwer już posortował), max 3 zdjęcia/danie.
@@ -994,7 +1000,6 @@ export default function App() {
     baseMenu: Menu,
     scanId: string | null,
     lang: string,
-    scanModel: ModelId,
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void,
   ) {
     const restaurant = baseMenu.restaurant_name ?? undefined;
@@ -1020,7 +1025,7 @@ export default function App() {
           cuisine: baseMenu.cuisine,
           location,
           targetLang: lang,
-          model: scanModel,
+          model: models.describe,
         }).catch(() => ({ info: "", usage: ZERO_USAGE }));
         totalUsage = addUsage(totalUsage, usage);
         if (!info) continue;
@@ -1049,7 +1054,6 @@ export default function App() {
   async function appendImages(
     scanId: string,
     baseMenu: Menu,
-    scanModel: ModelId,
     scanLang: string,
     isOpen: boolean,
     newImages: PreparedImage[],
@@ -1062,7 +1066,7 @@ export default function App() {
         images: newImages.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
         targetLang: scanLang,
         restaurantHint: hint,
-        model: scanModel,
+        model: models.scan,
       });
       const { menu: merged, addedItems, addedSections } = mergeMenus(baseMenu, incoming);
       await updateScanMenu(scanId, merged);
@@ -1089,7 +1093,7 @@ export default function App() {
 
       // Dociągnij dla NOWYCH pozycji (bez photos/opisu): tanie zdjęcia + pełne opisy.
       void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
-      void fillDescriptions(merged, scanId, scanLang, scanModel, applyMenu);
+      void fillDescriptions(merged, scanId, scanLang, applyMenu);
     } catch (e) {
       Alert.alert("Nie udało się dodać", friendlyMessage(e instanceof Error ? e.message : undefined));
     } finally {
@@ -1098,26 +1102,20 @@ export default function App() {
   }
 
   // Wybór źródła nowych zdjęć (aparat / galeria), potem dołączenie do menu.
-  function chooseAppendSource(
-    scanId: string,
-    baseMenu: Menu,
-    scanModel: ModelId,
-    scanLang: string,
-    isOpen: boolean,
-  ) {
+  function chooseAppendSource(scanId: string, baseMenu: Menu, scanLang: string, isOpen: boolean) {
     Alert.alert("Dodaj zdjęcia do menu", "Skąd dołączyć kolejne strony / zdjęcia menu?", [
       {
         text: "📷 Aparat",
         onPress: async () => {
           const img = await captureFromCamera();
-          if (img) await appendImages(scanId, baseMenu, scanModel, scanLang, isOpen, [img]);
+          if (img) await appendImages(scanId, baseMenu, scanLang, isOpen, [img]);
         },
       },
       {
         text: "🖼 Galeria",
         onPress: async () => {
           const imgs = await pickFromLibrary();
-          if (imgs.length) await appendImages(scanId, baseMenu, scanModel, scanLang, isOpen, imgs);
+          if (imgs.length) await appendImages(scanId, baseMenu, scanLang, isOpen, imgs);
         },
       },
       { text: "Anuluj", style: "cancel" },
@@ -1195,7 +1193,6 @@ export default function App() {
         si,
         ii,
         targetLang,
-        model,
         taPhotos: freshRestaurant?.tripAdvisor?.photos,
         photoHint: photoHintFor(menu, freshRestaurant),
         location: locationFor(menu, freshRestaurant),
@@ -1212,7 +1209,6 @@ export default function App() {
       si,
       ii,
       targetLang: openScan.targetLang,
-      model: openScan.model,
       taPhotos: openScan.restaurant?.tripAdvisor?.photos,
       photoHint: photoHintFor(openScan.menu, openScan.restaurant),
       location: locationFor(openScan.menu, openScan.restaurant),
@@ -1231,25 +1227,25 @@ export default function App() {
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <Text style={styles.brand}>MenuButBetter</Text>
-            {showDiag || showCaptures || showingDetail ? (
+            {showDiag || showCaptures || showSettings || showingDetail ? (
               <Pressable
                 onPress={() =>
-                  showDiag ? setShowDiag(false) : showCaptures ? setShowCaptures(false) : setOpenScan(null)
+                  showDiag
+                    ? setShowDiag(false)
+                    : showCaptures
+                      ? setShowCaptures(false)
+                      : showSettings
+                        ? setShowSettings(false)
+                        : setOpenScan(null)
                 }
                 style={styles.navBtn}
               >
                 <Text style={styles.navText}>‹ Wstecz</Text>
               </Pressable>
             ) : (
-              <View style={styles.iconRow}>
-                <Pressable onPress={() => setShowCaptures(true)} hitSlop={8} style={styles.iconBtn}>
-                  <Text style={styles.icon}>🧪</Text>
-                  {captures.length ? <Text style={styles.iconBadge}>{captures.length}</Text> : null}
-                </Pressable>
-                <Pressable onPress={() => setShowDiag(true)} hitSlop={8} style={styles.iconBtn}>
-                  <Text style={styles.icon}>📊</Text>
-                </Pressable>
-              </View>
+              <Pressable onPress={() => setShowSettings(true)} hitSlop={8} style={styles.iconBtn}>
+                <Text style={styles.icon}>⚙️</Text>
+              </Pressable>
             )}
           </View>
           {!(showDiag || showCaptures || showingDetail) ? (
@@ -1270,6 +1266,14 @@ export default function App() {
           <DiagnosticsView />
         ) : showCaptures ? (
           <CapturesView onReplay={replayCapture} />
+        ) : showSettings ? (
+          <SettingsView
+            models={models}
+            onChangeModel={changeModel}
+            onOpenDiagnostics={() => setShowDiag(true)}
+            onOpenCaptures={() => setShowCaptures(true)}
+            capturesCount={captures.length}
+          />
         ) : (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {/* PODGLĄD ZAPISANEGO MENU */}
@@ -1304,7 +1308,7 @@ export default function App() {
                 style={[styles.button, styles.secondary, appending && styles.disabled]}
                 disabled={appending}
                 onPress={() =>
-                  chooseAppendSource(openScan.id, openScan.menu, openScan.model, openScan.targetLang, true)
+                  chooseAppendSource(openScan.id, openScan.menu, openScan.targetLang, true)
                 }
               >
                 <Text style={styles.secondaryText}>
@@ -1366,23 +1370,11 @@ export default function App() {
                     ))}
                   </View>
 
-                  <Text style={styles.label}>Model AI</Text>
-                  <View style={styles.modelRow}>
-                    {MODEL_OPTIONS.map((m) => (
-                      <Pressable
-                        key={m.id}
-                        onPress={() => chooseModel(m.id)}
-                        style={[styles.modelCard, model === m.id && styles.modelCardActive]}
-                      >
-                        <Text style={[styles.modelLabel, model === m.id && styles.modelLabelActive]}>
-                          {m.label}
-                        </Text>
-                        <Text style={[styles.modelHint, model === m.id && styles.modelHintActive]}>
-                          {m.hint}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
+                  <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
+                    <Text style={styles.modelsLinkText}>
+                      ⚙️ Modele: skan {models.scan} · opisy {models.describe} — zmień w Ustawieniach
+                    </Text>
+                  </Pressable>
 
                   <Text style={styles.label}>Lokal (opcjonalnie)</Text>
                   <TextInput
@@ -1573,7 +1565,7 @@ export default function App() {
                       style={[styles.button, styles.secondary, appending && styles.disabled]}
                       disabled={appending}
                       onPress={() =>
-                        chooseAppendSource(freshScanId, menu, model, targetLang, false)
+                        chooseAppendSource(freshScanId, menu, targetLang, false)
                       }
                     >
                       <Text style={styles.secondaryText}>
@@ -1624,6 +1616,8 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   chipText: { color: colors.text, fontWeight: "600" },
   chipTextActive: { color: colors.buttonText },
+  modelsLink: { backgroundColor: colors.card, borderRadius: 10, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: colors.badgeBg },
+  modelsLinkText: { fontSize: 12, color: colors.accent, fontWeight: "700" },
   modelRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 8 },
   modelCard: {
     flexGrow: 1,

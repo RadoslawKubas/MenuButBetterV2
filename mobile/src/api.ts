@@ -180,11 +180,12 @@ export async function fetchVenuePhotos(
   taPhotos: { url: string; caption: string | null }[],
   dishes: string[],
   cuisine?: string,
+  model?: string,
 ): Promise<{ matches: VenueMatch[]; usage: Usage }> {
   const res = await loggedFetch("venue-photos", `${API_BASE}/venue-photos`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine }),
+    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine, model }),
   });
   const json = (await res.json()) as { matches?: VenueMatch[]; usage?: Usage; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
@@ -194,7 +195,7 @@ export async function fetchVenuePhotos(
 export async function fetchDishPhotos(
   dish: string,
   restaurantHint?: string,
-  opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string; photoQuery?: string },
+  opts?: { representativeOnly?: boolean; num?: number; cuisine?: string; website?: string; restaurantName?: string; photoQuery?: string; verifyModel?: string },
 ): Promise<{ photos: DishPhotoLite[]; usage: Usage; debug?: PhotoDebug }> {
   const res = await loggedFetch("dish-photos", `${API_BASE}/dish-photos`, {
     method: "POST",
@@ -208,6 +209,7 @@ export async function fetchDishPhotos(
       website: opts?.website,
       num: opts?.num ?? 4,
       representativeOnly: opts?.representativeOnly,
+      verifyModel: opts?.verifyModel,
     }),
   });
   const json = (await res.json()) as { photos?: DishPhotoLite[]; usage?: Usage; debug?: PhotoDebug; error?: string };
