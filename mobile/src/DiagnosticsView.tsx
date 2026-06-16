@@ -107,7 +107,7 @@ export function DiagnosticsView() {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.headerRow}>
-        <Text style={styles.h1}>Zewnętrzne API (serwer)</Text>
+        <Text style={styles.h1} numberOfLines={1}>API serwera</Text>
         <View style={styles.headerBtns}>
           <Pressable style={styles.refresh} onPress={exportLogs} disabled={exporting || loading}>
             <Text style={styles.refreshText}>{exporting ? "…" : "⬆︎ Logi"}</Text>
@@ -251,12 +251,12 @@ export function DiagnosticsView() {
 
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 48 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
-  headerBtns: { flexDirection: "row", gap: 8 },
-  h1: { fontSize: 18, fontWeight: "800", color: colors.accent },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 },
+  headerBtns: { flexDirection: "row", gap: 6, flexShrink: 0 },
+  h1: { fontSize: 18, fontWeight: "800", color: colors.accent, flexShrink: 1 },
   sub: { fontSize: 12, color: colors.muted, marginBottom: 8 },
-  refresh: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 },
-  refreshText: { color: colors.accent, fontWeight: "700" },
+  refresh: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 6 },
+  refreshText: { color: colors.accent, fontWeight: "700", fontSize: 13 },
   error: { color: colors.error, marginBottom: 8 },
   costBox: { backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.accent },
   costBig: { fontSize: 18, fontWeight: "800", color: colors.accent },

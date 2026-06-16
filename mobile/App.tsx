@@ -1248,7 +1248,7 @@ export default function App() {
               </Pressable>
             )}
           </View>
-          {!(showDiag || showCaptures || showingDetail) ? (
+          {!(showDiag || showCaptures || showSettings || showingDetail) ? (
             <View style={styles.tabs}>
               <Pressable onPress={() => setTab("scan")}>
                 <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skanuj</Text>
