@@ -48,10 +48,46 @@ export interface ScanCapture {
   images: CaptureImage[];
   /** Powiązany skan w historii — przez niego dołączamy WYNIK przy eksporcie. */
   scanId?: string | null;
+  /** Sygnatura WEJŚCIA (zdjęcia + podpowiedzi + lokalizacja) — do dedupu identycznych migawek. */
+  sig?: string;
 }
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Tani, mocny odcisk pojedynczego zdjęcia: długość base64 + kilka próbek znaków z ustalonych
+// pozycji. Identyczny plik → identyczny odcisk; różne pliki praktycznie zawsze się różnią
+// (bez liczenia pełnego hasza całego base64 przy każdym skanie).
+function imgFingerprint(b64: string): string {
+  const n = b64.length;
+  if (n === 0) return "0";
+  return `${n}:${b64[0]}${b64[Math.floor(n / 3)]}${b64[Math.floor(n / 2)]}${b64[n - 1]}`;
+}
+
+// Sygnatura całego WEJŚCIA migawki — żeby nie tworzyć identycznej migawki dwa razy.
+// Modele/język NIE wchodzą (nie są częścią migawki) → to samo wejście różnymi modelami = 1 migawka.
+function captureSig(input: {
+  images: PreparedImage[];
+  restaurantHint?: string;
+  locationHint?: string;
+  location: GeoPoint | null;
+  locationSource: LocationSource;
+  useExifLocation: boolean;
+  useDeviceLocation: boolean;
+}): string {
+  const imgs = input.images.map((im) => imgFingerprint(im.base64 ?? "")).join(",");
+  const loc = input.location ? `${input.location.lat.toFixed(5)},${input.location.lng.toFixed(5)}` : "";
+  return [
+    input.images.length,
+    imgs,
+    input.restaurantHint ?? "",
+    input.locationHint ?? "",
+    loc,
+    input.locationSource ?? "",
+    input.useExifLocation ? 1 : 0,
+    input.useDeviceLocation ? 1 : 0,
+  ].join("|");
 }
 
 export async function listCaptures(): Promise<ScanCapture[]> {
@@ -91,6 +127,14 @@ export async function saveCapture(input: {
   useExifLocation: boolean;
   useDeviceLocation: boolean;
 }): Promise<ScanCapture> {
+  const sig = captureSig(input);
+  const all = await listCaptures();
+  // Identyczne WEJŚCIE jak istniejąca migawka → nie duplikuj, zwróć tamtą (caller podepnie
+  // do niej nowy scanId, więc migawka wskazuje najświeższy wynik). Zmiana czegokolwiek w
+  // wejściu daje inną sygnaturę → powstaje nowa migawka.
+  const dup = all.find((c) => c.sig && c.sig === sig);
+  if (dup) return dup;
+
   const id = newId();
   const images: CaptureImage[] = [];
   input.images.forEach((img, i) => {
@@ -110,8 +154,8 @@ export async function saveCapture(input: {
     useExifLocation: input.useExifLocation,
     useDeviceLocation: input.useDeviceLocation,
     images,
+    sig,
   };
-  const all = await listCaptures();
   all.unshift(capture); // najnowsze na górze
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
   return capture;
