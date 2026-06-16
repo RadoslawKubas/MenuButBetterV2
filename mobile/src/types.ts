@@ -159,7 +159,8 @@ export type ModelId =
   | "gpt-5-mini"
   | "gpt-5-nano"
   | "gemini-2.5-flash-lite"
-  | "gemini-2.5-flash";
+  | "gemini-2.5-flash"
+  | "gemini-2.5-pro";
 
 export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
 
@@ -172,6 +173,7 @@ export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
   { id: "gpt-5-nano", label: "GPT-5 nano", hint: "OpenAI · grosze" },
   { id: "gemini-2.5-flash-lite", label: "Gemini Flash-Lite", hint: "Google · najtaniej" },
   { id: "gemini-2.5-flash", label: "Gemini Flash", hint: "Google · tani vision" },
+  { id: "gemini-2.5-pro", label: "Gemini Pro", hint: "Google · najmocniejszy" },
 ];
 
 // Języki tłumaczenia menu (wybór w Ustawieniach).

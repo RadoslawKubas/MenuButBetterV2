@@ -27,6 +27,7 @@ export const MODELS = {
   "gpt-5-nano": { provider: "openai", label: "GPT-5 nano", maxOutput: 128000, price: { in: 0.05, out: 0.4 } },
   "gemini-2.5-flash-lite": { provider: "google", label: "Gemini 2.5 Flash-Lite", maxOutput: 65536, price: { in: 0.1, out: 0.4 } },
   "gemini-2.5-flash": { provider: "google", label: "Gemini 2.5 Flash", maxOutput: 65536, price: { in: 0.3, out: 2.5 } },
+  "gemini-2.5-pro": { provider: "google", label: "Gemini 2.5 Pro", maxOutput: 65536, price: { in: 1.25, out: 10 } },
 } as const satisfies Record<string, ModelDef>;
 
 export type ModelId = keyof typeof MODELS;
