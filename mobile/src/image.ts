@@ -69,6 +69,16 @@ export async function captureFromCamera(): Promise<PreparedImage | null> {
   return compress(a.uri, a.exif);
 }
 
+/** Przetwarza zdjęcie zrobione WŁASNYM aparatem (tryb seryjny, expo-camera): kompresja
+ *  + zapis oryginału do galerii (tryb testowy). `exif` z takePictureAsync. */
+export async function prepareCameraPhoto(
+  uri: string,
+  exif?: Record<string, unknown> | null,
+): Promise<PreparedImage> {
+  void saveToGallery(uri); // równolegle, best-effort
+  return compress(uri, exif ?? null);
+}
+
 /** Wybiera z galerii — MOŻNA WIELE. Zwraca [] gdy anulowano. */
 export async function pickFromLibrary(): Promise<PreparedImage[]> {
   const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();

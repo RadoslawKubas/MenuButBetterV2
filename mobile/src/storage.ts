@@ -85,6 +85,17 @@ export async function saveHistoryGrouping(v: HistoryGrouping): Promise<void> {
   await AsyncStorage.setItem(PREF_HISTGROUP_KEY, v);
 }
 
+const PREF_SERIALCAM_KEY = "mbb.pref.serialcam.v1";
+
+/** Tryb seryjny aparatu (wiele zdjęć bez zamykania) — zapamiętany. Domyślnie wyłączony. */
+export async function loadSerialCamPref(): Promise<boolean> {
+  return (await AsyncStorage.getItem(PREF_SERIALCAM_KEY)) === "1";
+}
+
+export async function saveSerialCamPref(on: boolean): Promise<void> {
+  await AsyncStorage.setItem(PREF_SERIALCAM_KEY, on ? "1" : "0");
+}
+
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];
