@@ -47,8 +47,6 @@ import {
   saveModelPrefs,
   loadLangPref,
   saveLangPref,
-  loadSerialCamPref,
-  saveSerialCamPref,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -136,8 +134,7 @@ export default function App() {
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
   const [showOptions, setShowOptions] = useState(false); // zwijane „Opcje skanu" (lokal + lokalizacja)
-  const [serialCam, setSerialCam] = useState(false); // tryb seryjny aparatu (wiele zdjęć bez zamykania)
-  const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu seryjnego
+  const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu (z podglądem zdjęcia)
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -184,18 +181,11 @@ export default function App() {
         if (l) setTargetLang(l);
       })
       .catch(() => {});
-    loadSerialCamPref().then(setSerialCam).catch(() => {});
   }, []);
 
-  function changeSerialCam(on: boolean) {
-    setSerialCam(on);
-    void saveSerialCamPref(on).catch(() => {});
-  }
-
-  // Przycisk „Aparat": w trybie seryjnym otwiera własny ekran, inaczej systemowy aparat (jedno zdjęcie).
+  // Przycisk „Aparat": zawsze nasz własny ekran aparatu (podgląd każdego zdjęcia + dodawanie serii).
   function openCamera() {
-    if (serialCam) setShowCamera(true);
-    else void addFromCamera();
+    setShowCamera(true);
   }
 
   // Tryb seryjny: każde zdjęcie z własnego aparatu → przetwórz i dołóż (do limitu).
@@ -1556,16 +1546,6 @@ export default function App() {
                           </Text>
                         </View>
                         <Switch value={useDeviceLocation} onValueChange={setUseDeviceLocation} trackColor={{ true: colors.accent }} />
-                      </View>
-                      <Text style={styles.label}>Aparat</Text>
-                      <View style={styles.switchRow}>
-                        <View style={styles.switchTextWrap}>
-                          <Text style={styles.switchTitle}>📸 Tryb seryjny</Text>
-                          <Text style={styles.switchSub}>
-                            Rób wiele zdjęć bez zamykania aparatu i bez potwierdzania każdego — „Gotowe" dodaje wszystkie.
-                          </Text>
-                        </View>
-                        <Switch value={serialCam} onValueChange={changeSerialCam} trackColor={{ true: colors.accent }} />
                       </View>
                     </View>
                   ) : null}
