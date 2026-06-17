@@ -116,9 +116,10 @@ export async function getStats(): Promise<Stats> {
              coalesce(sum(output_tokens),0)::bigint AS o
              FROM events WHERE model IS NOT NULL GROUP BY model ORDER BY cost DESC`),
     // Per OPERACJA (scan / dish-info / dish-photos / venue-photos) — gdzie idą pieniądze.
+    // Bez type='error' (błędy mają op, ale brak kosztu → zaśmiecałyby; są w recentErrors).
     p.query(`SELECT op, count(*)::int AS calls, coalesce(sum(cost_usd),0) AS cost,
              coalesce(sum(input_tokens),0)::bigint AS i, coalesce(sum(output_tokens),0)::bigint AS o
-             FROM events WHERE op IS NOT NULL GROUP BY op ORDER BY cost DESC`),
+             FROM events WHERE op IS NOT NULL AND type <> 'error' GROUP BY op ORDER BY cost DESC`),
     p.query(`SELECT to_char(date_trunc('day', created_at),'YYYY-MM-DD') AS day, count(*)::int AS scans
              FROM events WHERE type='scan' GROUP BY day ORDER BY day DESC LIMIT 30`),
     p.query(`SELECT count(*)::int AS n FROM events WHERE type='error'`),
