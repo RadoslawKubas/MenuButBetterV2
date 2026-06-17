@@ -280,6 +280,17 @@ export default function App() {
     setImages((prev) => prev.filter((_, i) => i !== index));
   }
 
+  // Usuwa zdjęcie po uri (z galerii aparatu) + sprząta jego ocenę peek.
+  function removeImageByUri(uri: string) {
+    setImages((prev) => prev.filter((i) => i.uri !== uri));
+    setPeekByUri((prev) => {
+      const n = { ...prev };
+      delete n[uri];
+      return n;
+    });
+    setPeekingUris((p) => p.filter((u) => u !== uri));
+  }
+
   // Skan przy bieżących ustawieniach ekranu (przycisk „Przetłumacz menu").
   async function doScan() {
     await runScan({ images, targetLang, models, hint, useExifLocation, useDeviceLocation });
@@ -1727,6 +1738,7 @@ export default function App() {
             peek: peekByUri[img.uri],
             peeking: peekingUris.includes(img.uri),
           }))}
+          onRemoveShot={removeImageByUri}
         />
         <ApiErrorToast />
         <RenameModal

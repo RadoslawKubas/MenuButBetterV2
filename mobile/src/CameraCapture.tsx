@@ -5,8 +5,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Image,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -41,6 +43,7 @@ export function CameraCapture({
   peekInfo,
   peeking,
   shots,
+  onRemoveShot,
 }: {
   visible: boolean;
   count: number;
@@ -51,6 +54,7 @@ export function CameraCapture({
   peekInfo: PeekResult | null;
   peeking: boolean;
   shots: Shot[];
+  onRemoveShot: (uri: string) => void;
 }) {
   const { width, height } = useWindowDimensions();
   const ref = useRef<CameraView>(null);
@@ -61,6 +65,57 @@ export function CameraCapture({
   const [gallery, setGallery] = useState(false); // galeria zdjęć tej sesji
   const pagerRef = useRef<ScrollView>(null);
   const [galIdx, setGalIdx] = useState(0); // bieżąca strona galerii (do paska miniatur)
+  const galTranslateY = useRef(new Animated.Value(0)).current;
+  const galBg = useRef(new Animated.Value(1)).current;
+
+  function resetGalPan() {
+    Animated.spring(galTranslateY, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+    Animated.spring(galBg, { toValue: 1, useNativeDriver: true, bounciness: 0 }).start();
+  }
+  function openGallery(at: number) {
+    galTranslateY.setValue(0);
+    galBg.setValue(1);
+    setGalIdx(at);
+    setGallery(true);
+  }
+  function deleteCurrent() {
+    const s = shots[galIdx];
+    if (!s) return;
+    if (shots.length <= 1) setGallery(false); // ostatnie zdjęcie → zamknij galerię
+    onRemoveShot(s.uri);
+  }
+  // Gdy lista się skróci (usunięcie), nie wychodź poza zakres.
+  useEffect(() => {
+    if (gallery && galIdx > shots.length - 1) setGalIdx(Math.max(0, shots.length - 1));
+  }, [shots.length, gallery, galIdx]);
+
+  // Gest pionowy w górę → zamknij galerię (poziome zostają dla pagera). Jak w Lightboxie.
+  const galPan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => g.dy < -10 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => {
+        const dy = Math.min(0, g.dy);
+        galTranslateY.setValue(dy);
+        galBg.setValue(Math.max(0.15, 1 + dy / 400));
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy < -110 || g.vy < -0.6) {
+          Animated.parallel([
+            Animated.timing(galTranslateY, { toValue: -1200, duration: 180, useNativeDriver: true }),
+            Animated.timing(galBg, { toValue: 0, duration: 180, useNativeDriver: true }),
+          ]).start(() => {
+            setGallery(false);
+            galTranslateY.setValue(0);
+            galBg.setValue(1);
+          });
+        } else {
+          resetGalPan();
+        }
+      },
+      onPanResponderTerminate: () => resetGalPan(),
+    }),
+  ).current;
 
   useEffect(() => {
     if (visible && permission && !permission.granted && permission.canAskAgain) {
@@ -169,12 +224,7 @@ export function CameraCapture({
                 </Pressable>
                 <Pressable
                   style={[styles.side, styles.thumbSide]}
-                  onPress={() => {
-                    if (shots.length > 0) {
-                      setGalIdx(shots.length - 1);
-                      setGallery(true);
-                    }
-                  }}
+                  onPress={() => shots.length > 0 && openGallery(shots.length - 1)}
                   disabled={shots.length === 0}
                 >
                   {shots.length > 0 ? (
@@ -213,7 +263,7 @@ export function CameraCapture({
 
         {/* Galeria sesji: przeglądanie zrobionych zdjęć + ocena „szybkiego podglądu" per zdjęcie. */}
         {gallery && shots.length > 0 ? (
-          <View style={styles.galleryRoot}>
+          <Animated.View style={[styles.galleryRoot, { opacity: galBg }]}>
             <ScrollView
               ref={pagerRef}
               horizontal
@@ -224,39 +274,43 @@ export function CameraCapture({
               onMomentumScrollEnd={(e) => setGalIdx(Math.round(e.nativeEvent.contentOffset.x / width))}
             >
               {shots.map((s, i) => (
-                <View key={i} style={[styles.galleryPage, { width }]}>
-                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.52 }} resizeMode="contain" />
+                <Animated.View
+                  key={i}
+                  {...galPan.panHandlers}
+                  style={[styles.galleryPage, { width, transform: [{ translateY: galTranslateY }] }]}
+                >
+                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.5 }} resizeMode="contain" />
                   <View style={styles.galleryCaption}>
                     <Text style={styles.galleryIndex}>
                       Zdjęcie {i + 1} / {shots.length}
                     </Text>
                     <Text style={styles.galleryPeek}>{s.peeking ? "🔎 analizuję…" : peekText(s.peek)}</Text>
                   </View>
-                </View>
+                </Animated.View>
               ))}
             </ScrollView>
 
             <Pressable style={styles.galleryClose} onPress={() => setGallery(false)} hitSlop={12}>
               <Text style={styles.galleryCloseText}>✕</Text>
             </Pressable>
+            <Text style={styles.galleryTopHint} pointerEvents="none">
+              ↑ przesuń w górę, aby zamknąć
+            </Text>
+            <Pressable style={styles.galleryDelete} onPress={deleteCurrent} hitSlop={12}>
+              <Text style={styles.galleryDeleteText}>🗑 Usuń to zdjęcie</Text>
+            </Pressable>
 
             {/* Pasek miniatur do szybkiego przewijania (scroll, gdy się nie mieści). */}
             <View style={styles.stripWrap}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
                 {shots.map((s, i) => (
-                  <Pressable
-                    key={i}
-                    onPress={() => pagerRef.current?.scrollTo({ x: i * width, animated: true })}
-                  >
-                    <Image
-                      source={{ uri: s.uri }}
-                      style={[styles.stripThumb, i === galIdx && styles.stripThumbActive]}
-                    />
+                  <Pressable key={i} onPress={() => pagerRef.current?.scrollTo({ x: i * width, animated: true })}>
+                    <Image source={{ uri: s.uri }} style={[styles.stripThumb, i === galIdx && styles.stripThumbActive]} />
                   </Pressable>
                 ))}
               </ScrollView>
             </View>
-          </View>
+          </Animated.View>
         ) : null}
       </View>
     </Modal>
@@ -358,6 +412,17 @@ const styles = StyleSheet.create({
   galleryPeek: { color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" },
   galleryClose: { position: "absolute", top: 52, right: 24 },
   galleryCloseText: { color: "#fff", fontSize: 26, fontWeight: "700" },
+  galleryTopHint: { position: "absolute", top: 58, alignSelf: "center", color: "#fff", fontSize: 12, opacity: 0.7 },
+  galleryDelete: {
+    position: "absolute",
+    bottom: 98,
+    alignSelf: "center",
+    backgroundColor: "rgba(179,38,30,0.9)",
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  galleryDeleteText: { color: "#fff", fontSize: 14, fontWeight: "800" },
   stripWrap: { position: "absolute", left: 0, right: 0, bottom: 28 },
   strip: { paddingHorizontal: 12, gap: 8, alignItems: "center" },
   stripThumb: { width: 44, height: 56, borderRadius: 6, opacity: 0.5, borderWidth: 2, borderColor: "transparent" },
