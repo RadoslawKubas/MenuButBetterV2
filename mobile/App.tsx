@@ -131,6 +131,7 @@ export default function App() {
   const [hint, setHint] = useState("");
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
+  const [showOptions, setShowOptions] = useState(false); // zwijane „Opcje skanu" (lokal + lokalizacja)
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -1425,55 +1426,24 @@ export default function App() {
             <>
               {status === "idle" ? (
                 <View>
-                  <Text style={styles.intro}>
-                    Dodaj zdjęcia menu — może być kilka stron i okładka. Połączę je w jedno
-                    przetłumaczone menu, które zapiszę w historii.
-                  </Text>
-
-                  <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
-                    <Text style={styles.modelsLinkText}>
-                      ⚙️ Język: {targetLang} · modele: skan {models.scan} — zmień w Ustawieniach
-                    </Text>
-                  </Pressable>
-
-                  <Text style={styles.label}>Lokal (opcjonalnie)</Text>
-                  <TextInput
-                    value={hint}
-                    onChangeText={setHint}
-                    placeholder="np. Trattoria da Marco, Florencja"
-                    placeholderTextColor={colors.muted}
-                    style={styles.input}
-                  />
-
-                  <Text style={styles.label}>Lokalizacja (pomaga namierzyć lokal)</Text>
-                  <View style={styles.switchRow}>
-                    <View style={styles.switchTextWrap}>
-                      <Text style={styles.switchTitle}>📷 Z EXIF zdjęć</Text>
-                      <Text style={styles.switchSub}>
-                        Współrzędne zaszyte w zdjęciu (jeśli zrobione na miejscu). Działa też później.
+                  {/* 1) ZDJĘCIA — główna akcja na górze. Pusto → wyraźny drop-zone. */}
+                  {images.length === 0 ? (
+                    <View style={styles.dropZone}>
+                      <Text style={styles.dropGlyph}>🍽️</Text>
+                      <Text style={styles.dropTitle}>Dodaj zdjęcia menu</Text>
+                      <Text style={styles.dropSub}>
+                        Kilka stron i okładka — połączę je w jedno przetłumaczone menu, które zapiszę w historii.
                       </Text>
+                      <View style={styles.addRow}>
+                        <Pressable style={styles.addBtn} onPress={addFromCamera}>
+                          <Text style={styles.addBtnText}>📷  Aparat</Text>
+                        </Pressable>
+                        <Pressable style={styles.addBtn} onPress={addFromLibrary}>
+                          <Text style={styles.addBtnText}>🖼️  Galeria</Text>
+                        </Pressable>
+                      </View>
                     </View>
-                    <Switch
-                      value={useExifLocation}
-                      onValueChange={setUseExifLocation}
-                      trackColor={{ true: colors.accent }}
-                    />
-                  </View>
-                  <View style={styles.switchRow}>
-                    <View style={styles.switchTextWrap}>
-                      <Text style={styles.switchTitle}>📍 Moja lokalizacja</Text>
-                      <Text style={styles.switchSub}>
-                        Pozycja GPS telefonu — pomaga ustalić kraj/miasto, też gdy nie jesteś w lokalu.
-                      </Text>
-                    </View>
-                    <Switch
-                      value={useDeviceLocation}
-                      onValueChange={setUseDeviceLocation}
-                      trackColor={{ true: colors.accent }}
-                    />
-                  </View>
-
-                  {images.length > 0 ? (
+                  ) : (
                     <>
                       <Text style={styles.label}>
                         Zdjęcia ({images.length}/{MAX_IMAGES})
@@ -1489,39 +1459,89 @@ export default function App() {
                           </View>
                         ))}
                       </ScrollView>
+                      <View style={styles.addRow}>
+                        <Pressable
+                          style={[styles.addBtn, images.length >= MAX_IMAGES && styles.disabled]}
+                          onPress={addFromCamera}
+                          disabled={images.length >= MAX_IMAGES}
+                        >
+                          <Text style={styles.addBtnText}>📷  Aparat</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.addBtn, images.length >= MAX_IMAGES && styles.disabled]}
+                          onPress={addFromLibrary}
+                          disabled={images.length >= MAX_IMAGES}
+                        >
+                          <Text style={styles.addBtnText}>🖼️  Galeria</Text>
+                        </Pressable>
+                      </View>
                     </>
-                  ) : null}
+                  )}
 
-                  <View style={styles.addRow}>
-                    <Pressable
-                      style={[styles.addBtn, images.length >= MAX_IMAGES && styles.disabled]}
-                      onPress={addFromCamera}
-                      disabled={images.length >= MAX_IMAGES}
-                    >
-                      <Text style={styles.addBtnText}>📷  Aparat</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.addBtn, images.length >= MAX_IMAGES && styles.disabled]}
-                      onPress={addFromLibrary}
-                      disabled={images.length >= MAX_IMAGES}
-                    >
-                      <Text style={styles.addBtnText}>🖼️  Galeria</Text>
-                    </Pressable>
-                  </View>
-
+                  {/* 2) TŁUMACZ — primary, od razu pod zdjęciami. */}
                   <Pressable
                     style={[styles.button, styles.primary, images.length === 0 && styles.disabled]}
                     onPress={doScan}
                     disabled={images.length === 0}
                   >
                     <Text style={styles.buttonText}>
-                      {images.length === 0
-                        ? "Dodaj zdjęcia, aby przetłumaczyć"
-                        : `Przetłumacz menu (${images.length})`}
+                      {images.length === 0 ? "Najpierw dodaj zdjęcia" : `Przetłumacz menu (${images.length})`}
                     </Text>
                   </Pressable>
 
                   {error ? <Text style={styles.inlineError}>{error}</Text> : null}
+
+                  {/* 3) OPCJE — zwijane (lokal + lokalizacja), domyślnie schowane. */}
+                  <Pressable style={styles.optionsHead} onPress={() => setShowOptions((v) => !v)}>
+                    <Text style={styles.optionsHeadText} numberOfLines={1}>
+                      ⚙️ Opcje skanu
+                      {hint.trim() ? ` · ${hint.trim()}` : ""}
+                      {useExifLocation || useDeviceLocation ? " · 📍 lokalizacja wł." : " · 📍 wył."}
+                    </Text>
+                    <Text style={styles.optionsChevron}>{showOptions ? "▾" : "›"}</Text>
+                  </Pressable>
+                  {showOptions ? (
+                    <View style={styles.optionsBody}>
+                      <Text style={styles.label}>Lokal (opcjonalnie)</Text>
+                      <TextInput
+                        value={hint}
+                        onChangeText={setHint}
+                        placeholder="np. Trattoria da Marco, Florencja"
+                        placeholderTextColor={colors.muted}
+                        style={styles.input}
+                      />
+                      <Text style={styles.label}>Lokalizacja (pomaga namierzyć lokal)</Text>
+                      <View style={styles.switchRow}>
+                        <View style={styles.switchTextWrap}>
+                          <Text style={styles.switchTitle}>📷 Z EXIF zdjęć</Text>
+                          <Text style={styles.switchSub}>
+                            Współrzędne zaszyte w zdjęciu (jeśli zrobione na miejscu). Działa też później.
+                          </Text>
+                        </View>
+                        <Switch value={useExifLocation} onValueChange={setUseExifLocation} trackColor={{ true: colors.accent }} />
+                      </View>
+                      <View style={styles.switchRow}>
+                        <View style={styles.switchTextWrap}>
+                          <Text style={styles.switchTitle}>📍 Moja lokalizacja</Text>
+                          <Text style={styles.switchSub}>
+                            Pozycja GPS telefonu — pomaga ustalić kraj/miasto, też gdy nie jesteś w lokalu.
+                          </Text>
+                        </View>
+                        <Switch value={useDeviceLocation} onValueChange={setUseDeviceLocation} trackColor={{ true: colors.accent }} />
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {/* 4) Modele + język — szybki link do Ustawień (czytelne etykiety). */}
+                  <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
+                    <Text style={styles.modelsLinkText}>
+                      ⚙️ Modele:{" "}
+                      {new Set(Object.values(models)).size === 1
+                        ? modelLabel(models.scan)
+                        : `różne (skan ${modelLabel(models.scan)})`}{" "}
+                      · Język: {targetLang} — zmień w Ustawieniach
+                    </Text>
+                  </Pressable>
                 </View>
               ) : null}
 
@@ -1670,6 +1690,30 @@ const styles = StyleSheet.create({
   navText: { color: colors.accent, fontWeight: "700" },
   content: { padding: 20, paddingBottom: 48 },
   intro: { fontSize: 16, color: colors.text, lineHeight: 22, marginBottom: 24 },
+  dropZone: {
+    borderWidth: 2,
+    borderColor: colors.badgeBg,
+    borderStyle: "dashed",
+    borderRadius: 16,
+    paddingVertical: 28,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  dropGlyph: { fontSize: 40, marginBottom: 8 },
+  dropTitle: { fontSize: 18, fontWeight: "800", color: colors.text },
+  dropSub: { fontSize: 13, color: colors.muted, textAlign: "center", marginTop: 6, marginBottom: 16, lineHeight: 18 },
+  optionsHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    marginTop: 6,
+    gap: 10,
+  },
+  optionsHeadText: { fontSize: 14, fontWeight: "700", color: colors.text, flexShrink: 1 },
+  optionsChevron: { fontSize: 18, color: colors.muted },
+  optionsBody: { marginBottom: 6 },
   label: { fontSize: 13, fontWeight: "700", color: colors.muted, marginBottom: 8, marginTop: 8 },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.badgeBg },
