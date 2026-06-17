@@ -3,16 +3,28 @@
 //  • „↺ Ponów" → odrzuca i wraca do aparatu.
 //  • „Gotowe (N)" → zamyka; wszystkie użyte zdjęcia są już dodane do skanu.
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MAX_IMAGES } from "./image";
 import type { PeekResult } from "./api";
 import { colors } from "./theme";
 
 type Pending = { uri: string; exif: Record<string, unknown> | null };
+export type Shot = { uri: string; peek?: PeekResult };
 
-// Tekst bannera „szybkiego podglądu".
-function peekText(info: PeekResult | null): string {
+// Tekst oceny „szybkiego podglądu" (banner + galeria).
+function peekText(info: PeekResult | null | undefined): string {
+  if (info === undefined) return "— brak oceny (podgląd wył. lub w toku) —";
   if (!info) return "podgląd gotowy — pstryknij zdjęcie";
   if (!info.isMenu) return "⚠️ to nie wygląda na menu";
   const parts = [info.cuisine ? `🍽️ ${info.cuisine}` : "", info.restaurantName ? `📍 ${info.restaurantName}` : ""].filter(Boolean);
@@ -28,6 +40,7 @@ export function CameraCapture({
   onTogglePeek,
   peekInfo,
   peeking,
+  shots,
 }: {
   visible: boolean;
   count: number;
@@ -37,12 +50,15 @@ export function CameraCapture({
   onTogglePeek: (on: boolean) => void;
   peekInfo: PeekResult | null;
   peeking: boolean;
+  shots: Shot[];
 }) {
+  const { width, height } = useWindowDimensions();
   const ref = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false); // robienie zdjęcia
   const [saving, setSaving] = useState(false); // przetwarzanie „Użyj"
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
+  const [gallery, setGallery] = useState(false); // galeria zdjęć tej sesji
 
   useEffect(() => {
     if (visible && permission && !permission.granted && permission.canAskAgain) {
@@ -56,6 +72,7 @@ export function CameraCapture({
       setPending(null);
       setBusy(false);
       setSaving(false);
+      setGallery(false);
     }
   }, [visible]);
 
@@ -148,9 +165,22 @@ export function CameraCapture({
                 >
                   {busy ? <ActivityIndicator color="#000" /> : <View style={styles.shutterInner} />}
                 </Pressable>
-                <View style={styles.side}>
-                  <Text style={styles.counter}>{full ? "Maks." : `📸 ${count}`}</Text>
-                </View>
+                <Pressable
+                  style={[styles.side, styles.thumbSide]}
+                  onPress={() => shots.length > 0 && setGallery(true)}
+                  disabled={shots.length === 0}
+                >
+                  {shots.length > 0 ? (
+                    <View style={styles.thumbWrap}>
+                      <Image source={{ uri: shots[shots.length - 1]!.uri }} style={styles.thumb} />
+                      <View style={styles.thumbBadge}>
+                        <Text style={styles.thumbBadgeText}>{full ? "Max" : count}</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <Text style={styles.counter}>📸 0</Text>
+                  )}
+                </Pressable>
               </View>
             )}
           </>
@@ -171,6 +201,29 @@ export function CameraCapture({
             </Pressable>
           </View>
         )}
+
+        {/* Galeria sesji: przeglądanie zrobionych zdjęć + ocena „szybkiego podglądu" per zdjęcie. */}
+        {gallery && shots.length > 0 ? (
+          <View style={styles.galleryRoot}>
+            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+              {shots.map((s, i) => (
+                <View key={i} style={[styles.galleryPage, { width }]}>
+                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.6 }} resizeMode="contain" />
+                  <View style={styles.galleryCaption}>
+                    <Text style={styles.galleryIndex}>
+                      Zdjęcie {i + 1} / {shots.length}
+                    </Text>
+                    <Text style={styles.galleryPeek}>{peekText(s.peek)}</Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <Pressable style={styles.galleryClose} onPress={() => setGallery(false)} hitSlop={12}>
+              <Text style={styles.galleryCloseText}>✕</Text>
+            </Pressable>
+            <Text style={styles.galleryHint}>przesuń w bok, by przeglądać · ✕ zamyka</Text>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -245,4 +298,30 @@ const styles = StyleSheet.create({
   permBtnText: { color: colors.buttonText, fontWeight: "800", fontSize: 15 },
   permClose: { paddingHorizontal: 24, paddingVertical: 10 },
   permCloseText: { color: "#fff", fontSize: 14, opacity: 0.8 },
+  thumbSide: { alignItems: "flex-end" },
+  thumbWrap: { width: 46, height: 58, borderRadius: 8, overflow: "hidden", borderWidth: 2, borderColor: "#fff" },
+  thumb: { width: "100%", height: "100%" },
+  thumbBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 4,
+    backgroundColor: colors.accent,
+    borderWidth: 1.5,
+    borderColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumbBadgeText: { color: colors.buttonText, fontSize: 11, fontWeight: "800" },
+  galleryRoot: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.96)", justifyContent: "center" },
+  galleryPage: { alignItems: "center", justifyContent: "center" },
+  galleryCaption: { marginTop: 16, paddingHorizontal: 24, alignItems: "center" },
+  galleryIndex: { color: "#fff", fontSize: 13, fontWeight: "800", opacity: 0.8, marginBottom: 6 },
+  galleryPeek: { color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" },
+  galleryClose: { position: "absolute", top: 52, right: 24 },
+  galleryCloseText: { color: "#fff", fontSize: 26, fontWeight: "700" },
+  galleryHint: { position: "absolute", bottom: 36, alignSelf: "center", color: "#fff", fontSize: 12, opacity: 0.7 },
 });

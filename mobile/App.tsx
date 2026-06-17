@@ -142,6 +142,7 @@ export default function App() {
   const [peekEnabled, setPeekEnabled] = useState(true); // „szybki podgląd" na żywo (kuchnia/nazwa)
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
   const [peeking, setPeeking] = useState(false);
+  const [peekByUri, setPeekByUri] = useState<Record<string, PeekResult>>({}); // ocena peek per zdjęcie sesji
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -208,6 +209,7 @@ export default function App() {
     try {
       const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek);
       setPeekInfo(r);
+      setPeekByUri((prev) => ({ ...prev, [img.uri]: r })); // ocena dla tego konkretnego zdjęcia
       setHint((h) => (h.trim() ? h : r.restaurantName || h)); // nie nadpisuj, gdy user już coś wpisał
     } catch {
       // podgląd jest tylko pomocniczy — błąd ignorujemy
@@ -485,6 +487,8 @@ export default function App() {
     setRestaurantCtx(null);
     setVenueConfirmed(true);
     setVenueQuery("");
+    setPeekByUri({});
+    setPeekInfo(null);
   }
 
   async function lookupRestaurant(
@@ -1715,6 +1719,7 @@ export default function App() {
           onTogglePeek={togglePeek}
           peekInfo={peekInfo}
           peeking={peeking}
+          shots={images.map((img) => ({ uri: img.uri, peek: peekByUri[img.uri] }))}
         />
         <ApiErrorToast />
         <RenameModal
