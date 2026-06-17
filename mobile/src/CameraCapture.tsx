@@ -93,7 +93,9 @@ export function CameraCapture({
   // Gest pionowy w górę → zamknij galerię (poziome zostają dla pagera). Jak w Lightboxie.
   const galPan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy < -10 && Math.abs(g.dy) > Math.abs(g.dx),
+      // CAPTURE: rodzic łapie WYRAŹNY ruch w górę zanim przejmie go poziomy FlatList;
+      // poziome (przeglądanie) i drobne ruchy puszczamy dalej do pagera.
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy < -12 && Math.abs(g.dy) > Math.abs(g.dx) * 1.5,
       onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
         const dy = Math.min(0, g.dy);
@@ -264,7 +266,10 @@ export function CameraCapture({
 
         {/* Galeria sesji: przeglądanie zrobionych zdjęć + ocena „szybkiego podglądu" per zdjęcie. */}
         {gallery && shots.length > 0 ? (
-          <Animated.View style={[styles.galleryRoot, { opacity: galBg }]}>
+          <Animated.View
+            {...galPan.panHandlers}
+            style={[styles.galleryRoot, { opacity: galBg, transform: [{ translateY: galTranslateY }] }]}
+          >
             <FlatList
               ref={pagerRef}
               data={shots}
@@ -277,10 +282,7 @@ export function CameraCapture({
               keyExtractor={(_, i) => String(i)}
               onMomentumScrollEnd={(e) => setGalIdx(Math.round(e.nativeEvent.contentOffset.x / width))}
               renderItem={({ item, index }) => (
-                <Animated.View
-                  {...galPan.panHandlers}
-                  style={[styles.galleryPage, { width, transform: [{ translateY: galTranslateY }] }]}
-                >
+                <View style={[styles.galleryPage, { width }]}>
                   <Image source={{ uri: item.uri }} style={{ width: width * 0.9, height: height * 0.5 }} resizeMode="contain" />
                   <View style={styles.galleryCaption}>
                     <Text style={styles.galleryIndex}>
@@ -288,7 +290,7 @@ export function CameraCapture({
                     </Text>
                     <Text style={styles.galleryPeek}>{item.peeking ? "🔎 analizuję…" : peekText(item.peek)}</Text>
                   </View>
-                </Animated.View>
+                </View>
               )}
             />
 
