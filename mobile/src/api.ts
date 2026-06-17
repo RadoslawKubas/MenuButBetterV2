@@ -258,9 +258,25 @@ export interface DiagStats {
   totalCostUsd?: number;
   totalInputTokens?: number;
   totalOutputTokens?: number;
-  byModel?: { model: string | null; scans: number; cost: number }[];
+  byModel?: { model: string | null; calls: number; scans: number; cost: number; inputTokens: number; outputTokens: number }[];
+  byOp?: { op: string | null; calls: number; cost: number; inputTokens: number; outputTokens: number }[];
   byDay?: { day: string; scans: number }[];
+  recentErrors?: { at: string; provider: string | null; op: string | null; detail: string | null }[];
   errors?: number;
+}
+
+/** Surowe zdarzenie z trwałego logu (Postgres). */
+export interface DiagEvent {
+  id: string | number;
+  created_at: string;
+  type: string;
+  op: string | null;
+  model: string | null;
+  provider: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  data?: Record<string, unknown> | null;
 }
 
 export async function fetchStats(): Promise<DiagStats> {
@@ -270,10 +286,10 @@ export async function fetchStats(): Promise<DiagStats> {
   return json;
 }
 
-/** Surowe ostatnie zdarzenia z trwałego logu (do eksportu debug). */
-export async function fetchEvents(limit = 500): Promise<unknown[]> {
+/** Surowe ostatnie zdarzenia z trwałego logu (feed aktywności + eksport debug). */
+export async function fetchEvents(limit = 500): Promise<DiagEvent[]> {
   const res = await loggedFetch("events", `${API_BASE}/events?limit=${limit}`, { headers: jsonHeaders() });
-  const json = (await res.json()) as { events?: unknown[]; error?: string };
+  const json = (await res.json()) as { events?: DiagEvent[]; error?: string };
   if (!res.ok) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
   return json.events ?? [];
 }

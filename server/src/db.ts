@@ -91,8 +91,13 @@ export interface Stats {
   totalCostUsd?: number;
   totalInputTokens?: number;
   totalOutputTokens?: number;
-  byModel?: { model: string | null; scans: number; cost: number }[];
+  /** Koszt/tokeny per model po WSZYSTKICH zdarzeniach (skan + opisy + weryfikacja + venue). */
+  byModel?: { model: string | null; calls: number; scans: number; cost: number; inputTokens: number; outputTokens: number }[];
+  /** Koszt/tokeny per operacja (scan / dish-info / dish-photos / venue-photos). */
+  byOp?: { op: string | null; calls: number; cost: number; inputTokens: number; outputTokens: number }[];
   byDay?: { day: string; scans: number }[];
+  /** Ostatnie błędy z TRWAŁEGO logu (przeżywają redeploy). */
+  recentErrors?: { at: string; provider: string | null; op: string | null; detail: string | null }[];
   errors?: number;
 }
 
@@ -100,16 +105,26 @@ export interface Stats {
 export async function getStats(): Promise<Stats> {
   const p = getPool();
   if (!p || !ready) return { enabled: false };
-  const [scans, dishes, totals, byModel, byDay, errors, since] = await Promise.all([
+  const [scans, dishes, totals, byModel, byOp, byDay, errors, recentErrors, since] = await Promise.all([
     p.query(`SELECT count(*)::int AS n FROM events WHERE type='scan'`),
     p.query(`SELECT coalesce(sum((data->>'items')::int),0)::bigint AS n FROM events WHERE type='scan'`),
     p.query(`SELECT coalesce(sum(cost_usd),0) AS cost, coalesce(sum(input_tokens),0)::bigint AS i,
              coalesce(sum(output_tokens),0)::bigint AS o FROM events`),
-    p.query(`SELECT model, count(*)::int AS scans, coalesce(sum(cost_usd),0) AS cost
-             FROM events WHERE type='scan' GROUP BY model ORDER BY scans DESC`),
+    // Per MODEL po WSZYSTKICH zdarzeniach (nie tylko skan) — pełny koszt do porównań.
+    p.query(`SELECT model, count(*)::int AS calls, count(*) FILTER (WHERE type='scan')::int AS scans,
+             coalesce(sum(cost_usd),0) AS cost, coalesce(sum(input_tokens),0)::bigint AS i,
+             coalesce(sum(output_tokens),0)::bigint AS o
+             FROM events WHERE model IS NOT NULL GROUP BY model ORDER BY cost DESC`),
+    // Per OPERACJA (scan / dish-info / dish-photos / venue-photos) — gdzie idą pieniądze.
+    p.query(`SELECT op, count(*)::int AS calls, coalesce(sum(cost_usd),0) AS cost,
+             coalesce(sum(input_tokens),0)::bigint AS i, coalesce(sum(output_tokens),0)::bigint AS o
+             FROM events WHERE op IS NOT NULL GROUP BY op ORDER BY cost DESC`),
     p.query(`SELECT to_char(date_trunc('day', created_at),'YYYY-MM-DD') AS day, count(*)::int AS scans
              FROM events WHERE type='scan' GROUP BY day ORDER BY day DESC LIMIT 30`),
     p.query(`SELECT count(*)::int AS n FROM events WHERE type='error'`),
+    // Ostatnie błędy (trwałe) — do sekcji „🔴 Ostatnie błędy".
+    p.query(`SELECT to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at, provider, op, data->>'detail' AS detail
+             FROM events WHERE type='error' ORDER BY id DESC LIMIT 20`),
     p.query(`SELECT to_char(min(created_at),'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS s FROM events`),
   ]);
   return {
@@ -120,9 +135,24 @@ export async function getStats(): Promise<Stats> {
     totalCostUsd: Number(totals.rows[0].cost),
     totalInputTokens: Number(totals.rows[0].i),
     totalOutputTokens: Number(totals.rows[0].o),
-    byModel: byModel.rows.map((r) => ({ model: r.model, scans: r.scans, cost: Number(r.cost) })),
+    byModel: byModel.rows.map((r) => ({
+      model: r.model,
+      calls: r.calls,
+      scans: r.scans,
+      cost: Number(r.cost),
+      inputTokens: Number(r.i),
+      outputTokens: Number(r.o),
+    })),
+    byOp: byOp.rows.map((r) => ({
+      op: r.op,
+      calls: r.calls,
+      cost: Number(r.cost),
+      inputTokens: Number(r.i),
+      outputTokens: Number(r.o),
+    })),
     byDay: byDay.rows,
     errors: errors.rows[0].n,
+    recentErrors: recentErrors.rows.map((r) => ({ at: r.at, provider: r.provider, op: r.op, detail: r.detail })),
   };
 }
 
