@@ -72,6 +72,19 @@ export async function saveLangPref(lang: string): Promise<void> {
   await AsyncStorage.setItem(PREF_LANG_KEY, lang);
 }
 
+const PREF_HISTGROUP_KEY = "mbb.pref.histgroup.v1";
+export type HistoryGrouping = "city" | "date";
+
+/** Tryb listy historii: grupowanie po mieście albo płasko po dacie (zapamiętany). */
+export async function loadHistoryGrouping(): Promise<HistoryGrouping | null> {
+  const v = await AsyncStorage.getItem(PREF_HISTGROUP_KEY);
+  return v === "city" || v === "date" ? v : null;
+}
+
+export async function saveHistoryGrouping(v: HistoryGrouping): Promise<void> {
+  await AsyncStorage.setItem(PREF_HISTGROUP_KEY, v);
+}
+
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];

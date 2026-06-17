@@ -10,6 +10,17 @@ export async function getCurrentLocation(): Promise<GeoPoint> {
   return { lat: pos.coords.latitude, lng: pos.coords.longitude };
 }
 
+/** Odległość w metrach między dwoma punktami (haversine) — do grupy „w pobliżu". */
+export function distanceMeters(a: GeoPoint, b: GeoPoint): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const la1 = (a.lat * Math.PI) / 180;
+  const la2 = (b.lat * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 /** Zamienia współrzędne na „Miasto, Kraj" (na telefonie, bez klucza). Best-effort. */
 export async function reverseGeocode(geo: GeoPoint): Promise<string | undefined> {
   try {
