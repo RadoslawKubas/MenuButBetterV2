@@ -188,6 +188,12 @@ export default function App() {
     });
   }
 
+  // Ustawia WSZYSTKIE role naraz (presety / „ustaw wszędzie" / reset do domyślnych) + zapis.
+  function setModelsAll(next: Record<ModelRole, ModelId>) {
+    setModels(next);
+    void saveModelPrefs(next).catch(() => {});
+  }
+
   // Zmiana domyślnego języka tłumaczenia + zapamiętanie.
   function changeLang(lang: string) {
     setTargetLang(lang);
@@ -1335,6 +1341,7 @@ export default function App() {
           <SettingsView
             models={models}
             onChangeModel={changeModel}
+            onSetModels={setModelsAll}
             targetLang={targetLang}
             onChangeLang={changeLang}
             onOpenDiagnostics={() => setShowDiag(true)}

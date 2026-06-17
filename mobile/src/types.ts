@@ -164,16 +164,46 @@ export type ModelId =
 
 export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
 
-export const MODEL_OPTIONS: { id: ModelId; label: string; hint: string }[] = [
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "Claude · zbalansowany" },
-  { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Claude · najlepszy" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "Claude · najtańszy" },
-  { id: "gpt-5", label: "GPT-5", hint: "OpenAI · flagowy" },
-  { id: "gpt-5-mini", label: "GPT-5 mini", hint: "OpenAI · tańszy" },
-  { id: "gpt-5-nano", label: "GPT-5 nano", hint: "OpenAI · grosze" },
-  { id: "gemini-2.5-flash-lite", label: "Gemini Flash-Lite", hint: "Google · najtaniej" },
-  { id: "gemini-2.5-flash", label: "Gemini Flash", hint: "Google · tani vision" },
-  { id: "gemini-2.5-pro", label: "Gemini Pro", hint: "Google · najmocniejszy" },
+export type ModelProvider = "anthropic" | "openai" | "google";
+
+export const PROVIDER_LABELS: Record<ModelProvider, string> = {
+  anthropic: "Claude (Anthropic)",
+  openai: "OpenAI",
+  google: "Google Gemini",
+};
+
+// Provider w apiLog ("claude"/"openai"/"google") — do mapowania statusu klucza z /diagnostics.
+export const PROVIDER_DIAG_KEY: Record<ModelProvider, string> = {
+  anthropic: "claude",
+  openai: "openai",
+  google: "google",
+};
+
+// Ceny $/1M tokenów — lustro server/src/models.ts (podgląd kosztu przy wyborze modelu).
+export const MODEL_OPTIONS: {
+  id: ModelId;
+  label: string;
+  hint: string;
+  provider: ModelProvider;
+  price: { in: number; out: number };
+}[] = [
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "zbalansowany", provider: "anthropic", price: { in: 3, out: 15 } },
+  { id: "claude-opus-4-8", label: "Opus 4.8", hint: "najlepszy", provider: "anthropic", price: { in: 5, out: 25 } },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "najtańszy Claude", provider: "anthropic", price: { in: 1, out: 5 } },
+  { id: "gpt-5", label: "GPT-5", hint: "flagowy", provider: "openai", price: { in: 1.25, out: 10 } },
+  { id: "gpt-5-mini", label: "GPT-5 mini", hint: "tańszy", provider: "openai", price: { in: 0.25, out: 2 } },
+  { id: "gpt-5-nano", label: "GPT-5 nano", hint: "grosze", provider: "openai", price: { in: 0.05, out: 0.4 } },
+  { id: "gemini-2.5-flash-lite", label: "Gemini Flash-Lite", hint: "najtaniej", provider: "google", price: { in: 0.1, out: 0.4 } },
+  { id: "gemini-2.5-flash", label: "Gemini Flash", hint: "tani vision", provider: "google", price: { in: 0.3, out: 2.5 } },
+  { id: "gemini-2.5-pro", label: "Gemini Pro", hint: "najmocniejszy Google", provider: "google", price: { in: 1.25, out: 10 } },
+];
+
+// Gotowe zestawy (jeden tap → wszystkie 4 role tym samym modelem) — proste do porównań.
+export const MODEL_PRESETS: { id: string; label: string; desc: string; model: ModelId }[] = [
+  { id: "cheap", label: "Tani", desc: "Gemini Flash-Lite — grosze", model: "gemini-2.5-flash-lite" },
+  { id: "balanced", label: "Zbalansowany", desc: "Sonnet 4.6 wszędzie", model: "claude-sonnet-4-6" },
+  { id: "best", label: "Najlepszy", desc: "Opus 4.8 wszędzie", model: "claude-opus-4-8" },
+  { id: "gemini", label: "Gemini-test", desc: "Gemini Flash wszędzie", model: "gemini-2.5-flash" },
 ];
 
 // Języki tłumaczenia menu (wybór w Ustawieniach).
