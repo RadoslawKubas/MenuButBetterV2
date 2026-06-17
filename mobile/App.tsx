@@ -141,8 +141,8 @@ export default function App() {
   const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu (z podglądem zdjęcia)
   const [peekEnabled, setPeekEnabled] = useState(true); // „szybki podgląd" na żywo (kuchnia/nazwa)
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
-  const [peeking, setPeeking] = useState(false);
   const [peekByUri, setPeekByUri] = useState<Record<string, PeekResult>>({}); // ocena peek per zdjęcie sesji
+  const [peekingUris, setPeekingUris] = useState<string[]>([]); // które zdjęcia są AKTUALNIE analizowane (równolegle)
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -204,8 +204,10 @@ export default function App() {
   }
 
   // „Szybki podgląd": lekka ocena 1 zdjęcia (kuchnia/nazwa) tanim modelem; auto-wstawia nazwę do pola Lokal.
+  // Każde wywołanie jest NIEZALEŻNE (fire-and-forget) → analizy lecą RÓWNOLEGLE i nie
+  // przerywają się; wynik każdego dopisuje się po uri (galeria/banner aktualizują się na bieżąco).
   async function runPeek(img: PreparedImage) {
-    setPeeking(true);
+    setPeekingUris((p) => [...p, img.uri]);
     try {
       const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek);
       setPeekInfo(r);
@@ -214,7 +216,7 @@ export default function App() {
     } catch {
       // podgląd jest tylko pomocniczy — błąd ignorujemy
     } finally {
-      setPeeking(false);
+      setPeekingUris((p) => p.filter((u) => u !== img.uri));
     }
   }
 
@@ -489,6 +491,7 @@ export default function App() {
     setVenueQuery("");
     setPeekByUri({});
     setPeekInfo(null);
+    setPeekingUris([]);
   }
 
   async function lookupRestaurant(
@@ -1718,8 +1721,12 @@ export default function App() {
           peekEnabled={peekEnabled}
           onTogglePeek={togglePeek}
           peekInfo={peekInfo}
-          peeking={peeking}
-          shots={images.map((img) => ({ uri: img.uri, peek: peekByUri[img.uri] }))}
+          peeking={peekingUris.length > 0}
+          shots={images.map((img) => ({
+            uri: img.uri,
+            peek: peekByUri[img.uri],
+            peeking: peekingUris.includes(img.uri),
+          }))}
         />
         <ApiErrorToast />
         <RenameModal

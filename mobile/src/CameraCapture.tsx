@@ -20,7 +20,7 @@ import type { PeekResult } from "./api";
 import { colors } from "./theme";
 
 type Pending = { uri: string; exif: Record<string, unknown> | null };
-export type Shot = { uri: string; peek?: PeekResult };
+export type Shot = { uri: string; peek?: PeekResult; peeking?: boolean };
 
 // Tekst oceny „szybkiego podglądu" (banner + galeria).
 function peekText(info: PeekResult | null | undefined): string {
@@ -59,6 +59,8 @@ export function CameraCapture({
   const [saving, setSaving] = useState(false); // przetwarzanie „Użyj"
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
   const [gallery, setGallery] = useState(false); // galeria zdjęć tej sesji
+  const pagerRef = useRef<ScrollView>(null);
+  const [galIdx, setGalIdx] = useState(0); // bieżąca strona galerii (do paska miniatur)
 
   useEffect(() => {
     if (visible && permission && !permission.granted && permission.canAskAgain) {
@@ -167,12 +169,19 @@ export function CameraCapture({
                 </Pressable>
                 <Pressable
                   style={[styles.side, styles.thumbSide]}
-                  onPress={() => shots.length > 0 && setGallery(true)}
+                  onPress={() => {
+                    if (shots.length > 0) {
+                      setGalIdx(shots.length - 1);
+                      setGallery(true);
+                    }
+                  }}
                   disabled={shots.length === 0}
                 >
                   {shots.length > 0 ? (
-                    <View style={styles.thumbWrap}>
-                      <Image source={{ uri: shots[shots.length - 1]!.uri }} style={styles.thumb} />
+                    <View style={styles.thumbOuter}>
+                      <View style={styles.thumbWrap}>
+                        <Image source={{ uri: shots[shots.length - 1]!.uri }} style={styles.thumb} />
+                      </View>
                       <View style={styles.thumbBadge}>
                         <Text style={styles.thumbBadgeText}>{full ? "Max" : count}</Text>
                       </View>
@@ -205,23 +214,48 @@ export function CameraCapture({
         {/* Galeria sesji: przeglądanie zrobionych zdjęć + ocena „szybkiego podglądu" per zdjęcie. */}
         {gallery && shots.length > 0 ? (
           <View style={styles.galleryRoot}>
-            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+            <ScrollView
+              ref={pagerRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              style={{ flex: 1 }}
+              contentOffset={{ x: galIdx * width, y: 0 }}
+              onMomentumScrollEnd={(e) => setGalIdx(Math.round(e.nativeEvent.contentOffset.x / width))}
+            >
               {shots.map((s, i) => (
                 <View key={i} style={[styles.galleryPage, { width }]}>
-                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.6 }} resizeMode="contain" />
+                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.52 }} resizeMode="contain" />
                   <View style={styles.galleryCaption}>
                     <Text style={styles.galleryIndex}>
                       Zdjęcie {i + 1} / {shots.length}
                     </Text>
-                    <Text style={styles.galleryPeek}>{peekText(s.peek)}</Text>
+                    <Text style={styles.galleryPeek}>{s.peeking ? "🔎 analizuję…" : peekText(s.peek)}</Text>
                   </View>
                 </View>
               ))}
             </ScrollView>
+
             <Pressable style={styles.galleryClose} onPress={() => setGallery(false)} hitSlop={12}>
               <Text style={styles.galleryCloseText}>✕</Text>
             </Pressable>
-            <Text style={styles.galleryHint}>przesuń w bok, by przeglądać · ✕ zamyka</Text>
+
+            {/* Pasek miniatur do szybkiego przewijania (scroll, gdy się nie mieści). */}
+            <View style={styles.stripWrap}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
+                {shots.map((s, i) => (
+                  <Pressable
+                    key={i}
+                    onPress={() => pagerRef.current?.scrollTo({ x: i * width, animated: true })}
+                  >
+                    <Image
+                      source={{ uri: s.uri }}
+                      style={[styles.stripThumb, i === galIdx && styles.stripThumbActive]}
+                    />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
           </View>
         ) : null}
       </View>
@@ -299,6 +333,7 @@ const styles = StyleSheet.create({
   permClose: { paddingHorizontal: 24, paddingVertical: 10 },
   permCloseText: { color: "#fff", fontSize: 14, opacity: 0.8 },
   thumbSide: { alignItems: "flex-end" },
+  thumbOuter: { width: 46, height: 58, position: "relative" }, // bez overflow:hidden — badge może wystawać
   thumbWrap: { width: 46, height: 58, borderRadius: 8, overflow: "hidden", borderWidth: 2, borderColor: "#fff" },
   thumb: { width: "100%", height: "100%" },
   thumbBadge: {
@@ -323,5 +358,8 @@ const styles = StyleSheet.create({
   galleryPeek: { color: "#fff", fontSize: 16, fontWeight: "700", textAlign: "center" },
   galleryClose: { position: "absolute", top: 52, right: 24 },
   galleryCloseText: { color: "#fff", fontSize: 26, fontWeight: "700" },
-  galleryHint: { position: "absolute", bottom: 36, alignSelf: "center", color: "#fff", fontSize: 12, opacity: 0.7 },
+  stripWrap: { position: "absolute", left: 0, right: 0, bottom: 28 },
+  strip: { paddingHorizontal: 12, gap: 8, alignItems: "center" },
+  stripThumb: { width: 44, height: 56, borderRadius: 6, opacity: 0.5, borderWidth: 2, borderColor: "transparent" },
+  stripThumbActive: { opacity: 1, borderColor: "#fff" },
 });
