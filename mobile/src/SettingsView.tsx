@@ -27,7 +27,7 @@ function priceOf(id: ModelId): string {
 
 // Pełna mapa ról ustawiona na jeden model (presety / „ustaw wszędzie").
 function allRoles(model: ModelId): Record<ModelRole, ModelId> {
-  return { scan: model, describe: model, verify: model, venue: model };
+  return { scan: model, describe: model, verify: model, venue: model, peek: model };
 }
 
 export function SettingsView({

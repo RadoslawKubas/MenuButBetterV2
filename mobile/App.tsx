@@ -19,8 +19,10 @@ import {
   fetchDishPhotos,
   fetchRestaurant,
   fetchVenuePhotos,
+  quickPeek,
   placePhotoUrl,
   type VenueMatch,
+  type PeekResult,
 } from "./src/api";
 import { cacheImage, cachePhotos } from "./src/imageCache";
 import { mergeMenus } from "./src/mergeMenu";
@@ -47,6 +49,8 @@ import {
   saveModelPrefs,
   loadLangPref,
   saveLangPref,
+  loadPeekPref,
+  savePeekPref,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -135,6 +139,9 @@ export default function App() {
   const [useExifLocation, setUseExifLocation] = useState(true);
   const [showOptions, setShowOptions] = useState(false); // zwijane „Opcje skanu" (lokal + lokalizacja)
   const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu (z podglądem zdjęcia)
+  const [peekEnabled, setPeekEnabled] = useState(true); // „szybki podgląd" na żywo (kuchnia/nazwa)
+  const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
+  const [peeking, setPeeking] = useState(false);
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -181,11 +188,32 @@ export default function App() {
         if (l) setTargetLang(l);
       })
       .catch(() => {});
+    loadPeekPref().then(setPeekEnabled).catch(() => {});
   }, []);
+
+  function togglePeek(on: boolean) {
+    setPeekEnabled(on);
+    void savePeekPref(on).catch(() => {});
+  }
 
   // Przycisk „Aparat": zawsze nasz własny ekran aparatu (podgląd każdego zdjęcia + dodawanie serii).
   function openCamera() {
+    setPeekInfo(null); // świeża sesja podglądu
     setShowCamera(true);
+  }
+
+  // „Szybki podgląd": lekka ocena 1 zdjęcia (kuchnia/nazwa) tanim modelem; auto-wstawia nazwę do pola Lokal.
+  async function runPeek(img: PreparedImage) {
+    setPeeking(true);
+    try {
+      const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek);
+      setPeekInfo(r);
+      setHint((h) => (h.trim() ? h : r.restaurantName || h)); // nie nadpisuj, gdy user już coś wpisał
+    } catch {
+      // podgląd jest tylko pomocniczy — błąd ignorujemy
+    } finally {
+      setPeeking(false);
+    }
   }
 
   // Tryb seryjny: każde zdjęcie z własnego aparatu → przetwórz i dołóż (do limitu).
@@ -193,6 +221,7 @@ export default function App() {
     try {
       const img = await prepareCameraPhoto(uri, exif);
       setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, img]));
+      if (peekEnabled) void runPeek(img); // szybki podgląd w tle dla każdego zatrzymanego kadru
     } catch {
       // pojedyncze zdjęcie nie przeszło — ignoruj, można pstryknąć ponownie
     }
@@ -1682,6 +1711,10 @@ export default function App() {
           count={images.length}
           onCapture={onSerialCapture}
           onClose={() => setShowCamera(false)}
+          peekEnabled={peekEnabled}
+          onTogglePeek={togglePeek}
+          peekInfo={peekInfo}
+          peeking={peeking}
         />
         <ApiErrorToast />
         <RenameModal

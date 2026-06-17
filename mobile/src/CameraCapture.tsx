@@ -6,20 +6,37 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MAX_IMAGES } from "./image";
+import type { PeekResult } from "./api";
 import { colors } from "./theme";
 
 type Pending = { uri: string; exif: Record<string, unknown> | null };
+
+// Tekst bannera „szybkiego podglądu".
+function peekText(info: PeekResult | null): string {
+  if (!info) return "podgląd gotowy — pstryknij zdjęcie";
+  if (!info.isMenu) return "⚠️ to nie wygląda na menu";
+  const parts = [info.cuisine ? `🍽️ ${info.cuisine}` : "", info.restaurantName ? `📍 ${info.restaurantName}` : ""].filter(Boolean);
+  return parts.length ? parts.join("  ·  ") : "✓ wygląda na menu";
+}
 
 export function CameraCapture({
   visible,
   count,
   onCapture,
   onClose,
+  peekEnabled,
+  onTogglePeek,
+  peekInfo,
+  peeking,
 }: {
   visible: boolean;
   count: number;
   onCapture: (uri: string, exif?: Record<string, unknown> | null) => Promise<void>;
   onClose: () => void;
+  peekEnabled: boolean;
+  onTogglePeek: (on: boolean) => void;
+  peekInfo: PeekResult | null;
+  peeking: boolean;
 }) {
   const ref = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -90,6 +107,24 @@ export function CameraCapture({
               <Image source={{ uri: pending.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
             ) : null}
 
+            {/* Górny pasek: przełącznik „szybkiego podglądu" + banner z kontekstem. */}
+            <View style={styles.topBar}>
+              <Pressable
+                style={[styles.peekToggle, peekEnabled && styles.peekToggleOn]}
+                onPress={() => onTogglePeek(!peekEnabled)}
+              >
+                <Text style={styles.peekToggleText}>🔎 {peekEnabled ? "Podgląd wł." : "Podgląd wył."}</Text>
+              </Pressable>
+              {peekEnabled ? (
+                <View style={styles.peekBanner}>
+                  {peeking ? <ActivityIndicator color="#fff" size="small" /> : null}
+                  <Text style={styles.peekBannerText} numberOfLines={1}>
+                    {peeking ? "  analizuję…" : peekText(peekInfo)}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
             {pending ? (
               // Pasek decyzji: Ponów / Użyj (Użyj wraca do aparatu).
               <View style={styles.bar}>
@@ -144,6 +179,31 @@ export function CameraCapture({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   camera: { flex: 1 },
+  topBar: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingTop: 56,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(0,0,0,0.4)",
+  },
+  peekToggle: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  peekToggleOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  peekToggleText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  peekBanner: { flex: 1, flexDirection: "row", alignItems: "center" },
+  peekBannerText: { color: "#fff", fontSize: 13, fontWeight: "600", flexShrink: 1 },
   bar: {
     position: "absolute",
     left: 0,

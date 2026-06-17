@@ -20,6 +20,7 @@ import {
   type DishPhoto,
 } from "./dishPhotos.ts";
 import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
+import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
@@ -207,6 +208,32 @@ app.post("/dish-info", async (c) => {
   } catch (e) {
     console.error("dish-info error:", e);
     return c.json({ error: `Nie udało się pobrać informacji: ${(e as Error).message}` }, 502);
+  }
+});
+
+// „Szybki podgląd" — lekka ocena 1 zdjęcia na żywo z aparatu (kuchnia / nazwa / czy to menu).
+app.post("/quick-peek", async (c) => {
+  try {
+    const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string };
+    if (!body.image?.base64) return c.json({ error: "Brak zdjęcia." }, 400);
+    const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
+    const { result, usage } = await quickPeek(
+      { base64: body.image.base64, mediaType: body.image.mediaType || "image/jpeg" },
+      model,
+    );
+    logEvent({
+      type: "ai",
+      op: "quick-peek",
+      model,
+      provider: apiTag(model),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      costUsd: usage.costUsd,
+      data: { isMenu: result.isMenu, cuisine: result.cuisine },
+    });
+    return c.json({ ...result, usage });
+  } catch (e) {
+    return c.json({ error: `Podgląd nie powiódł się: ${(e as Error).message}` }, 502);
   }
 });
 

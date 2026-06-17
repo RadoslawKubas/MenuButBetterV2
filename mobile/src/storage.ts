@@ -96,6 +96,18 @@ export async function saveSerialCamPref(on: boolean): Promise<void> {
   await AsyncStorage.setItem(PREF_SERIALCAM_KEY, on ? "1" : "0");
 }
 
+const PREF_PEEK_KEY = "mbb.pref.peek.v1";
+
+/** „Szybki podgląd" w aparacie (na żywo kuchnia/nazwa) — zapamiętany. Domyślnie włączony. */
+export async function loadPeekPref(): Promise<boolean> {
+  const v = await AsyncStorage.getItem(PREF_PEEK_KEY);
+  return v === null ? true : v === "1"; // domyślnie wł.
+}
+
+export async function savePeekPref(on: boolean): Promise<void> {
+  await AsyncStorage.setItem(PREF_PEEK_KEY, on ? "1" : "0");
+}
+
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];

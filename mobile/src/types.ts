@@ -210,13 +210,14 @@ export const MODEL_PRESETS: { id: string; label: string; desc: string; model: Mo
 export const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
 
 // Miejsca, w których używamy modelu — każde można skonfigurować osobno (ekran Ustawienia).
-export type ModelRole = "scan" | "describe" | "verify" | "venue";
+export type ModelRole = "scan" | "describe" | "verify" | "venue" | "peek";
 
 export const MODEL_ROLES: { role: ModelRole; label: string; hint: string }[] = [
   { role: "scan", label: "Skan menu", hint: "Odczyt zdjęć menu → pozycje" },
   { role: "describe", label: "Opisy dań", hint: "Rozszerzone „więcej info”" },
   { role: "verify", label: "Weryfikacja zdjęć", hint: "Czy zdjęcie pasuje do dania" },
   { role: "venue", label: "Zdjęcia z lokalu", hint: "Dopasowanie foto z Google / TripAdvisor" },
+  { role: "peek", label: "Szybki podgląd (aparat)", hint: "Kuchnia/nazwa na żywo — tani, szybki model" },
 ];
 
 export const DEFAULT_MODELS: Record<ModelRole, ModelId> = {
@@ -224,4 +225,5 @@ export const DEFAULT_MODELS: Record<ModelRole, ModelId> = {
   describe: "claude-sonnet-4-6",
   verify: "claude-sonnet-4-6",
   venue: "claude-sonnet-4-6",
+  peek: "gpt-5-nano", // szybki podgląd: grosze, działa na kluczu OpenAI (bez billingu Gemini)
 };

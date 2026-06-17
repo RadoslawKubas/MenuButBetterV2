@@ -101,6 +101,31 @@ export interface DishInfoParams {
   model: ModelId;
 }
 
+export interface PeekResult {
+  isMenu: boolean;
+  cuisine: string;
+  restaurantName: string;
+}
+
+/** „Szybki podgląd" — lekka ocena 1 zdjęcia (kuchnia / nazwa / czy to menu). Tani model. */
+export async function quickPeek(
+  image: { base64: string; mediaType: string },
+  model: string,
+): Promise<PeekResult> {
+  const res = await loggedFetch("quick-peek", `${API_BASE}/quick-peek`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ image, model }),
+  });
+  const json = (await res.json()) as Partial<PeekResult> & { error?: string };
+  if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return {
+    isMenu: !!json.isMenu,
+    cuisine: json.cuisine ?? "",
+    restaurantName: json.restaurantName ?? "",
+  };
+}
+
 export async function fetchDishInfo(
   params: DishInfoParams,
 ): Promise<{ info: string; usage: Usage }> {
