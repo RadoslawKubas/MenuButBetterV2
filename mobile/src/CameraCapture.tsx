@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  FlatList,
   Image,
   Modal,
   PanResponder,
@@ -63,7 +64,7 @@ export function CameraCapture({
   const [saving, setSaving] = useState(false); // przetwarzanie „Użyj"
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
   const [gallery, setGallery] = useState(false); // galeria zdjęć tej sesji
-  const pagerRef = useRef<ScrollView>(null);
+  const pagerRef = useRef<FlatList<Shot>>(null);
   const [galIdx, setGalIdx] = useState(0); // bieżąca strona galerii (do paska miniatur)
   const galTranslateY = useRef(new Animated.Value(0)).current;
   const galBg = useRef(new Animated.Value(1)).current;
@@ -264,31 +265,32 @@ export function CameraCapture({
         {/* Galeria sesji: przeglądanie zrobionych zdjęć + ocena „szybkiego podglądu" per zdjęcie. */}
         {gallery && shots.length > 0 ? (
           <Animated.View style={[styles.galleryRoot, { opacity: galBg }]}>
-            <ScrollView
+            <FlatList
               ref={pagerRef}
+              data={shots}
               horizontal
               pagingEnabled
               showsHorizontalScrollIndicator={false}
               style={{ flex: 1 }}
-              contentOffset={{ x: galIdx * width, y: 0 }}
+              initialScrollIndex={Math.min(galIdx, shots.length - 1)}
+              getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
+              keyExtractor={(_, i) => String(i)}
               onMomentumScrollEnd={(e) => setGalIdx(Math.round(e.nativeEvent.contentOffset.x / width))}
-            >
-              {shots.map((s, i) => (
+              renderItem={({ item, index }) => (
                 <Animated.View
-                  key={i}
                   {...galPan.panHandlers}
                   style={[styles.galleryPage, { width, transform: [{ translateY: galTranslateY }] }]}
                 >
-                  <Image source={{ uri: s.uri }} style={{ width: width * 0.9, height: height * 0.5 }} resizeMode="contain" />
+                  <Image source={{ uri: item.uri }} style={{ width: width * 0.9, height: height * 0.5 }} resizeMode="contain" />
                   <View style={styles.galleryCaption}>
                     <Text style={styles.galleryIndex}>
-                      Zdjęcie {i + 1} / {shots.length}
+                      Zdjęcie {index + 1} / {shots.length}
                     </Text>
-                    <Text style={styles.galleryPeek}>{s.peeking ? "🔎 analizuję…" : peekText(s.peek)}</Text>
+                    <Text style={styles.galleryPeek}>{item.peeking ? "🔎 analizuję…" : peekText(item.peek)}</Text>
                   </View>
                 </Animated.View>
-              ))}
-            </ScrollView>
+              )}
+            />
 
             <Pressable style={styles.galleryClose} onPress={() => setGallery(false)} hitSlop={12}>
               <Text style={styles.galleryCloseText}>✕</Text>
@@ -304,7 +306,7 @@ export function CameraCapture({
             <View style={styles.stripWrap}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
                 {shots.map((s, i) => (
-                  <Pressable key={i} onPress={() => pagerRef.current?.scrollTo({ x: i * width, animated: true })}>
+                  <Pressable key={i} onPress={() => pagerRef.current?.scrollToOffset({ offset: i * width, animated: true })}>
                     <Image source={{ uri: s.uri }} style={[styles.stripThumb, i === galIdx && styles.stripThumbActive]} />
                   </Pressable>
                 ))}
