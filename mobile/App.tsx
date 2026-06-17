@@ -51,7 +51,7 @@ import {
 import {
   listCaptures,
   saveCapture,
-  updateCaptureScanId,
+  addCaptureRun,
   captureImageBase64,
   resolveCaptureUri,
   type ScanCapture,
@@ -355,7 +355,7 @@ export default function App() {
       const result = merged!;
 
       // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
-      if (capture && scanId) void updateCaptureScanId(capture.id, scanId).catch(() => {});
+      if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
 
       // Namierzenie lokalu: mamy nazwę → automatycznie po nazwie (pewne). Brak nazwy →
       // NIE zgadujemy po GPS automatycznie; ustawiamy tylko kontekst, a user kliknie.
@@ -1322,7 +1322,15 @@ export default function App() {
         {showDiag ? (
           <DiagnosticsView />
         ) : showCaptures ? (
-          <CapturesView onReplay={replayCapture} />
+          <CapturesView
+            onReplay={replayCapture}
+            scans={scans}
+            onOpenScan={(scan) => {
+              setShowCaptures(false);
+              setTab("history");
+              openSaved(scan);
+            }}
+          />
         ) : showSettings ? (
           <SettingsView
             models={models}

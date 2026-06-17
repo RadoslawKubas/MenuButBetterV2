@@ -33,6 +33,8 @@ export interface CaptureImage {
 export interface ScanCapture {
   id: string;
   createdAt: number; // epoch ms
+  /** Nazwa nadana przez użytkownika (do łatwego rozpoznania) — opcjonalna. */
+  name?: string;
   // — Podpowiedzi przekazane modelowi (część WEJŚCIA, nie zależą od wyboru modelu) —
   // UWAGA: język i model NIE są tu trzymane celowo — „Wyślij ponownie" robi nowy skan wg
   // AKTUALNYCH ustawień, a język/modele użyte do WYNIKU są przy powiązanym skanie w historii.
@@ -46,10 +48,19 @@ export interface ScanCapture {
   useDeviceLocation: boolean;
   // — Zdjęcia menu (wejście do modelu) —
   images: CaptureImage[];
-  /** Powiązany skan w historii — przez niego dołączamy WYNIK przy eksporcie. */
+  /** OSTATNI powiązany skan (back-compat + eksport bierze stąd WYNIK). */
   scanId?: string | null;
+  /** WSZYSTKIE przebiegi tego wejścia (po jednym na każdy „Przetłumacz menu" z tej migawki)
+   *  — hub porównań „to samo menu, różne modele". Najnowszy na końcu. */
+  runs?: { scanId: string; at: number }[];
   /** Sygnatura WEJŚCIA (zdjęcia + podpowiedzi + lokalizacja) — do dedupu identycznych migawek. */
   sig?: string;
+}
+
+/** Zwraca przebiegi migawki (z fallbackiem do starego pojedynczego scanId). */
+export function captureRuns(c: ScanCapture): { scanId: string; at: number }[] {
+  if (c.runs && c.runs.length) return c.runs;
+  return c.scanId ? [{ scanId: c.scanId, at: c.createdAt }] : [];
 }
 
 function newId(): string {
@@ -161,13 +172,57 @@ export async function saveCapture(input: {
   return capture;
 }
 
-/** Łączy migawkę z zapisanym skanem — przez niego eksport dołącza WYNIK skanu. */
-export async function updateCaptureScanId(id: string, scanId: string): Promise<void> {
+/** Dopisuje PRZEBIEG (nowy skan z tego wejścia) do migawki — hub porównań. Najnowszy = scanId. */
+export async function addCaptureRun(id: string, scanId: string): Promise<void> {
   const all = await listCaptures();
   const c = all.find((c) => c.id === id);
   if (!c) return;
-  c.scanId = scanId;
+  if (!c.runs) c.runs = c.scanId ? [{ scanId: c.scanId, at: c.createdAt }] : [];
+  // Nie dubluj, jeśli ten sam skan jest już ostatni (np. podwójny zapis).
+  if (c.runs[c.runs.length - 1]?.scanId !== scanId) c.runs.push({ scanId, at: Date.now() });
+  c.scanId = scanId; // „ostatni" — do eksportu i back-compat
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
+}
+
+/** Nadaje migawce nazwę (pusta = usuwa nazwę). */
+export async function renameCapture(id: string, name: string): Promise<void> {
+  const all = await listCaptures();
+  const c = all.find((c) => c.id === id);
+  if (!c) return;
+  c.name = name.trim() || undefined;
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+}
+
+/** Kasuje WSZYSTKIE migawki + ich pliki zdjęć (porządki). */
+export async function deleteAllCaptures(): Promise<void> {
+  const all = await listCaptures();
+  for (const cap of all) {
+    for (const im of cap.images) {
+      try {
+        const f = fileFor(im.path);
+        if (f?.exists) f.delete();
+      } catch {
+        /* plik mógł już zniknąć */
+      }
+    }
+  }
+  await AsyncStorage.setItem(KEY, JSON.stringify([]));
+}
+
+/** Suma rozmiaru zdjęć migawek na dysku (bajty) — do informacji o zajętym miejscu. */
+export function capturesDiskBytes(captures: ScanCapture[]): number {
+  let total = 0;
+  for (const c of captures) {
+    for (const im of c.images) {
+      try {
+        const f = fileFor(im.path);
+        if (f?.exists) total += f.size ?? 0;
+      } catch {
+        /* pomiń niedostępny plik */
+      }
+    }
+  }
+  return total;
 }
 
 export async function deleteCapture(id: string): Promise<void> {
