@@ -59,6 +59,8 @@ interface MetaCapture {
   locationHint?: string;
   location?: { lat: number; lng: number } | null;
   locationSource?: string | null;
+  /** Sygnatura WEJŚCIA migawki — stała dla tej samej treści, przeżywa ponowne eksporty. */
+  sig?: string;
   images: MetaImage[];
   result?: { restaurantName?: string | null; cuisine?: string; models?: Record<string, string>; menu?: unknown } | null;
 }
@@ -77,18 +79,26 @@ function loadMeta(): MetaCapture[] {
   return j.captures ?? [];
 }
 
-function gtPath(): string {
-  return join(EXPORT_DIR, "ground-truth.json");
-}
-function loadGroundTruth(): Record<string, GroundTruth> {
+// CENTRALNY zapis ground-truth (jeden plik dla wszystkich eksportów), KLUCZ = sig migawki.
+// Dzięki temu przypisany lokal trzyma się TREŚCI migawki i przeżywa ponowny eksport (nowy folder).
+const GT_CENTRAL = join(HERE, "ground-truth.json");
+type GTEntry = GroundTruth & { id?: string; capturedAt?: number };
+function loadGroundTruth(): Record<string, GTEntry> {
   try {
-    return JSON.parse(readFileSync(gtPath(), "utf8"));
+    return JSON.parse(readFileSync(GT_CENTRAL, "utf8"));
   } catch {
     return {};
   }
 }
-async function saveGroundTruth(gt: Record<string, GroundTruth>): Promise<void> {
-  await writeFile(gtPath(), JSON.stringify(gt, null, 2));
+async function saveGroundTruth(gt: Record<string, GTEntry>): Promise<void> {
+  await writeFile(GT_CENTRAL, JSON.stringify(gt, null, 2));
+}
+/** Ground-truth dla danej migawki — po sygnaturze (stabilnej), z fallbackiem po id. */
+function gtFor(cap: MetaCapture): GTEntry | null {
+  const store = loadGroundTruth();
+  if (cap.sig && store[cap.sig]) return store[cap.sig];
+  // fallback: stare wpisy mogły być kluczowane po id
+  return store[cap.id] ?? null;
 }
 
 function imageInput(cap: MetaCapture, idx = 0): InputImage | null {
@@ -273,7 +283,6 @@ app.get("/", (c) => c.html(readFileSync(join(HERE, "public", "index.html"), "utf
 
 app.get("/api/state", (c) => {
   const meta = loadMeta();
-  const gt = loadGroundTruth();
   const captures = meta.map((cap) => ({
     id: cap.id,
     name: cap.name ?? null,
@@ -286,7 +295,7 @@ app.get("/api/state", (c) => {
     result: cap.result
       ? { restaurantName: cap.result.restaurantName ?? null, cuisine: cap.result.cuisine ?? null }
       : null,
-    groundTruth: gt[cap.id] ?? null,
+    groundTruth: gtFor(cap),
   }));
   const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider, price: def.price }));
   return c.json({ exportDir: EXPORT_DIR, captures, models });
@@ -356,10 +365,15 @@ app.post("/api/places-search", async (c) => {
 
 app.post("/api/annotate", async (c) => {
   const { captureId, groundTruth } = await c.req.json<{ captureId: string; groundTruth: GroundTruth | null }>();
-  const gt = loadGroundTruth();
-  if (groundTruth) gt[captureId] = groundTruth;
-  else delete gt[captureId];
-  await saveGroundTruth(gt);
+  const cap = loadMeta().find((x) => x.id === captureId);
+  const key = cap?.sig || captureId; // po sygnaturze (stabilnej); fallback id
+  const store = loadGroundTruth();
+  if (groundTruth) store[key] = { ...groundTruth, id: captureId, capturedAt: cap?.createdAt };
+  else {
+    delete store[key];
+    delete store[captureId]; // sprzątnij też ewentualny stary wpis po id
+  }
+  await saveGroundTruth(store);
   return c.json({ ok: true });
 });
 
@@ -372,17 +386,17 @@ app.post("/api/run", async (c) => {
     name?: string;
   }>();
   const meta = loadMeta();
-  const gt = loadGroundTruth();
   const results: any[] = [];
   for (const id of captureIds) {
     const cap = meta.find((x) => x.id === id);
     if (!cap) continue;
-    const perCapture: any = { captureId: id, locationHint: cap.locationHint, groundTruth: gt[id] ?? null, byModel: {} };
+    const gtc = gtFor(cap);
+    const perCapture: any = { captureId: id, locationHint: cap.locationHint, groundTruth: gtc, byModel: {} };
     for (const model of models) {
       const m: any = {};
       try {
         if (operations.includes("peek")) m.peek = await opPeek(cap, model);
-        if (operations.includes("scan")) m.scan = await opScan(cap, model, !!withVenue, gt[id]);
+        if (operations.includes("scan")) m.scan = await opScan(cap, model, !!withVenue, gtc ?? undefined);
         if (operations.includes("describe")) m.describe = await opDescribe(cap, model);
         if (operations.includes("verify")) m.verify = await opVerify(cap, model);
         if (operations.includes("venuePhotos")) m.venuePhotos = await opVenuePhotos(cap, model);
