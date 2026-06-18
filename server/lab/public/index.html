@@ -58,7 +58,10 @@
 <div class="wrap">
   <div class="left">
     <div id="map"></div>
-    <div class="mut small" style="margin-bottom:8px">Migawki — zaznacz do testu (klik), 📍 oznacz prawdziwy lokal.</div>
+    <div class="mut small" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px">
+      <span>Migawki — klik = do testu · 📍 lokal · 🗄 archiwum</span>
+      <button id="archToggle" onclick="toggleShowArchived()" style="padding:3px 8px; font-size:12px"></button>
+    </div>
     <div id="captures"></div>
   </div>
 
@@ -115,7 +118,7 @@
 <script>
 const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
-let WITH_VENUE = false, PROMPTS = null;
+let WITH_VENUE = false, PROMPTS = null, SHOW_ARCHIVED = false;
 let LAST_RESULTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
@@ -162,14 +165,17 @@ async function togglePrompts(){
     </div>`).join('');
 }
 
+function visibleCaptures(){ return STATE.captures.filter(c => SHOW_ARCHIVED || !c.archived); }
 function renderCaptures() {
-  document.getElementById('captures').innerHTML = STATE.captures.map(c => {
+  const archN = STATE.captures.filter(c=>c.archived).length;
+  document.getElementById('archToggle').textContent = (SHOW_ARCHIVED?'ukryj':'pokaż')+` archiwum (${archN})`;
+  document.getElementById('captures').innerHTML = visibleCaptures().map(c => {
     const gt = c.groundTruth;
-    return `<div class="cap ${SELECTED.has(c.id)?'sel':''}" id="cap-${c.id}">
+    return `<div class="cap ${SELECTED.has(c.id)?'sel':''}" id="cap-${c.id}" style="${c.archived?'opacity:.6':''}">
       <div class="row">
         <img src="/api/image?id=${c.id}&n=0" onclick="event.stopPropagation();window.open('/api/image?id=${c.id}&n=0')" />
         <div class="meta" onclick="toggleSel('${c.id}')">
-          <div class="nm">${c.name || new Date(c.createdAt).toLocaleString()}</div>
+          <div class="nm">${c.archived?'🗄 ':''}${c.name || new Date(c.createdAt).toLocaleString()}</div>
           <div class="sub">${c.images} zdj · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
           <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
           <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
@@ -178,17 +184,22 @@ function renderCaptures() {
       <div style="margin-top:8px; display:flex; gap:6px">
         <button onclick="toggleSel('${c.id}')">${SELECTED.has(c.id)?'✓ w teście':'+ do testu'}</button>
         <button onclick="openAnnotate('${c.id}')">📍 Lokal</button>
+        ${c.archived
+          ? `<button onclick="archive('${c.id}',false)">♻︎ Przywróć</button>`
+          : `<button onclick="archive('${c.id}',true)">🗄 Archiwizuj</button>`}
       </div>
     </div>`;
   }).join('');
 }
 function toggleSel(id){ SELECTED.has(id)?SELECTED.delete(id):SELECTED.add(id); renderCaptures(); }
+function toggleShowArchived(){ SHOW_ARCHIVED=!SHOW_ARCHIVED; renderCaptures(); renderMap(); }
+async function archive(id,on){ if(on) SELECTED.delete(id); await api('/api/archive',{captureId:id, archived:on}); await loadState(); }
 
 function renderMap() {
   if (!map) { map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(map); }
   markers.forEach(m=>map.removeLayer(m)); markers=[];
   const pts=[];
-  STATE.captures.forEach(c=>{
+  visibleCaptures().forEach(c=>{
     if(c.location){ const m=L.marker([c.location.lat,c.location.lng]).addTo(map).bindPopup(`<b>${c.name||c.id}</b><br>${c.locationSource||''} ${c.locationHint||''}<br><img src="/api/image?id=${c.id}&n=0" width="120">`); markers.push(m); pts.push([c.location.lat,c.location.lng]); }
     const gt=c.groundTruth; if(gt&&gt.lat!=null){ const g=L.circleMarker([gt.lat,gt.lng],{radius:8,color:'#22c55e'}).addTo(map).bindPopup(`✓ prawda: <b>${gt.name}</b>`); markers.push(g); pts.push([gt.lat,gt.lng]); }
   });

@@ -101,6 +101,24 @@ function gtFor(cap: MetaCapture): GTEntry | null {
   return store[cap.id] ?? null;
 }
 
+// Archiwum migawek (schowane z listy, BEZ kasowania) — lista sygnatur, przeżywa re-eksport.
+const ARCHIVE_CENTRAL = join(HERE, "archived.json");
+function loadArchived(): string[] {
+  try {
+    const v = JSON.parse(readFileSync(ARCHIVE_CENTRAL, "utf8"));
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+async function saveArchived(list: string[]): Promise<void> {
+  await writeFile(ARCHIVE_CENTRAL, JSON.stringify([...new Set(list)], null, 2));
+}
+function isArchived(cap: MetaCapture): boolean {
+  const a = loadArchived();
+  return (!!cap.sig && a.includes(cap.sig)) || a.includes(cap.id);
+}
+
 function imageInput(cap: MetaCapture, idx = 0): InputImage | null {
   const im = cap.images[idx];
   if (!im) return null;
@@ -296,6 +314,7 @@ app.get("/api/state", (c) => {
       ? { restaurantName: cap.result.restaurantName ?? null, cuisine: cap.result.cuisine ?? null }
       : null,
     groundTruth: gtFor(cap),
+    archived: isArchived(cap),
   }));
   const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider, price: def.price }));
   return c.json({ exportDir: EXPORT_DIR, captures, models });
@@ -361,6 +380,17 @@ app.post("/api/places-search", async (c) => {
       lng: p.location?.longitude,
     })),
   });
+});
+
+app.post("/api/archive", async (c) => {
+  const { captureId, archived } = await c.req.json<{ captureId: string; archived: boolean }>();
+  const cap = loadMeta().find((x) => x.id === captureId);
+  const key = cap?.sig || captureId;
+  let list = loadArchived();
+  if (archived) list.push(key);
+  else list = list.filter((k) => k !== key && k !== captureId);
+  await saveArchived(list);
+  return c.json({ ok: true });
 });
 
 app.post("/api/annotate", async (c) => {
