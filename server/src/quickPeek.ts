@@ -29,12 +29,12 @@ const SCHEMA = {
   required: ["is_menu", "cuisine", "restaurant_name"],
 } as const;
 
-const SYSTEM =
+export const SYSTEM =
   "Rzucasz OKIEM na zdjęcie i szybko oceniasz kontekst — bez dokładnej analizy dań. " +
   "Podaj: czy to menu/karta dań, rodzaj kuchni oraz nazwę lokalu, jeśli widać ją na szyldzie, " +
   "nagłówku lub w stopce. Jeśli czegoś nie wiesz, zostaw puste ('').";
 
-const INSTRUCTION =
+export const INSTRUCTION =
   "Oceń to zdjęcie: is_menu (czy to menu), cuisine (rodzaj kuchni) i restaurant_name (nazwa lokalu, jeśli widoczna).";
 
 function parse(json: string | null): PeekResult {

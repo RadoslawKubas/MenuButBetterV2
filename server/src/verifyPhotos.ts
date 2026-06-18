@@ -30,6 +30,26 @@ function applyScores(jsonText: string, scores: number[]): void {
 // generyczny szum (zestawy, wnętrza, napoje) ≤0.45.
 export const MATCH_THRESHOLD = 0.6;
 
+export const VERIFY_SYSTEM =
+  "Jesteś ekspertem oceniającym, czy zdjęcie przedstawia konkretną pozycję z menu " +
+  "(jedzenie lub napój). Bezwzględnie odrzucasz wszystko, co nią nie jest: tekst, karty menu, " +
+  "mapy, rysunki, logo, budynki, wnętrza, ludzi, zwierzęta, przedmioty oraz inne dania/napoje.";
+
+export function verifyInstruction(dish: string, cuisine?: string): string {
+  const ctx = cuisine ? ` (kuchnia: ${cuisine})` : "";
+  return (
+    `Oceniasz, czy zdjęcie pokazuje pozycję z menu: „${dish}"${ctx} — faktyczne podane JEDZENIE albo NAPÓJ.\n` +
+    "Dla KAŻDEGO zdjęcia podaj index oraz match w skali 0..1.\n" +
+    "match=0.0, gdy zdjęcie NIE przedstawia tej pozycji ani niczego podobnego tego samego typu, w szczególności:\n" +
+    "- tekst / karta menu / jadłospis / dokument / szyld / paragon / cennik / ekran (nawet z nazwą dania),\n" +
+    "- mapa, wykres, rysunek, schemat, logo, grafika, ikona,\n" +
+    "- budynek / fasada / wnętrze / ludzie / zwierzę / roślina / krajobraz / przedmiot niezwiązany z jedzeniem,\n" +
+    "- INNA potrawa lub napój niż opisany (np. curry/chleb, gdy pozycja to woda lub napój gazowany).\n" +
+    "match>0.8 TYLKO, gdy wyraźnie widać właśnie tę pozycję (to danie albo ten napój).\n" +
+    "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja."
+  );
+}
+
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -100,21 +120,8 @@ export async function scoreDishPhotos(
   const valid = urls.map((_, i) => i).filter((i) => imgs[i]);
   if (valid.length === 0) return { scores, usage: ZERO_USAGE };
 
-  const ctx = opts.cuisine ? ` (kuchnia: ${opts.cuisine})` : "";
-  const instruction =
-    `Oceniasz, czy zdjęcie pokazuje pozycję z menu: „${dish}"${ctx} — faktyczne podane JEDZENIE albo NAPÓJ.\n` +
-    "Dla KAŻDEGO zdjęcia podaj index oraz match w skali 0..1.\n" +
-    "match=0.0, gdy zdjęcie NIE przedstawia tej pozycji ani niczego podobnego tego samego typu, w szczególności:\n" +
-    "- tekst / karta menu / jadłospis / dokument / szyld / paragon / cennik / ekran (nawet z nazwą dania),\n" +
-    "- mapa, wykres, rysunek, schemat, logo, grafika, ikona,\n" +
-    "- budynek / fasada / wnętrze / ludzie / zwierzę / roślina / krajobraz / przedmiot niezwiązany z jedzeniem,\n" +
-    "- INNA potrawa lub napój niż opisany (np. curry/chleb, gdy pozycja to woda lub napój gazowany).\n" +
-    "match>0.8 TYLKO, gdy wyraźnie widać właśnie tę pozycję (to danie albo ten napój).\n" +
-    "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja.";
-  const system =
-    "Jesteś ekspertem oceniającym, czy zdjęcie przedstawia konkretną pozycję z menu " +
-    "(jedzenie lub napój). Bezwzględnie odrzucasz wszystko, co nią nie jest: tekst, karty menu, " +
-    "mapy, rysunki, logo, budynki, wnętrza, ludzi, zwierzęta, przedmioty oraz inne dania/napoje.";
+  const instruction = verifyInstruction(dish, opts.cuisine);
+  const system = VERIFY_SYSTEM;
 
   try {
     if (isOpenAI) {

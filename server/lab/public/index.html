@@ -45,6 +45,7 @@
   .cand:hover { border-color:var(--acc); }
   .small { font-size:12px; }
   .num { font-variant-numeric: tabular-nums; }
+  pre.pre { white-space: pre-wrap; word-break: break-word; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px; font-size:12px; margin:4px 0 8px; max-height:200px; overflow:auto; }
 </style>
 
 <header>
@@ -67,9 +68,11 @@
       <div class="chips" id="models"></div>
     </div>
     <div class="panel">
-      <h3>2 · Operacje</h3>
+      <h3>2 · Operacje (modelowe)</h3>
       <div class="chips" id="ops"></div>
-      <div style="margin-top:8px" class="small mut">peek = szybki podgląd (kuchnia/nazwa); scan = pełny odczyt menu.</div>
+      <div style="margin-top:8px" class="small mut">peek=kuchnia/nazwa · scan=odczyt menu · describe=opisy dań · verify=ocena zdjęć · venuePhotos=Tier0 dopasowanie. describe/verify/venuePhotos używają ZAPISANEGO menu/lokalu z migawki. venueFind = Places + sprawdzenie ground‑truth (po skanie).</div>
+      <button style="margin-top:8px" onclick="togglePrompts()">👁 Podgląd promptów</button>
+      <div id="prompts"></div>
     </div>
     <div class="panel">
       <h3>3 · Uruchom</h3>
@@ -104,8 +107,11 @@
 </div>
 
 <script>
+const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
+let WITH_VENUE = false, PROMPTS = null;
 let LAST_RESULTS = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 async function api(path, body) {
   const res = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
@@ -129,13 +135,26 @@ function renderModels() {
   ).join('');
 }
 function renderOps() {
-  document.getElementById('ops').innerHTML = ['peek','scan'].map(o =>
-    `<div class="chip ${PICKED_OPS.has(o)?'on':''}" onclick="toggleOp('${o}')">${o}</div>`
-  ).join('') + `<div class="chip ${PICKED_OPS.has('venue')?'on':''}" onclick="toggleOp('venue')">venue (Places + ground‑truth)</div>`;
+  document.getElementById('ops').innerHTML =
+    MODEL_OPS.map(o => `<div class="chip ${PICKED_OPS.has(o)?'on':''}" onclick="toggleOp('${o}')">${o}</div>`).join('') +
+    `<div class="chip ${WITH_VENUE?'on':''}" onclick="toggleVenue()">+ venueFind (Places+GT)</div>`;
 }
 function toggleModel(id){ PICKED_MODELS.has(id)?PICKED_MODELS.delete(id):PICKED_MODELS.add(id); renderModels(); }
 function setJudge(id){ JUDGE_MODEL=id; renderModels(); }
 function toggleOp(o){ PICKED_OPS.has(o)?PICKED_OPS.delete(o):PICKED_OPS.add(o); renderOps(); }
+function toggleVenue(){ WITH_VENUE=!WITH_VENUE; renderOps(); }
+
+async function togglePrompts(){
+  const el=document.getElementById('prompts');
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  if(!PROMPTS) PROMPTS=await api('/api/prompts');
+  el.innerHTML = Object.entries(PROMPTS).map(([op,p])=>`
+    <div style="margin-top:8px; border-top:1px solid var(--line); padding-top:8px">
+      <b>${op}</b> ${p.note?`<span class="mut small">(${p.note})</span>`:''}
+      <div class="mut small" style="margin-top:4px">SYSTEM</div><pre class="pre">${esc(p.system)}</pre>
+      <div class="mut small">UŻYTKOWNIK (szablon)</div><pre class="pre">${esc(p.user)}</pre>
+    </div>`).join('');
+}
 
 function renderCaptures() {
   document.getElementById('captures').innerHTML = STATE.captures.map(c => {
@@ -188,7 +207,8 @@ async function annClear(){ await api('/api/annotate',{captureId:ANN_ID, groundTr
 async function run(){
   const ids=[...SELECTED]; if(!ids.length) return alert('Zaznacz migawki.');
   if(!PICKED_MODELS.size) return alert('Wybierz modele.');
-  const ops=[...PICKED_OPS].filter(o=>o!=='venue'); const withVenue=PICKED_OPS.has('venue');
+  const ops=[...PICKED_OPS]; const withVenue=WITH_VENUE;
+  if(!ops.length) return alert('Wybierz operacje.');
   const btn=document.getElementById('runBtn'); btn.disabled=true; document.getElementById('runInfo').textContent='liczę… (to może chwilę potrwać)';
   try{
     const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue});
@@ -197,22 +217,29 @@ async function run(){
   }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
 }
 
+function cellFor(op,r){
+  if(!r) return '';
+  if(!r.ok) return '<span class="mut">'+(r.error||'—')+'</span>';
+  const cost = r.cost!=null ? `<br><span class="mut num">$${r.cost.toFixed(4)} · ${r.ms}ms</span>` : '';
+  if(op==='peek') return `menu:${r.isMenu?'✓':'✗'} · ${r.cuisine||'—'} · ${r.restaurantName||'—'}${cost}`;
+  if(op==='scan'){ const vm=('venueMatch'in r)?(r.venueMatch?' <span class="pill ok">GT✓</span>':' <span class="pill no">GT✗</span>'):''; return `${r.restaurantName||'—'} · ${r.cuisine||'—'}<br>${r.sections}sek / <b>${r.items}</b> dań${r.venue?'<br>lokal: '+r.venue.name+vm:''}${cost}`; }
+  if(op==='describe') return `${r.count} opisy · ~${Math.round(r.dishes.reduce((a,d)=>a+d.len,0)/Math.max(1,r.count))} zn śr.${cost}`;
+  if(op==='verify') return `<b>${r.passed}</b>/${r.candidates} przeszło (próg 0.6)${cost}`;
+  if(op==='venuePhotos') return `<b>${r.matches}</b> trafień / pula ${r.pool}${cost}`;
+  return esc(JSON.stringify(r)).slice(0,80);
+}
 function renderResults(){
   const el=document.getElementById('results'); if(!LAST_RESULTS){el.innerHTML='';return;}
   el.innerHTML = LAST_RESULTS.map(cap=>{
     const c=STATE.captures.find(x=>x.id===cap.captureId);
     const models=Object.keys(cap.byModel);
-    const rows=models.map(mid=>{
-      const m=cap.byModel[mid]; const pk=m.peek, sc=m.scan;
-      const vm = sc&&'venueMatch'in sc ? (sc.venueMatch?'<span class="pill ok">trafił</span>':'<span class="pill no">pudło</span>') : '';
-      return `<tr>
-        <td><b>${mid}</b></td>
-        <td class="small">${pk?(pk.ok?`menu:${pk.isMenu?'✓':'✗'} · ${pk.cuisine||'—'} · ${pk.restaurantName||'—'}<br><span class="mut num">$${(pk.cost||0).toFixed(4)} · ${pk.ms}ms</span>`:'err'):''}</td>
-        <td class="small">${sc?(sc.ok?`${sc.restaurantName||'—'} · ${sc.cuisine||'—'}<br>${sc.sections} sek / <b>${sc.items}</b> dań<br><span class="mut num">$${(sc.cost||0).toFixed(4)} · ${sc.ms}ms</span>${sc.venue?`<br>lokal: ${sc.venue.name} ${vm}`:''}`:('err: '+(sc.error||'')) ):''}</td>
-      </tr>`;
+    const ops=[...new Set(models.flatMap(m=>Object.keys(cap.byModel[m]).filter(k=>k!=='error')))];
+    const head=`<tr><th>model</th>${ops.map(o=>`<th>${o}</th>`).join('')}</tr>`;
+    const rows=models.map(mid=>{ const m=cap.byModel[mid];
+      return `<tr><td><b>${mid}</b></td>${ops.map(o=>`<td class="small">${cellFor(o,m[o])}</td>`).join('')}</tr>`;
     }).join('');
     return `<div class="panel"><h3>${c?.name||cap.captureId} <span class="mut small">${cap.locationHint||''} ${cap.groundTruth?'· prawda: '+cap.groundTruth.name:''}</span></h3>
-      <table><thead><tr><th>model</th><th>peek</th><th>scan</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
 }
 

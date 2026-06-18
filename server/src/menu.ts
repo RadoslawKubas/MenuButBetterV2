@@ -46,7 +46,7 @@ export interface ExtractOptions {
   model?: ModelId;
 }
 
-const SYSTEM = [
+export const SYSTEM = [
   "Jesteś ekspertem kulinarnym i tłumaczem.",
   "Otrzymasz jedno lub WIELE zdjęć — to kolejne strony / fragmenty TEGO SAMEGO menu",
   "(mogą zawierać okładkę albo zdjęcie lokalu).",
@@ -85,7 +85,7 @@ const SYSTEM = [
 ].join(" ");
 
 // Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
-function contextText(opts: ExtractOptions, n: number): string {
+export function contextText(opts: ExtractOptions, n: number): string {
   return (
     `Język docelowy: ${opts.targetLang}.\n` +
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +

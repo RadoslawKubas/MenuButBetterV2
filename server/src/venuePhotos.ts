@@ -17,6 +17,25 @@ const MODEL = "claude-sonnet-4-6"; // domyślny model dopasowania (gdy nie podan
 // Próg pewności dopasowania danie↔zdjęcie. Niżej — zbyt luźne (ryzyko złego dania).
 const MATCH_MIN = 0.5;
 
+export const VENUE_SYSTEM =
+  "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
+  "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.";
+
+export function venueInstruction(dishes: string[], cuisine?: string): string {
+  const ctx = cuisine ? ` (kuchnia: ${cuisine})` : "";
+  return (
+    `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
+    "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
+    "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
+    "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
+    "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
+    "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
+    "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +
+    "LISTA MENU:\n" +
+    dishes.join(" | ")
+  );
+}
+
 export interface VenueTaPhoto {
   url: string;
   caption: string | null;
@@ -142,20 +161,8 @@ export async function matchVenuePhotos(
 
   const model = input.model || MODEL;
   const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
-  const ctx = input.cuisine ? ` (kuchnia: ${input.cuisine})` : "";
-  const instruction =
-    `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
-    "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
-    "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
-    "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
-    "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
-    "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
-    "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +
-    "LISTA MENU:\n" +
-    dishes.join(" | ");
-  const system =
-    "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
-    "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.";
+  const instruction = venueInstruction(dishes, input.cuisine);
+  const system = VENUE_SYSTEM;
 
   try {
     let jsonText: string | null = null;

@@ -18,7 +18,7 @@ export interface DishInfoInput {
   model?: ModelId;
 }
 
-const SYSTEM = [
+export const SYSTEM = [
   "Jesteś ekspertem kulinarnym znającym kuchnie świata i lokalne realia.",
   "Rozwiń wiedzę o KONKRETNYM daniu dla gościa danej restauracji.",
   "ZAWSZE uwzględnij podany kontekst: rodzaj kuchni oraz kraj/miasto lokalu.",
