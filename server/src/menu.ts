@@ -40,6 +40,8 @@ export interface ExtractOptions {
   restaurantHint?: string;
   /** „Miasto, Kraj" z GPS (EXIF/telefon) — pewny kontekst lokalizacji lokalu. */
   locationHint?: string;
+  /** Wstępnie rozpoznana kuchnia (z „szybkiego podglądu") — mocna wskazówka kontekstu. */
+  cuisineHint?: string;
   /** Model do użycia. Domyślnie Sonnet 4.6. */
   model?: ModelId;
 }
@@ -88,6 +90,10 @@ function contextText(opts: ExtractOptions, n: number): string {
     `Język docelowy: ${opts.targetLang}.\n` +
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
+    (opts.cuisineHint
+      ? `Wstępnie rozpoznana kuchnia (z szybkiego podglądu): ${opts.cuisineHint}. ` +
+        `Potraktuj to jako MOCNĄ wskazówkę kontekstu (zweryfikuj z treścią menu) — pomaga w interpretacji lokalnych/regionalnych nazw dań.\n`
+      : "") +
     `Połącz powyższe ${n} zdjęć w jedno menu.`
   );
 }

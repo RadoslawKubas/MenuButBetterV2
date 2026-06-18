@@ -358,14 +358,17 @@ export async function restaurantSiteImages(dish: string, domain: string, num = 6
  * do domen. Łapie generyczne/markowe pozycje (woda, 7UP, naan, ryż), których mała knajpa
  * nie ma na portalach. Wyniki traktujemy jako „typ dania" (poglądowe) i tak samo weryfikujemy.
  */
-export async function genericWebImages(dish: string, num = 6): Promise<DishPhoto[]> {
+export async function genericWebImages(dish: string, num = 6, cuisine?: string): Promise<DishPhoto[]> {
   const key = process.env.SERPER_KEY;
   if (!key) return [];
+  // Doklejenie kuchni (np. „green salad indian") podnosi trafność kandydatów → wyższe
+  // pokrycie po weryfikacji vision; dla nazw markowych (Coca-Cola) Google i tak to ignoruje.
+  const q = [dish, cuisine?.trim()].filter(Boolean).join(" ");
   try {
     const res = await trackedFetch("https://google.serper.dev/images", {
       method: "POST",
       headers: { "X-API-KEY": key, "Content-Type": "application/json" },
-      body: JSON.stringify({ q: dish, num }),
+      body: JSON.stringify({ q, num }),
     });
     if (!res.ok) return [];
     const json = (await res.json()) as SerperResponse;

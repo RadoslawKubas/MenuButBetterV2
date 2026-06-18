@@ -13,7 +13,10 @@ export interface PreparedImage {
   exifLocation?: GeoPoint;
 }
 
-const MAX_WIDTH = 1600; // wystarcza Claude do odczytu, a mocno tnie rozmiar
+// Wyższa rozdzielczość/jakość = lepszy OCR gęstych/małych czcionek i cen w menu.
+// 2000px @ 0.72 to dobry kompromis trafność↔rozmiar (zdjęcia z telefonu i tak są większe).
+const MAX_WIDTH = 2000;
+const JPEG_QUALITY = 0.72;
 // Górny, rozsądny limit liczby zdjęć na jeden skan (duże menu robimy partiami).
 export const MAX_IMAGES = 40;
 // Ile zdjęć leci do modelu w jednym wywołaniu (≤ limit serwera = 10). Większe menu
@@ -37,7 +40,7 @@ function exifToGeo(exif: Record<string, unknown> | undefined | null): GeoPoint |
 
 async function compress(uri: string, exif?: Record<string, unknown> | null): Promise<PreparedImage> {
   const ref = await ImageManipulator.manipulate(uri).resize({ width: MAX_WIDTH }).renderAsync();
-  const result = await ref.saveAsync({ compress: 0.6, format: SaveFormat.JPEG, base64: true });
+  const result = await ref.saveAsync({ compress: JPEG_QUALITY, format: SaveFormat.JPEG, base64: true });
   if (!result.base64) throw new Error("Nie udało się przygotować zdjęcia.");
   return {
     uri: result.uri,

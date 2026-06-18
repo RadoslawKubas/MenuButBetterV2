@@ -84,7 +84,7 @@ async function fetchPhotos(locId: string, lang: string, key: string): Promise<Tr
   const p = new URL(`${BASE}/location/${locId}/photos`);
   p.searchParams.set("key", key);
   p.searchParams.set("language", lang);
-  p.searchParams.set("limit", "12");
+  p.searchParams.set("limit", "20"); // większa pula → więcej realnych zdjęć dań do dopasowania (Tier 0)
   const r = await trackedFetch(p, { headers: taHeaders() });
   if (!r.ok) return [];
   const j = (await r.json()) as PhotosResponse;

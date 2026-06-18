@@ -204,6 +204,19 @@ export default function App() {
   }
 
   // „Szybki podgląd": lekka ocena 1 zdjęcia (kuchnia/nazwa) tanim modelem; auto-wstawia nazwę do pola Lokal.
+  // Najczęstsza kuchnia rozpoznana przez „szybki podgląd" (kontekst dla skanu).
+  function pickPeekCuisine(): string | undefined {
+    const counts = new Map<string, number>();
+    for (const r of Object.values(peekByUri)) {
+      const c = r.cuisine?.trim();
+      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    let bestN = 0;
+    for (const [c, n] of counts) if (n > bestN) ((best = c), (bestN = n));
+    return best ?? (peekInfo?.cuisine?.trim() || undefined);
+  }
+
   // Każde wywołanie jest NIEZALEŻNE (fire-and-forget) → analizy lecą RÓWNOLEGLE i nie
   // przerywają się; wynik każdego dopisuje się po uri (galeria/banner aktualizują się na bieżąco).
   async function runPeek(img: PreparedImage) {
@@ -385,6 +398,7 @@ export default function App() {
           targetLang: opts.targetLang,
           restaurantHint: batchHint,
           locationHint,
+          cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
           model: opts.models.scan,
         });
 

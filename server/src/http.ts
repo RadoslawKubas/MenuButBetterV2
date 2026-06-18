@@ -79,6 +79,7 @@ interface ScanBody {
   targetLang?: string;
   restaurantHint?: string;
   locationHint?: string;
+  cuisineHint?: string;
   model?: string;
 }
 
@@ -132,6 +133,7 @@ app.post("/scan", async (c) => {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
+        cuisineHint: body.cuisineHint?.trim() || undefined,
         model,
       });
       // Trwały log skanu — do statystyk „ile menu / dań / koszt per model".
@@ -418,7 +420,7 @@ app.post("/dish-photos", async (c) => {
   }> {
     const pool = Math.max(num * 2, 6);
     let provider = "Serper (web)";
-    let found = await genericWebImages(genericTerm, pool).catch(() => []);
+    let found = await genericWebImages(genericTerm, pool, cuisine).catch(() => []);
     if (found.length === 0) {
       provider = "Wikimedia";
       found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
@@ -526,7 +528,7 @@ app.post("/dish-photos", async (c) => {
 
     // TIER 2: SZEROKO z sieci (bez restauracji) — realne zdjęcia tego dania/produktu jako „typ dania".
     if (verify) {
-      const generic = await genericWebImages(genericTerm, 6);
+      const generic = await genericWebImages(genericTerm, 6, cuisine);
       if (generic.length > 0) {
         const { passing, scored } = await keepMatching(generic, genericTerm);
         dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length, candidates: candScoredOf(scored) });

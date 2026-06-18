@@ -67,6 +67,8 @@ export interface ScanParams {
   restaurantHint?: string;
   /** „Miasto, Kraj" z GPS — daje modelowi pewny kontekst gdzie jest lokal. */
   locationHint?: string;
+  /** Wstępnie rozpoznana kuchnia (z „szybkiego podglądu") — mocna wskazówka kontekstu. */
+  cuisineHint?: string;
   model: ModelId;
 }
 
@@ -79,6 +81,7 @@ export async function scanMenu(params: ScanParams): Promise<{ menu: Menu; usage:
       targetLang: params.targetLang,
       restaurantHint: params.restaurantHint,
       locationHint: params.locationHint,
+      cuisineHint: params.cuisineHint,
       model: params.model,
     }),
   });

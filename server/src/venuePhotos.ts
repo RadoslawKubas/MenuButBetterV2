@@ -128,7 +128,7 @@ export async function matchVenuePhotos(
     }),
   );
   await Promise.all(
-    input.taPhotos.slice(0, 12).map(async (p) => {
+    input.taPhotos.slice(0, 20).map(async (p) => {
       const img = await fetchB64(p.url);
       if (img) items.push({ source: "tripadvisor", url: p.url, caption: p.caption, img });
     }),
