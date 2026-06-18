@@ -108,6 +108,41 @@ export async function savePeekPref(on: boolean): Promise<void> {
   await AsyncStorage.setItem(PREF_PEEK_KEY, on ? "1" : "0");
 }
 
+const PREF_COST_KEY = "mbb.pref.cost.v1";
+
+/** Kontrola AUTOMATYCZNEGO (masowego) kosztu po skanie. „Na dotknięcie" działa zawsze. */
+export interface CostPrefs {
+  /** Auto-generowanie rozszerzonych opisów dla wszystkich dań po skanie. */
+  autoDescriptions: boolean;
+  /** Auto-dociąganie zdjęć poglądowych dla wszystkich dań po skanie. */
+  autoPhotos: boolean;
+  /** Auto-dopasowanie zdjęć z lokalu (Tier 0) po namierzeniu lokalu. */
+  autoVenuePhotos: boolean;
+  /** Limit dań objętych auto-dociąganiem (0 = wszystkie). Reszta tylko na dotknięcie. */
+  autoLimit: number;
+}
+
+export const DEFAULT_COST_PREFS: CostPrefs = {
+  autoDescriptions: true,
+  autoPhotos: true,
+  autoVenuePhotos: true,
+  autoLimit: 0,
+};
+
+export async function loadCostPrefs(): Promise<CostPrefs> {
+  const raw = await AsyncStorage.getItem(PREF_COST_KEY);
+  if (!raw) return DEFAULT_COST_PREFS;
+  try {
+    return { ...DEFAULT_COST_PREFS, ...(JSON.parse(raw) as Partial<CostPrefs>) };
+  } catch {
+    return DEFAULT_COST_PREFS;
+  }
+}
+
+export async function saveCostPrefs(prefs: CostPrefs): Promise<void> {
+  await AsyncStorage.setItem(PREF_COST_KEY, JSON.stringify(prefs));
+}
+
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];

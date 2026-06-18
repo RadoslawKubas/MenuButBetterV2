@@ -107,13 +107,19 @@ function detect(u: string): { provider: Provider; op: string } {
   return { provider, op };
 }
 
+// Timeout dla zewnętrznych fetchy (Serper/Places/TripAdvisor itd.) — zawieszony upstream
+// nie blokuje requestu w nieskończoność. SDK Anthropic/OpenAI mają własne timeouty (nie tędy).
+const FETCH_TIMEOUT_MS = 10000;
+
 /** Drop-in zamiennik `fetch` dla wywołań zewnętrznych — sam wykrywa providera z URL i loguje. */
 export async function trackedFetch(input: string | URL, init?: RequestInit, op?: string): Promise<Response> {
   const urlStr = typeof input === "string" ? input : input.toString();
   const d = detect(urlStr);
   const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(input, init);
+    const res = await fetch(input, { ...init, signal: init?.signal ?? ctrl.signal });
     let detail: string | undefined;
     if (!res.ok) {
       // Dołóż fragment treści odpowiedzi — pozwala sklasyfikować błąd (quota/klucz/itp.).
@@ -123,8 +129,11 @@ export async function trackedFetch(input: string | URL, init?: RequestInit, op?:
     record(d.provider, op ?? d.op, res.ok, Date.now() - t0, detail);
     return res;
   } catch (e) {
-    record(d.provider, op ?? d.op, false, Date.now() - t0, (e as Error)?.message ?? String(e));
+    const msg = ctrl.signal.aborted ? `timeout ${FETCH_TIMEOUT_MS}ms` : (e as Error)?.message ?? String(e);
+    record(d.provider, op ?? d.op, false, Date.now() - t0, msg);
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

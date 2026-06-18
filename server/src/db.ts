@@ -99,6 +99,9 @@ export interface Stats {
   /** Ostatnie błędy z TRWAŁEGO logu (przeżywają redeploy). */
   recentErrors?: { at: string; provider: string | null; op: string | null; detail: string | null }[];
   errors?: number;
+  /** Dzisiejszy koszt $ i dzienny budżet (gdy ustawiony) — do hamulca i podglądu. */
+  todayCostUsd?: number;
+  dailyBudgetUsd?: number | null;
 }
 
 /** Agregaty do ekranu statystyk / eksportu. */
@@ -154,7 +157,42 @@ export async function getStats(): Promise<Stats> {
     byDay: byDay.rows,
     errors: errors.rows[0].n,
     recentErrors: recentErrors.rows.map((r) => ({ at: r.at, provider: r.provider, op: r.op, detail: r.detail })),
+    todayCostUsd: await getTodayCostUsd(),
+    dailyBudgetUsd: dailyBudgetUsd(),
   };
+}
+
+// --- Dzienny budżet $ (twardy hamulec na rachunek) ---------------------------------------
+let todayCache: { at: number; cost: number } | null = null;
+
+/** Dzisiejszy koszt $ (sum cost_usd od północy UTC). Cache 15 s, by nie pytać DB co wywołanie. */
+export async function getTodayCostUsd(): Promise<number> {
+  const p = getPool();
+  if (!p || !ready) return 0;
+  if (todayCache && Date.now() - todayCache.at < 15000) return todayCache.cost;
+  try {
+    const r = await p.query(
+      `SELECT coalesce(sum(cost_usd),0) AS c FROM events WHERE created_at >= date_trunc('day', now())`,
+    );
+    const cost = Number(r.rows[0].c);
+    todayCache = { at: Date.now(), cost };
+    return cost;
+  } catch {
+    return todayCache?.cost ?? 0;
+  }
+}
+
+/** Budżet dzienny $ z env DAILY_BUDGET_USD (null = brak limitu). */
+export function dailyBudgetUsd(): number | null {
+  const n = process.env.DAILY_BUDGET_USD ? Number(process.env.DAILY_BUDGET_USD) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Czy przekroczono dzienny budżet (gdy ustawiony). Bez DB / bez budżetu → nigdy. */
+export async function budgetExceeded(): Promise<boolean> {
+  const budget = dailyBudgetUsd();
+  if (budget == null) return false;
+  return (await getTodayCostUsd()) >= budget;
 }
 
 /** Ostatnie surowe zdarzenia (do eksportu/debug). */

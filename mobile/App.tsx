@@ -51,6 +51,10 @@ import {
   saveLangPref,
   loadPeekPref,
   savePeekPref,
+  loadCostPrefs,
+  saveCostPrefs,
+  DEFAULT_COST_PREFS,
+  type CostPrefs,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -66,6 +70,7 @@ import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
 import { CapturesView } from "./src/CapturesView";
 import { SettingsView } from "./src/SettingsView";
+import { PricingView } from "./src/PricingView";
 import { CameraCapture } from "./src/CameraCapture";
 import { ApiErrorToast } from "./src/Toast";
 import { friendlyMessage } from "./src/appLog";
@@ -143,6 +148,8 @@ export default function App() {
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
   const [peekByUri, setPeekByUri] = useState<Record<string, PeekResult>>({}); // ocena peek per zdjęcie sesji
   const [peekingUris, setPeekingUris] = useState<string[]>([]); // które zdjęcia są AKTUALNIE analizowane (równolegle)
+  const [costPrefs, setCostPrefs] = useState<CostPrefs>(DEFAULT_COST_PREFS); // kontrola auto-kosztu po skanie
+  const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -190,7 +197,13 @@ export default function App() {
       })
       .catch(() => {});
     loadPeekPref().then(setPeekEnabled).catch(() => {});
+    loadCostPrefs().then(setCostPrefs).catch(() => {});
   }, []);
+
+  function changeCostPrefs(next: CostPrefs) {
+    setCostPrefs(next);
+    void saveCostPrefs(next).catch(() => {});
+  }
 
   function togglePeek(on: boolean) {
     setPeekEnabled(on);
@@ -460,9 +473,9 @@ export default function App() {
       }
 
       // Tło, równolegle z automatu: (a) tanie zdjęcia poglądowe, (b) pełne opisy dań
-      // (gotowe ad-hoc). Lepsze zdjęcia dociągają się dopiero przy wejściu w danie.
-      void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
-      void fillDescriptions(result, scanId!, opts.targetLang, setMenu);
+      // (gotowe ad-hoc). Sterowane „Kosztami": wyłączniki + limit dań (reszta na dotknięcie).
+      if (costPrefs.autoPhotos) void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
+      if (costPrefs.autoDescriptions) void fillDescriptions(result, scanId!, opts.targetLang, setMenu);
     } catch (e) {
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
@@ -568,7 +581,7 @@ export default function App() {
       // zdjęć Z TEGO LOKALU dla dań bez potwierdzonego (★). Gdy lokal się ZMIENIŁ na inny,
       // zdejmij najpierw nieaktualne ★ (z poprzedniego lokalu), by potwierdzić od nowa.
       const baseForUpgrade = await rebaseVenue(m, scanId, applyMenu, prevVenue, r);
-      void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+      if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
     } catch {
       // ciche niepowodzenie — karta lokalu po prostu się nie pokaże
     } finally {
@@ -589,7 +602,7 @@ export default function App() {
     }
     // Wybrano (być może INNY) lokal → zdejmij nieaktualne ★ ze starego i doszukaj z nowego.
     const baseForUpgrade = await rebaseVenue(menu, scanId, applyMenu, prevVenue, choice);
-    void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+    if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
   }
 
   // Wyszukanie lokalu PO NAZWIE (na przycisk) — używa nazwy z menu + zapamiętanej/EXIF
@@ -980,6 +993,7 @@ export default function App() {
           jobs.push({ si, ii, name: it.original, photoQuery: it.photo_query });
       }),
     );
+    if (costPrefs.autoLimit > 0) jobs.length = Math.min(jobs.length, costPrefs.autoLimit); // limit auto-dociągania
 
     const eff = modelsForScan(scanId); // weryfikacja zdjęć — model zamrożony z tego menu
     const CONCURRENCY = 4;
@@ -1153,6 +1167,7 @@ export default function App() {
         if (it && !it.extraInfo) jobs.push({ si, ii, name: it.original, desc: it.description });
       }),
     );
+    if (costPrefs.autoLimit > 0) jobs.length = Math.min(jobs.length, costPrefs.autoLimit); // limit auto-dociągania
 
     const CONCURRENCY = 3;
     let next = 0;
@@ -1235,8 +1250,8 @@ export default function App() {
       );
 
       // Dociągnij dla NOWYCH pozycji (bez photos/opisu): tanie zdjęcia + pełne opisy.
-      void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
-      void fillDescriptions(merged, scanId, scanLang, applyMenu);
+      if (costPrefs.autoPhotos) void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
+      if (costPrefs.autoDescriptions) void fillDescriptions(merged, scanId, scanLang, applyMenu);
     } catch (e) {
       Alert.alert("Nie udało się dodać", friendlyMessage(e instanceof Error ? e.message : undefined));
     } finally {
@@ -1370,16 +1385,18 @@ export default function App() {
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <Text style={styles.brand}>MenuButBetter</Text>
-            {showDiag || showCaptures || showSettings || showingDetail ? (
+            {showDiag || showCaptures || showPricing || showSettings || showingDetail ? (
               <Pressable
                 onPress={() =>
                   showDiag
                     ? setShowDiag(false)
                     : showCaptures
                       ? setShowCaptures(false)
-                      : showSettings
-                        ? setShowSettings(false)
-                        : setOpenScan(null)
+                      : showPricing
+                        ? setShowPricing(false)
+                        : showSettings
+                          ? setShowSettings(false)
+                          : setOpenScan(null)
                 }
                 style={styles.navBtn}
               >
@@ -1391,7 +1408,7 @@ export default function App() {
               </Pressable>
             )}
           </View>
-          {!(showDiag || showCaptures || showSettings || showingDetail) ? (
+          {!(showDiag || showCaptures || showPricing || showSettings || showingDetail) ? (
             <View style={styles.tabs}>
               <Pressable onPress={() => setTab("scan")}>
                 <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skanuj</Text>
@@ -1407,6 +1424,8 @@ export default function App() {
 
         {showDiag ? (
           <DiagnosticsView />
+        ) : showPricing ? (
+          <PricingView />
         ) : showCaptures ? (
           <CapturesView
             onReplay={replayCapture}
@@ -1424,8 +1443,11 @@ export default function App() {
             onSetModels={setModelsAll}
             targetLang={targetLang}
             onChangeLang={changeLang}
+            costPrefs={costPrefs}
+            onChangeCostPrefs={changeCostPrefs}
             onOpenDiagnostics={() => setShowDiag(true)}
             onOpenCaptures={() => setShowCaptures(true)}
+            onOpenPricing={() => setShowPricing(true)}
             capturesCount={captures.length}
           />
         ) : (

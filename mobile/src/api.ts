@@ -291,6 +291,8 @@ export interface DiagStats {
   byDay?: { day: string; scans: number }[];
   recentErrors?: { at: string; provider: string | null; op: string | null; detail: string | null }[];
   errors?: number;
+  todayCostUsd?: number;
+  dailyBudgetUsd?: number | null;
 }
 
 /** Surowe zdarzenie z trwałego logu (Postgres). */

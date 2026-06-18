@@ -24,7 +24,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
-import { initDb, logEvent, getStats, getRecentEvents } from "./db.ts";
+import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
 const app = new Hono();
@@ -84,6 +84,16 @@ interface ScanBody {
 }
 
 /** Normalizuje wejście (tablica lub pojedyncze) do InputImage[]. Rzuca przy błędzie. */
+// Limit łącznego base64 zdjęć w jednym żądaniu (~25 MB zdekodowane ≈ 34M znaków base64) —
+// zabezpieczenie przed przypadkowym ogromnym payloadem (pamięć/koszt). NIE ogranicza normalnego
+// użycia (40 zdjęć po ~0.5 MB = ~27M znaków base64, mieści się).
+const MAX_TOTAL_BASE64 = 36_000_000;
+
+/** Komunikat o przekroczeniu dziennego budżetu (twardy hamulec). */
+function budgetMsg(): string {
+  return `Dzienny budżet ($${dailyBudgetUsd()}) przekroczony — AI wstrzymane do jutra. Zmień DAILY_BUDGET_USD na serwerze lub poczekaj.`;
+}
+
 function parseImages(body: ScanBody): InputImage[] {
   const raw: ImageInput[] = body.images?.length
     ? body.images
@@ -92,7 +102,8 @@ function parseImages(body: ScanBody): InputImage[] {
   if (raw.length === 0) throw new Error("Brak zdjęć.");
   if (raw.length > MAX_IMAGES) throw new Error(`Maksymalnie ${MAX_IMAGES} zdjęć na skan.`);
 
-  return raw.map((img, i) => {
+  let totalB64 = 0;
+  const out = raw.map((img, i) => {
     const b64 = img.base64 ?? img.imageBase64;
     if (!b64) throw new Error(`Zdjęcie ${i + 1}: brak base64.`);
     if (!img.mediaType || !ALLOWED_MEDIA.has(img.mediaType as MediaType)) {
@@ -100,8 +111,13 @@ function parseImages(body: ScanBody): InputImage[] {
     }
     // Akceptujemy też data-URL (data:image/...;base64,XXXX) — odcinamy nagłówek.
     const data = b64.includes(",") ? b64.split(",")[1]! : b64;
+    totalB64 += data.length;
     return { base64: data, mediaType: img.mediaType as MediaType };
   });
+  if (totalB64 > MAX_TOTAL_BASE64) {
+    throw new Error("Zdjęcia są za duże (łącznie). Zmniejsz liczbę/rozmiar zdjęć i spróbuj ponownie.");
+  }
+  return out;
 }
 
 app.post("/scan", async (c) => {
@@ -118,6 +134,8 @@ app.post("/scan", async (c) => {
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400);
   }
+
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
 
   // Odpowiedź STRUMIENIOWA: w trakcie generowania (które przy wielu stronach trwa
   // >60 s) wysyłamy co kilka sekund spację — utrzymuje połączenie, żeby iOS nie
@@ -177,6 +195,7 @@ interface DishInfoBody {
 }
 
 app.post("/dish-info", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   let body: DishInfoBody;
   try {
     body = await c.req.json<DishInfoBody>();
@@ -215,6 +234,7 @@ app.post("/dish-info", async (c) => {
 
 // „Szybki podgląd" — lekka ocena 1 zdjęcia na żywo z aparatu (kuchnia / nazwa / czy to menu).
 app.post("/quick-peek", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   try {
     const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string };
     if (!body.image?.base64) return c.json({ error: "Brak zdjęcia." }, 400);
@@ -334,6 +354,7 @@ function stripAlnum(s: string): string {
 }
 
 app.post("/dish-photos", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   let body: DishPhotosBody;
   try {
     body = await c.req.json<DishPhotosBody>();
@@ -615,6 +636,7 @@ app.get("/events", async (c) => {
 
 // Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
 app.post("/venue-photos", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   try {
     const body = (await c.req.json()) as {
       photoNames?: string[];
