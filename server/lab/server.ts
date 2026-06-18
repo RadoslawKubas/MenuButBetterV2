@@ -12,7 +12,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
@@ -489,6 +489,31 @@ app.post("/api/archive", async (c) => {
   if (archived) list.push(key);
   else list = list.filter((k) => k !== key && k !== captureId);
   await saveArchived(list);
+  return c.json({ ok: true });
+});
+
+// TRWAŁE usunięcie sampla z biblioteki (zdjęcia + metadane + ground-truth + wpis archiwum).
+app.post("/api/delete", async (c) => {
+  const { captureId } = await c.req.json<{ captureId: string }>();
+  const caps = loadMeta();
+  const cap = caps.find((x) => x.id === captureId);
+  if (cap) {
+    for (const im of cap.images ?? []) {
+      try {
+        const f = join(LIBRARY, im.file);
+        if (existsSync(f)) unlinkSync(f);
+      } catch {
+        /* plik mógł zniknąć */
+      }
+    }
+  }
+  saveMeta(caps.filter((x) => x.id !== captureId));
+  const key = cap?.sig || captureId;
+  await saveArchived(loadArchived().filter((k) => k !== key && k !== captureId));
+  const gt = loadGroundTruth();
+  delete gt[key];
+  delete gt[captureId];
+  await saveGroundTruth(gt);
   return c.json({ ok: true });
 });
 

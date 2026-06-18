@@ -209,7 +209,7 @@ function renderCaptures() {
         <button onclick="toggleSel('${c.id}')">${SELECTED.has(c.id)?'✓ w teście':'+ do testu'}</button>
         <button onclick="openAnnotate('${c.id}')">📍 Lokal</button>
         ${c.archived
-          ? `<button onclick="archive('${c.id}',false)">♻︎ Przywróć</button>`
+          ? `<button onclick="archive('${c.id}',false)">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="color:var(--err)">🗑 Usuń na stałe</button>`
           : `<button onclick="archive('${c.id}',true)">🗄 Archiwizuj</button>`}
       </div>
     </div>`;
@@ -218,6 +218,7 @@ function renderCaptures() {
 function toggleSel(id){ SELECTED.has(id)?SELECTED.delete(id):SELECTED.add(id); renderCaptures(); }
 function toggleShowArchived(){ SHOW_ARCHIVED=!SHOW_ARCHIVED; renderCaptures(); renderMap(); }
 async function archive(id,on){ if(on) SELECTED.delete(id); await api('/api/archive',{captureId:id, archived:on}); await loadState(); }
+async function deletePermanent(id){ if(!confirm('Usunąć ten sample NA STAŁE z biblioteki (zdjęcia + dane)? Tego nie cofniesz.')) return; SELECTED.delete(id); await api('/api/delete',{captureId:id}); await loadState(); }
 
 async function importZip(input){ const f=input.files[0]; if(!f) return; const info=document.getElementById('impInfo'); info.textContent='importuję ZIP… ('+f.name+')';
   const fd=new FormData(); fd.append('file', f);
