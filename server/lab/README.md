@@ -4,12 +4,12 @@ Lokalne narzędzie do porównywania modeli na **wyeksportowanych migawkach** (tr
 Reużywa logikę produkcyjną z `server/src` (extractMenu, quickPeek, findRestaurant) i klucze z `server/.env`.
 
 ## Użycie
-1. W apce: Migawki → „Wyeksportuj do ZIP" → rozpakuj do `server/samples/captures/<nazwa>/`
-   (folder ma zawierać `metadata.json` + `images/`).
-2. W `server/`:  `npm run lab`
-3. Otwórz **http://localhost:8799**
+1. W `server/`:  `npm run lab`  →  otwórz **http://localhost:8799**
+2. **Import sampli** (panel u góry): „📥 Importuj ZIP" (wybór pliku) albo wklej ścieżkę folderu/ZIP na dysku.
+   Wszystko scala się do jednej **biblioteki** `lab/library/` (`captures.json` + `images/`),
+   z dedupem po sygnaturze migawki — re-import tego samego nic nie dubluje.
 
-Domyślnie bierze najnowszy folder z `samples/captures/`. Inny: `LAB_DIR=/ścieżka npm run lab`.
+Przy pierwszym starcie istniejące eksporty z `samples/captures/*` są automatycznie przeniesione do biblioteki.
 
 ## Co umie
 - **Mapa** (OSM): lokalizacje migawek (EXIF/GPS) + oznaczony prawdziwy lokal.

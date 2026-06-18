@@ -57,6 +57,17 @@
 
 <div class="wrap">
   <div class="left">
+    <div class="panel" style="margin-bottom:12px">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <label class="chip" style="cursor:pointer">📥 Importuj ZIP<input id="zipFile" type="file" accept=".zip" style="display:none" onchange="importZip(this)"></label>
+        <span class="mut small">scala do biblioteki (dedup po sygnaturze)</span>
+      </div>
+      <div style="display:flex; gap:6px; margin-top:8px">
+        <input type="text" id="impPath" placeholder="albo ścieżka folderu lub .zip na dysku" onkeydown="if(event.key==='Enter')importPath()" />
+        <button onclick="importPath()">Importuj</button>
+      </div>
+      <div class="mut small" id="impInfo" style="margin-top:6px"></div>
+    </div>
     <div id="map"></div>
     <div class="mut small" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px">
       <span>Migawki — klik = do testu · 📍 lokal · 🗄 archiwum</span>
@@ -129,7 +140,7 @@ async function api(path, body) {
 
 async function loadState() {
   STATE = await api('/api/state');
-  document.getElementById('dir').textContent = STATE.exportDir;
+  document.getElementById('dir').textContent = (STATE.libraryDir||'') + ' · ' + STATE.captures.length + ' migawek';
   if (!PICKED_MODELS.size) ['claude-sonnet-4-6','gpt-5-nano','gemini-2.5-flash-lite'].forEach(m => MODELS_HAS(m) && PICKED_MODELS.add(m));
   renderModels(); renderOps(); renderCaptures(); renderMap();
 }
@@ -194,6 +205,19 @@ function renderCaptures() {
 function toggleSel(id){ SELECTED.has(id)?SELECTED.delete(id):SELECTED.add(id); renderCaptures(); }
 function toggleShowArchived(){ SHOW_ARCHIVED=!SHOW_ARCHIVED; renderCaptures(); renderMap(); }
 async function archive(id,on){ if(on) SELECTED.delete(id); await api('/api/archive',{captureId:id, archived:on}); await loadState(); }
+
+async function importZip(input){ const f=input.files[0]; if(!f) return; const info=document.getElementById('impInfo'); info.textContent='importuję ZIP… ('+f.name+')';
+  const fd=new FormData(); fd.append('file', f);
+  try{ const r=await fetch('/api/import-zip',{method:'POST', body:fd}).then(x=>x.json());
+    info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
+    if(!r.error) await loadState();
+  }catch(e){ info.textContent='błąd: '+e.message; } finally { input.value=''; }
+}
+async function importPath(){ const p=document.getElementById('impPath').value.trim(); if(!p) return; const info=document.getElementById('impInfo'); info.textContent='importuję…';
+  const r=await api('/api/import-path',{path:p});
+  info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
+  if(!r.error){ document.getElementById('impPath').value=''; await loadState(); }
+}
 
 function renderMap() {
   if (!map) { map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(map); }

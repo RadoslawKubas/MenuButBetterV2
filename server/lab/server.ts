@@ -12,9 +12,10 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
 import { extractMenu, contextText, SYSTEM as MENU_SYSTEM, type InputImage } from "../src/menu.ts";
 import { quickPeek, SYSTEM as PEEK_SYSTEM, INSTRUCTION as PEEK_INSTRUCTION } from "../src/quickPeek.ts";
@@ -26,24 +27,19 @@ import { findRestaurant } from "../src/places.ts";
 import { MODELS, type ModelId } from "../src/models.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SAMPLES = join(HERE, "..", "samples", "captures");
+const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
 const RESULTS_DIR = join(HERE, "results");
 
-// --- Wybór eksportu (folder z metadata.json). Domyślnie najnowszy w samples/captures. -----
-function latestExportDir(): string {
-  if (process.env.LAB_DIR) return process.env.LAB_DIR;
-  try {
-    const dirs = readdirSync(SAMPLES, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && d.name.startsWith("mbb-captures"))
-      .map((d) => d.name)
-      .sort();
-    if (dirs.length) return join(SAMPLES, dirs[dirs.length - 1]);
-  } catch {
-    /* brak */
-  }
-  return SAMPLES;
+// --- Centralna BIBLIOTEKA sampli (jedno miejsce, „czysto i ładnie") --------------------------
+//   lab/library/captures.json  — scalone metadane wszystkich migawek (dedup po sig),
+//   lab/library/images/        — wszystkie zdjęcia.
+// Do biblioteki doimportowujesz kolejne eksporty (folder lub ZIP).
+const LIBRARY = join(HERE, "library");
+const LIB_IMAGES = join(LIBRARY, "images");
+const LIB_META = join(LIBRARY, "captures.json");
+function ensureLibrary(): void {
+  if (!existsSync(LIB_IMAGES)) mkdirSync(LIB_IMAGES, { recursive: true });
 }
-let EXPORT_DIR = latestExportDir();
 
 // --- Typy migawki z metadata.json --------------------------------------------------------
 interface MetaImage {
@@ -73,10 +69,68 @@ interface GroundTruth {
 }
 
 function loadMeta(): MetaCapture[] {
-  const p = join(EXPORT_DIR, "metadata.json");
-  if (!existsSync(p)) return [];
-  const j = JSON.parse(readFileSync(p, "utf8")) as { captures?: MetaCapture[] };
-  return j.captures ?? [];
+  try {
+    return JSON.parse(readFileSync(LIB_META, "utf8")) as MetaCapture[];
+  } catch {
+    return [];
+  }
+}
+function saveMeta(caps: MetaCapture[]): void {
+  ensureLibrary();
+  writeFileSync(LIB_META, JSON.stringify(caps, null, 2));
+}
+
+// Doimportowanie migawek do biblioteki (dedup po sig||id; kopiuje zdjęcia do library/images/).
+async function ingest(captures: MetaCapture[], readImage: (file: string) => Promise<Buffer | null>) {
+  ensureLibrary();
+  const existing = loadMeta();
+  const keys = new Set(existing.map((c) => c.sig || c.id));
+  let added = 0,
+    skipped = 0;
+  for (const cap of captures) {
+    const key = cap.sig || cap.id;
+    if (keys.has(key)) {
+      skipped++;
+      continue;
+    }
+    const newImages: MetaImage[] = [];
+    for (const im of cap.images ?? []) {
+      const buf = await readImage(im.file).catch(() => null);
+      if (!buf) continue;
+      const base = im.file.split("/").pop()!;
+      writeFileSync(join(LIB_IMAGES, base), buf);
+      newImages.push({ ...im, file: `images/${base}` });
+    }
+    existing.push({ ...cap, images: newImages });
+    keys.add(key);
+    added++;
+  }
+  saveMeta(existing);
+  return { added, skipped };
+}
+
+async function ingestFolder(dir: string) {
+  const metaP = join(dir, "metadata.json");
+  if (!existsSync(metaP)) throw new Error("folder nie ma metadata.json");
+  const caps = (JSON.parse(readFileSync(metaP, "utf8")).captures ?? []) as MetaCapture[];
+  return ingest(caps, async (file) => {
+    try {
+      return readFileSync(join(dir, file));
+    } catch {
+      return null;
+    }
+  });
+}
+
+async function ingestZip(buf: Buffer) {
+  const zip = await JSZip.loadAsync(buf);
+  const metaEntry = zip.file("metadata.json");
+  if (!metaEntry) throw new Error("ZIP nie ma metadata.json");
+  const caps = (JSON.parse(await metaEntry.async("string")).captures ?? []) as MetaCapture[];
+  return ingest(caps, async (file) => {
+    const e = zip.file(file);
+    return e ? Buffer.from(await e.async("nodebuffer")) : null;
+  });
 }
 
 // CENTRALNY zapis ground-truth (jeden plik dla wszystkich eksportów), KLUCZ = sig migawki.
@@ -122,7 +176,7 @@ function isArchived(cap: MetaCapture): boolean {
 function imageInput(cap: MetaCapture, idx = 0): InputImage | null {
   const im = cap.images[idx];
   if (!im) return null;
-  const buf = readFileSync(join(EXPORT_DIR, im.file));
+  const buf = readFileSync(join(LIBRARY, im.file));
   return { base64: buf.toString("base64"), mediaType: (im.mediaType as InputImage["mediaType"]) || "image/jpeg" };
 }
 function allImageInputs(cap: MetaCapture): InputImage[] {
@@ -317,7 +371,7 @@ app.get("/api/state", (c) => {
     archived: isArchived(cap),
   }));
   const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider, price: def.price }));
-  return c.json({ exportDir: EXPORT_DIR, captures, models });
+  return c.json({ libraryDir: LIBRARY, captures, models });
 });
 
 // Podgląd PRAWDZIWYCH promptów (system + szablon treści użytkownika) per operacja.
@@ -351,7 +405,7 @@ app.get("/api/image", (c) => {
   const cap = loadMeta().find((x) => x.id === id);
   const im = cap?.images[n];
   if (!im) return c.text("not found", 404);
-  const buf = readFileSync(join(EXPORT_DIR, im.file));
+  const buf = readFileSync(join(LIBRARY, im.file));
   return c.body(buf, 200, { "Content-Type": im.mediaType || "image/jpeg" });
 });
 
@@ -391,6 +445,33 @@ app.post("/api/archive", async (c) => {
   else list = list.filter((k) => k !== key && k !== captureId);
   await saveArchived(list);
   return c.json({ ok: true });
+});
+
+// Import z FOLDERU lub pliku ZIP na dysku (ścieżka serwera).
+app.post("/api/import-path", async (c) => {
+  const { path } = await c.req.json<{ path: string }>();
+  if (!path?.trim()) return c.json({ error: "podaj ścieżkę folderu lub .zip" }, 400);
+  try {
+    const p = path.trim().replace(/^['"]|['"]$/g, "");
+    const r = p.toLowerCase().endsWith(".zip") ? await ingestZip(readFileSync(p)) : await ingestFolder(p);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
+  }
+});
+
+// Import przez UPLOAD pliku ZIP (wybór pliku w przeglądarce).
+app.post("/api/import-zip", async (c) => {
+  try {
+    const body = await c.req.parseBody();
+    const f = body.file;
+    if (!f || typeof f === "string") return c.json({ error: "brak pliku ZIP" }, 400);
+    const buf = Buffer.from(await (f as File).arrayBuffer());
+    const r = await ingestZip(buf);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
+  }
 });
 
 app.post("/api/annotate", async (c) => {
@@ -444,7 +525,7 @@ app.post("/api/run", async (c) => {
     id: stamp,
     at: Date.now(),
     name: name?.trim() || null,
-    exportDir: EXPORT_DIR,
+    libraryDir: LIBRARY,
     config: { models, operations, withVenue: !!withVenue },
     captureIds,
     results,
@@ -528,7 +609,28 @@ app.post("/api/judge", async (c) => {
   return c.json({ judgeModel: model, judgments });
 });
 
+// Jednorazowa migracja: gdy biblioteka pusta, wciągnij istniejące eksporty z samples/captures/*.
+async function migrateSamplesIfEmpty(): Promise<void> {
+  ensureLibrary();
+  if (loadMeta().length > 0) return;
+  try {
+    const dirs = readdirSync(SAMPLES, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith("mbb-captures"));
+    for (const d of dirs) {
+      try {
+        const r = await ingestFolder(join(SAMPLES, d.name));
+        console.log(`[lab] migracja ${d.name}: +${r.added} (pominięto ${r.skipped})`);
+      } catch (e) {
+        console.log(`[lab] migracja ${d.name} nieudana: ${(e as Error).message}`);
+      }
+    }
+  } catch {
+    /* brak starych sampli */
+  }
+}
+
+await migrateSamplesIfEmpty();
+
 const PORT = Number(process.env.LAB_PORT ?? 8799);
 serve({ fetch: app.fetch, port: PORT });
 console.log(`\n🔬 LAB modeli: http://localhost:${PORT}`);
-console.log(`   eksport: ${EXPORT_DIR}\n`);
+console.log(`   biblioteka: ${LIBRARY} (${loadMeta().length} migawek)\n`);
