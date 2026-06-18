@@ -107,6 +107,12 @@
       <span class="mut small" id="judgeInfo" style="margin-left:10px"></span>
       <div id="judgeOut"></div>
     </div>
+    <div class="panel" id="rankPanel" style="display:none">
+      <h3>5 · Ranking / rekomendacja</h3>
+      <button onclick="showLeaderboard()">📊 Policz ranking (per operacja)</button>
+      <div class="mut small" style="margin-top:4px">Jakość: scan = sędzia (uruchom wyżej) ·  peek/verify/venuePhotos = metryki obiektywne ·  koszt/czas zawsze.</div>
+      <div id="leaderboard"></div>
+    </div>
   </div>
 </div>
 
@@ -130,7 +136,7 @@
 const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
 let WITH_VENUE = false, PROMPTS = null, SHOW_ARCHIVED = false;
-let LAST_RESULTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
+let LAST_RESULTS = null, LAST_JUDGMENTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 async function api(path, body) {
@@ -254,10 +260,11 @@ async function run(){
   try{
     const name=document.getElementById('expName').value;
     const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue, name});
-    LAST_RESULTS=r.results; CURRENT_RUN_ID=r.runId; renderResults();
+    LAST_RESULTS=r.results; LAST_JUDGMENTS=null; CURRENT_RUN_ID=r.runId; renderResults();
     document.getElementById('runInfo').textContent='zapisano eksperyment: '+r.runId;
-    document.getElementById('judgeOut').innerHTML='';
+    document.getElementById('judgeOut').innerHTML=''; document.getElementById('leaderboard').innerHTML='';
     document.getElementById('judgePanel').style.display = ops.includes('scan')?'block':'none';
+    document.getElementById('rankPanel').style.display = 'block';
   }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
 }
 
@@ -285,7 +292,10 @@ async function loadRun(id){
   renderModels(); renderOps(); renderCaptures();
   document.getElementById('judgePanel').style.display=(e.config?.operations||[]).includes('scan')?'block':'none';
   renderResults();
+  LAST_JUDGMENTS = e.judgments || null;
   if(e.judgments) renderJudgments(e.judgments); else document.getElementById('judgeOut').innerHTML='';
+  document.getElementById('leaderboard').innerHTML='';
+  document.getElementById('rankPanel').style.display = (LAST_RESULTS && LAST_RESULTS.length) ? 'block' : 'none';
   document.getElementById('runsList').innerHTML='';
 }
 
@@ -320,8 +330,8 @@ async function judge(){
   if(!LAST_RESULTS) return; const btn=document.getElementById('judgeBtn'); btn.disabled=true; document.getElementById('judgeInfo').textContent='sędzia analizuje…';
   try{
     const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL, runId:CURRENT_RUN_ID});
-    renderJudgments(r.judgments);
-    document.getElementById('judgeInfo').textContent='zapisano w eksperymencie';
+    LAST_JUDGMENTS=r.judgments; renderJudgments(r.judgments);
+    document.getElementById('judgeInfo').textContent='zapisano w eksperymencie (sędzia: '+r.judgeModel+')';
   }catch(e){ document.getElementById('judgeInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
 }
 function renderJudgments(judgments){
@@ -333,6 +343,49 @@ function renderJudgments(judgments){
       <div style="margin-top:8px"><b>🏆 best:</b> ${v.best||'—'} · <b>💸 good‑enough:</b> ${v.goodEnough||'—'}</div>
       <div class="mut small" style="margin-top:4px">${esc(v.summary||'')}</div></div>`;
   }).join('');
+}
+
+/* ---- Ranking / rekomendacja (agregacja po wielu restauracjach) ---- */
+function qMetricLabel(op){ return {scan:'sędzia 0–100 (kompletność+trafność)', peek:'% wykryto menu', verify:'% zdjęć przez próg', venuePhotos:'śr. trafień ★', describe:'—'}[op]||'—'; }
+function fmtQ(op,q){ if(q==null) return '—'; if(op==='scan') return q.toFixed(0); if(op==='peek'||op==='verify') return (q*100).toFixed(0)+'%'; if(op==='venuePhotos') return q.toFixed(1); return '—'; }
+function aggregate(){
+  const judge={};
+  (LAST_JUDGMENTS||[]).forEach(j=>{ if(j.verdict){ judge[j.captureId]={}; (j.verdict.perModel||[]).forEach(p=>judge[j.captureId][p.model]=(p.completeness+p.accuracy)/2); }});
+  const ops={};
+  (LAST_RESULTS||[]).forEach(cap=>{
+    Object.entries(cap.byModel).forEach(([model,m])=>{
+      ['peek','scan','describe','verify','venuePhotos'].forEach(op=>{
+        const r=m[op]; if(!r||!r.ok) return;
+        ops[op]=ops[op]||{}; const a=ops[op][model]=ops[op][model]||{n:0,cost:0,ms:0,q:0,qn:0};
+        a.n++; a.cost+=r.cost||0; a.ms+=r.ms||0;
+        let qv=null;
+        if(op==='scan'){ const jq=judge[cap.captureId]?.[model]; if(jq!=null) qv=jq; }
+        else if(op==='peek') qv=r.isMenu?1:0;
+        else if(op==='verify') qv=r.candidates? r.passed/r.candidates : 0;
+        else if(op==='venuePhotos') qv=r.matches||0;
+        if(qv!=null){ a.q+=qv; a.qn++; }
+      });
+    });
+  });
+  return ops;
+}
+function showLeaderboard(){
+  if(!LAST_RESULTS||!LAST_RESULTS.length) return;
+  const ops=aggregate();
+  document.getElementById('leaderboard').innerHTML = Object.entries(ops).map(([op,models])=>{
+    const rows=Object.entries(models).map(([m,a])=>({model:m, q:a.qn?a.q/a.qn:null, cost:a.cost/a.n, ms:a.ms/a.n, n:a.n}));
+    const withQ=rows.filter(r=>r.q!=null);
+    let best=null,good=null;
+    if(withQ.length){ best=withQ.slice().sort((x,y)=>y.q-x.q)[0]; const thr=best.q*0.9; good=withQ.filter(r=>r.q>=thr).sort((x,y)=>x.cost-y.cost)[0]; }
+    rows.sort((x,y)=>((y.q??-1)-(x.q??-1))||(x.cost-y.cost));
+    const trs=rows.map(r=>`<tr><td><b>${r.model}</b></td><td class="num">${fmtQ(op,r.q)}</td><td class="num">$${r.cost.toFixed(4)}</td><td class="num">${Math.round(r.ms)}ms</td><td class="num">${r.n}</td></tr>`).join('');
+    return `<div style="margin-top:10px; border-top:1px solid var(--line); padding-top:8px">
+      <b>${op}</b> <span class="mut small">jakość: ${qMetricLabel(op)}</span>
+      <table style="margin-top:6px"><thead><tr><th>model</th><th>jakość</th><th>śr. koszt</th><th>śr. czas</th><th>n</th></tr></thead><tbody>${trs}</tbody></table>
+      ${best?`<div style="margin-top:6px"><b>🏆 najlepszy:</b> ${best.model} (${fmtQ(op,best.q)}) · <b>💸 good‑enough:</b> ${good.model} ($${good.cost.toFixed(4)})</div>`
+        :`<div class="mut small" style="margin-top:6px">brak metryki jakości${op==='scan'?' — uruchom sędziego':''} (pokazane koszt/czas)</div>`}
+    </div>`;
+  }).join('') || '<div class="mut small">brak danych</div>';
 }
 
 loadState();
