@@ -102,8 +102,13 @@
     <div id="results"></div>
     <div class="panel" id="judgePanel" style="display:none">
       <h3>4 · Werdykt sędziego</h3>
+      <div class="mut small" style="margin-bottom:6px">Model‑sędzia (wybierz najmocniejszy — ocenia scan i opisy):</div>
       <div class="chips" id="judgeModels"></div>
-      <button id="judgeBtn" onclick="judge()" style="margin-top:8px">⚖️ Porównaj odczyty menu (best / good‑enough)</button>
+      <div style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <span class="chip" id="deepChip" onclick="toggleDeep()"></span>
+        <span class="mut small">głęboki = extended thinking (Claude) / high reasoning (GPT‑5) — najmocniejsza ocena, wolniej/drożej</span>
+      </div>
+      <button id="judgeBtn" onclick="judge()" style="margin-top:8px">⚖️ Oceń (scan + opisy)</button>
       <span class="mut small" id="judgeInfo" style="margin-left:10px"></span>
       <div id="judgeOut"></div>
     </div>
@@ -136,7 +141,7 @@
 const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
 let WITH_VENUE = false, PROMPTS = null, SHOW_ARCHIVED = false;
-let LAST_RESULTS = null, LAST_JUDGMENTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
+let LAST_RESULTS = null, LAST_JUDGMENTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-opus-4-8', JUDGE_DEEP = true, map, markers = [];
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 async function api(path, body) {
@@ -159,7 +164,9 @@ function renderModels() {
   document.getElementById('judgeModels').innerHTML = STATE.models.map(m =>
     `<div class="chip ${JUDGE_MODEL===m.id?'on':''}" onclick="setJudge('${m.id}')">${m.label}</div>`
   ).join('');
+  const dc=document.getElementById('deepChip'); if(dc){ dc.className='chip'+(JUDGE_DEEP?' on':''); dc.textContent=(JUDGE_DEEP?'🧠 głęboki reasoning: WŁ':'głęboki reasoning: wył'); }
 }
+function toggleDeep(){ JUDGE_DEEP=!JUDGE_DEEP; renderModels(); }
 function renderOps() {
   document.getElementById('ops').innerHTML =
     MODEL_OPS.map(o => `<div class="chip ${PICKED_OPS.has(o)?'on':''}" onclick="toggleOp('${o}')">${o}</div>`).join('') +
@@ -263,7 +270,7 @@ async function run(){
     LAST_RESULTS=r.results; LAST_JUDGMENTS=null; CURRENT_RUN_ID=r.runId; renderResults();
     document.getElementById('runInfo').textContent='zapisano eksperyment: '+r.runId;
     document.getElementById('judgeOut').innerHTML=''; document.getElementById('leaderboard').innerHTML='';
-    document.getElementById('judgePanel').style.display = ops.includes('scan')?'block':'none';
+    document.getElementById('judgePanel').style.display = (ops.includes('scan')||ops.includes('describe'))?'block':'none';
     document.getElementById('rankPanel').style.display = 'block';
   }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
 }
@@ -290,7 +297,7 @@ async function loadRun(id){
   document.getElementById('expName').value=e.name||'';
   document.getElementById('loadedTag').innerHTML=`📂 wczytano: <b>${e.name||e.id}</b> — możesz zmienić config / dodać lokale i „▶︎ Uruchom" (powstanie nowy eksperyment).`;
   renderModels(); renderOps(); renderCaptures();
-  document.getElementById('judgePanel').style.display=(e.config?.operations||[]).includes('scan')?'block':'none';
+  { const o=e.config?.operations||[]; document.getElementById('judgePanel').style.display=(o.includes('scan')||o.includes('describe'))?'block':'none'; }
   renderResults();
   LAST_JUDGMENTS = e.judgments || null;
   if(e.judgments) renderJudgments(e.judgments); else document.getElementById('judgeOut').innerHTML='';
@@ -329,28 +336,35 @@ function renderResults(){
 async function judge(){
   if(!LAST_RESULTS) return; const btn=document.getElementById('judgeBtn'); btn.disabled=true; document.getElementById('judgeInfo').textContent='sędzia analizuje…';
   try{
-    const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL, runId:CURRENT_RUN_ID});
+    const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL, runId:CURRENT_RUN_ID, deep:JUDGE_DEEP});
     LAST_JUDGMENTS=r.judgments; renderJudgments(r.judgments);
-    document.getElementById('judgeInfo').textContent='zapisano w eksperymencie (sędzia: '+r.judgeModel+')';
+    document.getElementById('judgeInfo').textContent='zapisano (sędzia: '+r.judgeModel+(r.deep?' · głęboki':'')+')';
   }catch(e){ document.getElementById('judgeInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+}
+function verdictTable(title, v){
+  if(!v) return '';
+  const rows=(v.perModel||[]).map(p=>`<tr><td><b>${p.model}</b></td><td class="num">${p.completeness}</td><td class="num">${p.accuracy}</td><td class="small">${esc(p.notes||'')}</td></tr>`).join('');
+  return `<div style="margin-top:8px"><div class="mut small"><b>${title}</b></div>
+    <table style="margin-top:4px"><thead><tr><th>model</th><th>kompletność</th><th>trafność</th><th>uwagi</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:4px"><b>🏆 best:</b> ${v.best||'—'} · <b>💸 good‑enough:</b> ${v.goodEnough||'—'}</div>
+    <div class="mut small">${esc(v.summary||'')}</div></div>`;
 }
 function renderJudgments(judgments){
   document.getElementById('judgeOut').innerHTML = (judgments||[]).map(j=>{
-    const c=STATE.captures.find(x=>x.id===j.captureId); if(j.error) return `<div class="panel">${c?.name||j.captureId}: błąd ${j.error}</div>`;
-    const v=j.verdict||{}; const rows=(v.perModel||[]).map(p=>`<tr><td><b>${p.model}</b></td><td class="num">${p.completeness}</td><td class="num">${p.accuracy}</td><td class="small">${esc(p.notes||'')}</td></tr>`).join('');
-    return `<div class="panel"><h3>${c?.name||j.captureId}</h3>
-      <table><thead><tr><th>model</th><th>kompletność</th><th>trafność</th><th>uwagi</th></tr></thead><tbody>${rows}</tbody></table>
-      <div style="margin-top:8px"><b>🏆 best:</b> ${v.best||'—'} · <b>💸 good‑enough:</b> ${v.goodEnough||'—'}</div>
-      <div class="mut small" style="margin-top:4px">${esc(v.summary||'')}</div></div>`;
+    const c=STATE.captures.find(x=>x.id===j.captureId);
+    if(j.error) return `<div class="panel">${c?.name||j.captureId}: błąd ${esc(j.error)}</div>`;
+    return `<div class="panel"><h3>${c?.name||j.captureId}</h3>${verdictTable('Skan menu', j.scan)}${verdictTable('Opisy dań', j.describe)}</div>`;
   }).join('');
 }
 
 /* ---- Ranking / rekomendacja (agregacja po wielu restauracjach) ---- */
-function qMetricLabel(op){ return {scan:'sędzia 0–100 (kompletność+trafność)', peek:'% wykryto menu', verify:'% zdjęć przez próg', venuePhotos:'śr. trafień ★', describe:'—'}[op]||'—'; }
-function fmtQ(op,q){ if(q==null) return '—'; if(op==='scan') return q.toFixed(0); if(op==='peek'||op==='verify') return (q*100).toFixed(0)+'%'; if(op==='venuePhotos') return q.toFixed(1); return '—'; }
+function qMetricLabel(op){ return {scan:'sędzia 0–100', describe:'sędzia 0–100', peek:'% wykryto menu', verify:'% zdjęć przez próg', venuePhotos:'śr. trafień ★'}[op]||'—'; }
+function fmtQ(op,q){ if(q==null) return '—'; if(op==='scan'||op==='describe') return q.toFixed(0); if(op==='peek'||op==='verify') return (q*100).toFixed(0)+'%'; if(op==='venuePhotos') return q.toFixed(1); return '—'; }
 function aggregate(){
-  const judge={};
-  (LAST_JUDGMENTS||[]).forEach(j=>{ if(j.verdict){ judge[j.captureId]={}; (j.verdict.perModel||[]).forEach(p=>judge[j.captureId][p.model]=(p.completeness+p.accuracy)/2); }});
+  const judge={}; // captureId -> op -> model -> (kompletność+trafność)/2
+  (LAST_JUDGMENTS||[]).forEach(j=>{ judge[j.captureId]={};
+    ['scan','describe'].forEach(op=>{ const v=j[op]; if(v){ judge[j.captureId][op]={}; (v.perModel||[]).forEach(p=>judge[j.captureId][op][p.model]=(p.completeness+p.accuracy)/2); }});
+  });
   const ops={};
   (LAST_RESULTS||[]).forEach(cap=>{
     Object.entries(cap.byModel).forEach(([model,m])=>{
@@ -359,7 +373,7 @@ function aggregate(){
         ops[op]=ops[op]||{}; const a=ops[op][model]=ops[op][model]||{n:0,cost:0,ms:0,q:0,qn:0};
         a.n++; a.cost+=r.cost||0; a.ms+=r.ms||0;
         let qv=null;
-        if(op==='scan'){ const jq=judge[cap.captureId]?.[model]; if(jq!=null) qv=jq; }
+        if(op==='scan'||op==='describe'){ const jq=judge[cap.captureId]?.[op]?.[model]; if(jq!=null) qv=jq; }
         else if(op==='peek') qv=r.isMenu?1:0;
         else if(op==='verify') qv=r.candidates? r.passed/r.candidates : 0;
         else if(op==='venuePhotos') qv=r.matches||0;

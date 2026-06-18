@@ -24,7 +24,8 @@ import { scoreDishPhotos, VERIFY_SYSTEM, verifyInstruction } from "../src/verify
 import { matchVenuePhotos, VENUE_SYSTEM, venueInstruction } from "../src/venuePhotos.ts";
 import { genericWebImages } from "../src/dishPhotos.ts";
 import { findRestaurant } from "../src/places.ts";
-import { MODELS, type ModelId } from "../src/models.ts";
+import { openaiVisionJson } from "../src/openaiClient.ts";
+import { MODELS, usesOpenAiApi, type ModelId } from "../src/models.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
@@ -254,7 +255,7 @@ async function opDescribe(cap: MetaCapture, model: ModelId) {
       model,
     });
     cost += usage.costUsd;
-    out.push({ dish: it.original, len: text.length, sample: text.slice(0, 180) });
+    out.push({ dish: it.original, len: text.length, sample: text.slice(0, 500) });
   }
   return { ok: true, ms: Date.now() - t0, cost, count: out.length, dishes: out };
 }
@@ -319,32 +320,76 @@ const JUDGE_SCHEMA = {
   required: ["perModel", "best", "goodEnough", "summary"],
 } as const;
 
-async function judgeScan(cap: MetaCapture, scanByModel: Record<string, any>, judgeModel: string) {
-  const images = allImageInputs(cap);
-  const content: Anthropic.ContentBlockParam[] = [];
-  images.forEach((im) => content.push({ type: "image", source: { type: "base64", media_type: im.mediaType, data: im.base64 } }));
-  const lines = Object.entries(scanByModel).map(([model, r]) => {
-    const names = (r.menu?.sections ?? []).flatMap((s: any) => s.items.map((it: any) => it.original)).slice(0, 60);
-    return `MODEL ${model}: lokal="${r.restaurantName ?? ""}", kuchnia="${r.cuisine ?? ""}", sekcje=${r.sections}, dania=${r.items}, koszt=$${(r.cost ?? 0).toFixed(4)}\n  pozycje: ${names.join(" | ")}`;
-  });
-  content.push({
-    type: "text",
-    text:
-      "Oto ZDJĘCIA menu oraz wyniki ODCZYTU różnych modeli. Oceń każdy model: completeness " +
-      "(ile pozycji wychwycił względem obrazu) i accuracy (poprawność nazw/cen/tłumaczeń), 0-100. " +
-      "Wskaż best (najlepszy) oraz goodEnough (NAJTAŃSZY wystarczająco dobry do TEGO menu). " +
-      "Zwięzłe notatki po polsku.\n\n" +
-      lines.join("\n"),
-  });
-  const resp = await anthropic.messages.create({
-    model: judgeModel,
-    max_tokens: 1500,
-    system: "Jesteś rygorystycznym sędzią jakości odczytu menu z obrazu. Oceniasz obiektywnie, względem tego co WIDAĆ na zdjęciu.",
+// Wywołanie sędziego — provider-aware (Claude / OpenAI / Gemini) + tryb GŁĘBOKI (reasoning):
+//  • Claude: extended thinking (budget_tokens) gdy deep,
+//  • OpenAI (gpt-5*): reasoning_effort "high" gdy deep,
+//  • Gemini: standardowo (compat).
+async function runJudge(images: InputImage[], system: string, userText: string, model: string, deep: boolean) {
+  if (usesOpenAiApi(model)) {
+    const content: import("openai").OpenAI.Chat.Completions.ChatCompletionContentPart[] = images.map((im) => ({
+      type: "image_url" as const,
+      image_url: { url: `data:${im.mediaType};base64,${im.base64}` },
+    }));
+    content.push({ type: "text", text: userText });
+    const { json } = await openaiVisionJson({
+      op: "judge",
+      model,
+      system,
+      content,
+      schemaName: "verdict",
+      schema: JUDGE_SCHEMA as unknown as Record<string, unknown>,
+      maxCompletionTokens: deep ? 8000 : 3000,
+      reasoningEffort: deep ? "high" : "medium",
+    });
+    return json ? JSON.parse(json) : null;
+  }
+  // Claude
+  const content: Anthropic.ContentBlockParam[] = images.map((im) => ({
+    type: "image" as const,
+    source: { type: "base64" as const, media_type: im.mediaType, data: im.base64 },
+  }));
+  content.push({ type: "text", text: userText });
+  const req: Anthropic.MessageCreateParamsNonStreaming = {
+    model,
+    max_tokens: deep ? 8000 : 2000,
+    system,
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
-  });
+  };
+  if (deep) (req as Record<string, unknown>).thinking = { type: "enabled", budget_tokens: 4000 };
+  const resp = await anthropic.messages.create(req);
   const text = resp.content.find((b) => b.type === "text");
   return text && text.type === "text" ? JSON.parse(text.text) : null;
+}
+
+async function judgeScan(cap: MetaCapture, scanByModel: Record<string, any>, judgeModel: string, deep: boolean) {
+  const lines = Object.entries(scanByModel).map(([model, r]) => {
+    const names = (r.menu?.sections ?? []).flatMap((s: any) => s.items.map((it: any) => it.original)).slice(0, 60);
+    return `MODEL ${model}: lokal="${r.restaurantName ?? ""}", kuchnia="${r.cuisine ?? ""}", sekcje=${r.sections}, dania=${r.items}\n  pozycje: ${names.join(" | ")}`;
+  });
+  const system = "Jesteś rygorystycznym sędzią jakości ODCZYTU menu z obrazu. Oceniasz obiektywnie, względem tego co WIDAĆ na zdjęciu.";
+  const user =
+    "Oto ZDJĘCIA menu oraz wyniki ODCZYTU różnych modeli. Oceń każdy model: completeness " +
+    "(ile pozycji wychwycił względem obrazu) i accuracy (poprawność nazw/cen/tłumaczeń), 0-100. " +
+    "Wskaż best (najlepszy) i goodEnough (NAJTAŃSZY wystarczająco dobry do TEGO menu). Zwięzłe notatki po polsku.\n\n" +
+    lines.join("\n");
+  return runJudge(allImageInputs(cap), system, user, judgeModel, deep);
+}
+
+async function judgeDescribe(cap: MetaCapture, describeByModel: Record<string, any>, judgeModel: string, deep: boolean) {
+  const blocks = Object.entries(describeByModel).map(([model, r]) => {
+    const ds = (r.dishes ?? []).map((d: any) => `  • ${d.dish}: ${d.sample}`).join("\n");
+    return `MODEL ${model}:\n${ds}`;
+  });
+  const system =
+    "Jesteś rygorystycznym sędzią jakości OPISÓW dań. Oceniasz względem tego, co realnie wynika z nazwy dania, " +
+    "kuchni i obrazu menu. Karzesz ZMYŚLENIA (składniki/fakty niezgodne z daniem/kuchnią).";
+  const user =
+    "Oto ZDJĘCIA menu oraz OPISY tych samych dań od różnych modeli. Oceń każdy model: completeness " +
+    "(czy opis pokrywa kluczowe, prawdziwe informacje o daniu) i accuracy (poprawność, BRAK zmyśleń), 0-100. " +
+    "Wskaż best i goodEnough (najtańszy wystarczająco dobry). Zwięzłe notatki po polsku.\n\n" +
+    blocks.join("\n\n");
+  return runJudge(allImageInputs(cap), system, user, judgeModel, deep);
 }
 
 // --- HTTP --------------------------------------------------------------------------------
@@ -576,21 +621,32 @@ app.get("/api/run-get", (c) => {
 });
 
 app.post("/api/judge", async (c) => {
-  const { results, judgeModel, runId } = await c.req.json<{ results: any[]; judgeModel?: string; runId?: string }>();
-  const model = judgeModel && judgeModel in MODELS ? judgeModel : "claude-sonnet-4-6";
+  const { results, judgeModel, runId, deep } = await c.req.json<{
+    results: any[];
+    judgeModel?: string;
+    runId?: string;
+    deep?: boolean;
+  }>();
+  // Domyślnie NAJMOCNIEJSZY sędzia (Opus). Można wybrać dowolny topowy model.
+  const model = judgeModel && judgeModel in MODELS ? judgeModel : "claude-opus-4-8";
   const judgments: any[] = [];
   for (const cap of results) {
+    const capMeta = loadMeta().find((x) => x.id === cap.captureId);
+    if (!capMeta) continue;
     const scanByModel: Record<string, any> = {};
+    const describeByModel: Record<string, any> = {};
     for (const [mid, m] of Object.entries<any>(cap.byModel)) {
       if (m.scan?.ok) scanByModel[mid] = m.scan;
+      if (m.describe?.ok) describeByModel[mid] = m.describe;
     }
-    if (Object.keys(scanByModel).length < 1) continue;
+    const j: any = { captureId: cap.captureId };
     try {
-      const verdict = await judgeScan(loadMeta().find((x) => x.id === cap.captureId)!, scanByModel, model);
-      judgments.push({ captureId: cap.captureId, verdict });
+      if (Object.keys(scanByModel).length) j.scan = await judgeScan(capMeta, scanByModel, model, !!deep);
+      if (Object.keys(describeByModel).length) j.describe = await judgeDescribe(capMeta, describeByModel, model, !!deep);
     } catch (e) {
-      judgments.push({ captureId: cap.captureId, error: (e as Error).message });
+      j.error = (e as Error).message;
     }
+    if (j.scan || j.describe || j.error) judgments.push(j);
   }
   // Dopisz werdykty do pliku eksperymentu (trwałe — można wrócić i analizować).
   if (runId) {
@@ -600,13 +656,14 @@ app.post("/api/judge", async (c) => {
         const e = JSON.parse(readFileSync(file, "utf8"));
         e.judgments = judgments;
         e.judgeModel = model;
+        e.judgeDeep = !!deep;
         await writeFile(file, JSON.stringify(e, null, 2));
       } catch {
         /* nie blokuj */
       }
     }
   }
-  return c.json({ judgeModel: model, judgments });
+  return c.json({ judgeModel: model, deep: !!deep, judgments });
 });
 
 // Jednorazowa migracja: gdy biblioteka pusta, wciągnij istniejące eksporty z samples/captures/*.

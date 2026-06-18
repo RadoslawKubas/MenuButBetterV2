@@ -55,6 +55,9 @@ export async function openaiVisionJson(opts: {
   schemaName: string;
   schema: Record<string, unknown>;
   maxCompletionTokens?: number;
+  /** Poziom rozumowania dla modeli OpenAI (gpt-5*). Domyślnie "minimal" (tanie zadania);
+   *  sędzia laba podaje "high", by ocena była najmocniejsza. */
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
 }): Promise<{ json: string | null; usage: Usage }> {
   const openai = getClientForModel(opts.model);
   const tag = apiTag(opts.model);
@@ -72,7 +75,7 @@ export async function openaiVisionJson(opts: {
       json_schema: { name: opts.schemaName, strict: reasoning, schema: opts.schema },
     },
   };
-  if (reasoning) params.reasoning_effort = "minimal";
+  if (reasoning) params.reasoning_effort = opts.reasoningEffort ?? "minimal";
   const resp = await track(tag, opts.op, () => openai.chat.completions.create(params));
   const usage = usageFromOpenAI(opts.model, resp.usage);
   recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
