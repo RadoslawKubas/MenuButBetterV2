@@ -245,7 +245,8 @@ function renderMap() {
 }
 
 /* ---- Ground truth ---- */
-let ANN_ID=null;
+let ANN_ID=null, ANN_CANDS=[];
+function mapsUrl(p){ return p.placeId ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name||'')}&query_place_id=${p.placeId}` : `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`; }
 function openAnnotate(id){ ANN_ID=id; const c=STATE.captures.find(x=>x.id===id);
   document.getElementById('annCap').textContent=(c.name||id)+' · '+(c.locationHint||''); document.getElementById('annQuery').value=c.result?.restaurantName||''; document.getElementById('annCands').innerHTML='';
   document.getElementById('annotateModal').style.display='flex'; }
@@ -253,8 +254,17 @@ function closeModal(){ document.getElementById('annotateModal').style.display='n
 async function annSearch(){ const c=STATE.captures.find(x=>x.id===ANN_ID); const q=document.getElementById('annQuery').value.trim(); if(!q) return;
   document.getElementById('annCands').innerHTML='<div class="mut">szukam…</div>';
   const r=await api('/api/places-search',{q, lat:c.location?.lat, lng:c.location?.lng});
-  document.getElementById('annCands').innerHTML=(r.candidates||[]).map(p=>`<div class="cand" onclick='annPick(${JSON.stringify(p).replace(/'/g,"&#39;")})'><b>${p.name}</b><div class="mut small">${p.address||''}</div></div>`).join('')||'<div class="mut">brak wyników</div>';
+  ANN_CANDS = r.candidates||[];
+  document.getElementById('annCands').innerHTML = ANN_CANDS.map((p,i)=>`
+    <div class="cand">
+      <div onclick="annPickIdx(${i})" style="cursor:pointer">
+        <b>${esc(p.name||'')}</b>
+        <a href="${mapsUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px; margin-left:6px">🗺 mapa</a>
+        <div class="mut small">${esc(p.address||'')}</div>
+      </div>
+    </div>`).join('') || '<div class="mut">brak wyników</div>';
 }
+function annPickIdx(i){ if(ANN_CANDS[i]) annPick(ANN_CANDS[i]); }
 async function annPick(p){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:{name:p.name, placeId:p.placeId, lat:p.lat, lng:p.lng, address:p.address}}); closeModal(); await loadState(); }
 async function annClear(){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:null}); closeModal(); await loadState(); }
 
