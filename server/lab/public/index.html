@@ -96,6 +96,15 @@
         <button onclick="loadRuns()">📁 Zapisane eksperymenty</button>
         <span class="mut small" id="runInfo"></span>
       </div>
+      <div id="progress" style="display:none; margin-top:10px">
+        <div class="mut small" id="progText"></div>
+        <div style="background:var(--line); border-radius:6px; height:8px; overflow:hidden; margin-top:4px"><div id="progBar" style="height:100%; width:0; background:var(--acc); transition:width .3s"></div></div>
+        <div style="margin-top:6px; display:flex; gap:6px">
+          <button id="pauseBtn" onclick="control('pause')">⏸ Pauza</button>
+          <button id="cancelBtn" onclick="control('cancel')" style="color:var(--err)">⏹ Przerwij</button>
+          <button id="resumeBtn" onclick="resumeRun()" style="display:none">▶︎ Wznów</button>
+        </div>
+      </div>
       <div class="mut small" id="loadedTag" style="margin-top:6px"></div>
       <div id="runsList"></div>
     </div>
@@ -269,21 +278,54 @@ async function annPick(p){ await api('/api/annotate',{captureId:ANN_ID, groundTr
 async function annClear(){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:null}); closeModal(); await loadState(); }
 
 /* ---- Run ---- */
+let POLL=null;
+function setProg(done,total,cur,state){
+  const pct = total?Math.round(done/total*100):0;
+  document.getElementById('progText').textContent = `${done}/${total} (${pct}%)`+(state?` · ${state}`:'')+(cur?` · ${cur}`:'');
+  document.getElementById('progBar').style.width = pct+'%';
+}
+function showProgControls(running, paused){
+  document.getElementById('progress').style.display='block';
+  document.getElementById('pauseBtn').style.display = running?'':'none';
+  document.getElementById('cancelBtn').style.display = running?'':'none';
+  document.getElementById('resumeBtn').style.display = paused?'':'none';
+}
 async function run(){
   const ids=[...SELECTED]; if(!ids.length) return alert('Zaznacz migawki.');
   if(!PICKED_MODELS.size) return alert('Wybierz modele.');
-  const ops=[...PICKED_OPS]; const withVenue=WITH_VENUE;
-  if(!ops.length) return alert('Wybierz operacje.');
-  const btn=document.getElementById('runBtn'); btn.disabled=true; document.getElementById('runInfo').textContent='liczę… (to może chwilę potrwać)';
+  const ops=[...PICKED_OPS]; if(!ops.length) return alert('Wybierz operacje.');
+  document.getElementById('runBtn').disabled=true; document.getElementById('runInfo').textContent='start…';
+  document.getElementById('judgeOut').innerHTML=''; document.getElementById('leaderboard').innerHTML='';
+  LAST_RESULTS=null; LAST_JUDGMENTS=null;
   try{
     const name=document.getElementById('expName').value;
-    const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue, name});
-    LAST_RESULTS=r.results; LAST_JUDGMENTS=null; CURRENT_RUN_ID=r.runId; renderResults();
-    document.getElementById('runInfo').textContent='zapisano eksperyment: '+r.runId;
-    document.getElementById('judgeOut').innerHTML=''; document.getElementById('leaderboard').innerHTML='';
-    document.getElementById('judgePanel').style.display = (ops.includes('scan')||ops.includes('describe'))?'block':'none';
-    document.getElementById('rankPanel').style.display = 'block';
-  }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+    const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue:WITH_VENUE, name});
+    CURRENT_RUN_ID=r.runId; setProg(0,r.total,'start','running'); showProgControls(true,false); poll();
+  }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; document.getElementById('runBtn').disabled=false; }
+}
+async function poll(){
+  clearTimeout(POLL);
+  const s=await api('/api/run-status?id='+encodeURIComponent(CURRENT_RUN_ID)).catch(()=>null);
+  if(!s||s.error){ document.getElementById('runInfo').textContent='utracono status zadania'; document.getElementById('runBtn').disabled=false; return; }
+  setProg(s.done,s.total,s.current,s.state); LAST_RESULTS=s.results||[];
+  if(s.state==='running'){ POLL=setTimeout(poll,1200); return; }
+  renderResults(); document.getElementById('runBtn').disabled=false;
+  if(s.state==='paused'){ showProgControls(false,true); document.getElementById('runInfo').textContent='⏸ wstrzymano — „▶︎ Wznów" (też później z „Zapisane eksperymenty")'; }
+  else { document.getElementById('progress').style.display='none'; document.getElementById('runInfo').textContent = s.state==='canceled'?'⏹ przerwano (zapisano częściowe)':'✓ ukończono: '+CURRENT_RUN_ID; }
+  const hasSD=(LAST_RESULTS||[]).some(c=>Object.values(c.byModel).some(m=>m.scan||m.describe));
+  document.getElementById('judgePanel').style.display=hasSD?'block':'none';
+  document.getElementById('rankPanel').style.display=(LAST_RESULTS&&LAST_RESULTS.length)?'block':'none';
+}
+async function control(action){
+  const r=await api('/api/run-control',{id:CURRENT_RUN_ID, action});
+  if(r.error){ document.getElementById('runInfo').textContent=r.error; return; }
+  document.getElementById('runInfo').textContent = action==='cancel'?'przerywam…':'pauzuję…'; poll();
+}
+async function resumeRun(){
+  const r=await api('/api/run-resume',{id:CURRENT_RUN_ID});
+  if(r.error) return alert(r.error);
+  setProg(r.done,r.total,'wznowiono','running'); showProgControls(true,false);
+  document.getElementById('runBtn').disabled=true; poll();
 }
 
 async function loadRuns(){
@@ -293,7 +335,7 @@ async function loadRuns(){
   if(!r.runs.length){ el.innerHTML='<div class="mut small" style="margin-top:8px">brak zapisanych eksperymentów</div>'; return; }
   el.innerHTML='<div style="margin-top:8px">'+r.runs.map(x=>`
     <div class="cand" onclick="loadRun('${x.id}')">
-      <b>${x.name||x.id}</b> ${x.judged?'<span class="pill ok">sędzia</span>':''}
+      <b>${x.name||x.id}</b> ${x.judged?'<span class="pill ok">sędzia</span>':''} ${x.state==='paused'?`<span class="pill no">⏸ ${x.done}/${x.total}</span>`:x.state==='canceled'?'<span class="pill no">przerwany</span>':''}
       <div class="mut small">${new Date(x.at).toLocaleString()} · ${x.captures} migawek · ${(x.models||[]).length} modeli · ops: ${(x.operations||[]).join(',')}</div>
     </div>`).join('')+'</div>';
 }
@@ -314,6 +356,8 @@ async function loadRun(id){
   if(e.judgments) renderJudgments(e.judgments); else document.getElementById('judgeOut').innerHTML='';
   document.getElementById('leaderboard').innerHTML='';
   document.getElementById('rankPanel').style.display = (LAST_RESULTS && LAST_RESULTS.length) ? 'block' : 'none';
+  if(e.progress && e.progress.state==='paused'){ setProg(e.progress.done, e.progress.total, '', 'paused'); showProgControls(false, true); }
+  else { document.getElementById('progress').style.display='none'; }
   document.getElementById('runsList').innerHTML='';
 }
 

@@ -558,6 +558,78 @@ app.post("/api/annotate", async (c) => {
   return c.json({ ok: true });
 });
 
+// --- Zadania: długie eksperymenty w TLE (postęp / pauza / wznowienie / przerwanie) --------
+type JobState = "running" | "paused" | "canceled" | "done";
+interface Job {
+  exp: any; // eksperyment (config + results) — mutowany w trakcie
+  total: number;
+  done: number;
+  current: string;
+  control: "run" | "pause" | "cancel";
+  state: JobState;
+}
+const jobs = new Map<string, Job>();
+function runFile(id: string): string {
+  return join(RESULTS_DIR, `run-${id.replace(/^run-/, "")}.json`);
+}
+function persistJob(job: Job): void {
+  job.exp.progress = { state: job.state, done: job.done, total: job.total, current: job.current, at: Date.now() };
+  writeFileSync(runFile(job.exp.id), JSON.stringify(job.exp, null, 2));
+}
+function countDone(exp: any): number {
+  let n = 0;
+  for (const cap of exp.results)
+    for (const model of exp.config.models) {
+      const m = cap.byModel[model] || {};
+      for (const op of exp.config.operations) if (m[op]) n++;
+    }
+  return n;
+}
+
+async function runJob(id: string): Promise<void> {
+  const job = jobs.get(id);
+  if (!job) return;
+  const exp = job.exp;
+  const meta = loadMeta();
+  for (const capStub of exp.results) {
+    const cap = meta.find((x) => x.id === capStub.captureId);
+    if (!cap) continue;
+    const gtc = gtFor(cap);
+    for (const model of exp.config.models as ModelId[]) {
+      capStub.byModel[model] = capStub.byModel[model] || {};
+      const m = capStub.byModel[model];
+      for (const op of exp.config.operations as string[]) {
+        if (m[op]) continue; // wznowienie: pomiń już zrobione
+        if (job.control === "cancel") {
+          job.state = "canceled";
+          persistJob(job);
+          return;
+        }
+        if (job.control === "pause") {
+          job.state = "paused";
+          persistJob(job);
+          return;
+        }
+        job.current = `${cap.name || cap.id} · ${model} · ${op}`;
+        try {
+          if (op === "peek") m.peek = await opPeek(cap, model);
+          else if (op === "scan") m.scan = await opScan(cap, model, !!exp.config.withVenue, gtc ?? undefined);
+          else if (op === "describe") m.describe = await opDescribe(cap, model);
+          else if (op === "verify") m.verify = await opVerify(cap, model);
+          else if (op === "venuePhotos") m.venuePhotos = await opVenuePhotos(cap, model);
+        } catch (e) {
+          m[op] = { ok: false, error: (e as Error).message };
+        }
+        job.done++;
+      }
+    }
+    persistJob(job); // zapis po każdej restauracji (do wznowienia po crashu/restarcie)
+  }
+  job.state = "done";
+  job.current = "ukończono";
+  persistJob(job);
+}
+
 app.post("/api/run", async (c) => {
   const { captureIds, models, operations, withVenue, name } = await c.req.json<{
     captureIds: string[];
@@ -567,32 +639,13 @@ app.post("/api/run", async (c) => {
     name?: string;
   }>();
   const meta = loadMeta();
-  const results: any[] = [];
-  for (const id of captureIds) {
-    const cap = meta.find((x) => x.id === id);
-    if (!cap) continue;
-    const gtc = gtFor(cap);
-    const perCapture: any = { captureId: id, locationHint: cap.locationHint, groundTruth: gtc, byModel: {} };
-    for (const model of models) {
-      const m: any = {};
-      try {
-        if (operations.includes("peek")) m.peek = await opPeek(cap, model);
-        if (operations.includes("scan")) m.scan = await opScan(cap, model, !!withVenue, gtc ?? undefined);
-        if (operations.includes("describe")) m.describe = await opDescribe(cap, model);
-        if (operations.includes("verify")) m.verify = await opVerify(cap, model);
-        if (operations.includes("venuePhotos")) m.venuePhotos = await opVenuePhotos(cap, model);
-      } catch (e) {
-        m.error = (e as Error).message;
-      }
-      perCapture.byModel[model] = m;
-    }
-    results.push(perCapture);
-  }
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = join(RESULTS_DIR, `run-${stamp}.json`);
-  // Eksperyment = config (do POWTÓRZENIA) + wejście + wyniki. Werdykt sędziego dopisuje się później.
-  const experiment = {
-    id: stamp,
+  const id = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const results = captureIds
+    .map((cid) => meta.find((x) => x.id === cid))
+    .filter((c): c is MetaCapture => !!c)
+    .map((cap) => ({ captureId: cap.id, locationHint: cap.locationHint, groundTruth: gtFor(cap), byModel: {} as any }));
+  const exp = {
+    id,
     at: Date.now(),
     name: name?.trim() || null,
     libraryDir: LIBRARY,
@@ -602,8 +655,50 @@ app.post("/api/run", async (c) => {
     judgments: null as unknown,
     judgeModel: null as unknown,
   };
-  await writeFile(file, JSON.stringify(experiment, null, 2));
-  return c.json({ runId: stamp, file, results });
+  const total = results.length * models.length * operations.length;
+  const job: Job = { exp, total, done: 0, current: "start", control: "run", state: "running" };
+  jobs.set(id, job);
+  persistJob(job);
+  void runJob(id); // w TLE — nie czekamy
+  return c.json({ runId: id, total });
+});
+
+// Postęp na żywo (polling co ~1s).
+app.get("/api/run-status", (c) => {
+  const id = c.req.query("id") || "";
+  const job = jobs.get(id);
+  if (job)
+    return c.json({ state: job.state, done: job.done, total: job.total, current: job.current, results: job.exp.results });
+  const f = runFile(id);
+  if (existsSync(f)) {
+    const e = JSON.parse(readFileSync(f, "utf8"));
+    const p = e.progress || {};
+    return c.json({ state: p.state || "done", done: p.done ?? countDone(e), total: p.total ?? 0, current: p.current || "", results: e.results });
+  }
+  return c.json({ error: "nie ma takiego zadania" }, 404);
+});
+
+// Pauza / przerwanie biegnącego zadania.
+app.post("/api/run-control", async (c) => {
+  const { id, action } = await c.req.json<{ id: string; action: "pause" | "cancel" }>();
+  const job = jobs.get(id);
+  if (!job) return c.json({ error: "zadanie nieaktywne (serwer zrestartowany?) — użyj Wznów" }, 404);
+  job.control = action === "cancel" ? "cancel" : "pause";
+  return c.json({ ok: true });
+});
+
+// Wznowienie (też po restarcie serwera — czyta plik, dorabia brakujące jednostki).
+app.post("/api/run-resume", async (c) => {
+  const { id } = await c.req.json<{ id: string }>();
+  const f = runFile(id);
+  if (!existsSync(f)) return c.json({ error: "nie ma eksperymentu" }, 404);
+  const exp = JSON.parse(readFileSync(f, "utf8"));
+  const total = exp.results.length * exp.config.models.length * exp.config.operations.length;
+  const job: Job = { exp, total, done: countDone(exp), current: "wznowiono", control: "run", state: "running" };
+  jobs.set(id, job);
+  persistJob(job);
+  void runJob(id);
+  return c.json({ runId: id, total, done: job.done });
 });
 
 // Lista zapisanych eksperymentów (do powrotu/analizy/powtórzenia).
@@ -627,6 +722,9 @@ app.get("/api/runs", (c) => {
           withVenue: e.config?.withVenue ?? e.withVenue ?? false,
           captures: (e.captureIds ?? e.results ?? []).length,
           judged: !!e.judgments,
+          state: e.progress?.state ?? "done",
+          done: e.progress?.done ?? null,
+          total: e.progress?.total ?? null,
         };
       } catch {
         return null;
