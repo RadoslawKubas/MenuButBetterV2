@@ -8,6 +8,7 @@
     "dev": "tsx watch src/http.ts",
     "start": "tsx src/http.ts",
     "scan": "tsx src/runScan.ts",
+    "lab": "tsx lab/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

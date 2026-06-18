@@ -1,0 +1,237 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MenuButBetter — LAB modeli</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --bg:#0f1413; --card:#1a2422; --line:#2b3a37; --txt:#e7efed; --mut:#8aa39c; --acc:#2dd4bf; --btn:#0b3b35; --err:#ef4444; --ok:#22c55e; --warn:#eab308; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; color:var(--acc); }
+  .mut { color:var(--mut); }
+  .wrap { display:grid; grid-template-columns: 380px 1fr; gap:0; height: calc(100vh - 54px); }
+  .left { border-right:1px solid var(--line); overflow:auto; padding:12px; }
+  .right { overflow:auto; padding:12px; }
+  #map { height: 280px; border-radius:10px; margin-bottom:12px; }
+  .cap { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:10px; }
+  .cap.sel { border-color:var(--acc); }
+  .cap .row { display:flex; gap:10px; align-items:flex-start; }
+  .cap img { width:54px; height:68px; object-fit:cover; border-radius:6px; background:#000; cursor:pointer; }
+  .cap .meta { flex:1; min-width:0; }
+  .cap .nm { font-weight:700; }
+  .cap .sub { font-size:12px; color:var(--mut); margin-top:2px; }
+  .gt { font-size:12px; margin-top:6px; }
+  .gt.set { color:var(--ok); }
+  .gt.unset { color:var(--warn); }
+  button { background:var(--btn); color:var(--acc); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-weight:700; cursor:pointer; }
+  button.primary { background:var(--acc); color:#06302b; border-color:var(--acc); }
+  button:disabled { opacity:.5; cursor:default; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { padding:5px 9px; border:1px solid var(--line); border-radius:999px; cursor:pointer; user-select:none; font-size:13px; }
+  .chip.on { background:var(--acc); color:#06302b; border-color:var(--acc); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; }
+  .panel h3 { margin:0 0 8px; font-size:14px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:800; }
+  .pill.ok { background:#10341f; color:var(--ok); } .pill.no { background:#3a1414; color:var(--err); }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:20px; }
+  .modal .box { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; width:520px; max-width:100%; max-height:80vh; overflow:auto; }
+  input[type=text] { width:100%; background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:8px 10px; }
+  .cand { padding:8px; border:1px solid var(--line); border-radius:8px; margin-top:6px; cursor:pointer; }
+  .cand:hover { border-color:var(--acc); }
+  .small { font-size:12px; }
+  .num { font-variant-numeric: tabular-nums; }
+</style>
+
+<header>
+  <h1>🔬 LAB modeli</h1>
+  <span class="mut" id="dir"></span>
+  <span style="flex:1"></span>
+  <button onclick="loadState()">↻ Odśwież</button>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <div id="map"></div>
+    <div class="mut small" style="margin-bottom:8px">Migawki — zaznacz do testu (klik), 📍 oznacz prawdziwy lokal.</div>
+    <div id="captures"></div>
+  </div>
+
+  <div class="right">
+    <div class="panel">
+      <h3>1 · Modele do testu</h3>
+      <div class="chips" id="models"></div>
+    </div>
+    <div class="panel">
+      <h3>2 · Operacje</h3>
+      <div class="chips" id="ops"></div>
+      <div style="margin-top:8px" class="small mut">peek = szybki podgląd (kuchnia/nazwa); scan = pełny odczyt menu.</div>
+    </div>
+    <div class="panel">
+      <h3>3 · Uruchom</h3>
+      <button class="primary" id="runBtn" onclick="run()">▶︎ Uruchom na zaznaczonych migawkach</button>
+      <span class="mut small" id="runInfo" style="margin-left:10px"></span>
+    </div>
+    <div id="results"></div>
+    <div class="panel" id="judgePanel" style="display:none">
+      <h3>4 · Werdykt sędziego</h3>
+      <div class="chips" id="judgeModels"></div>
+      <button id="judgeBtn" onclick="judge()" style="margin-top:8px">⚖️ Porównaj odczyty menu (best / good‑enough)</button>
+      <span class="mut small" id="judgeInfo" style="margin-left:10px"></span>
+      <div id="judgeOut"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="annotateModal">
+  <div class="box">
+    <h3 style="margin-top:0">📍 Prawdziwy lokal dla migawki</h3>
+    <div class="mut small" id="annCap"></div>
+    <div style="display:flex; gap:8px; margin:10px 0">
+      <input type="text" id="annQuery" placeholder="Nazwa lokalu (miasto z GPS doklejone)…" onkeydown="if(event.key==='Enter')annSearch()" />
+      <button onclick="annSearch()">Szukaj</button>
+    </div>
+    <div id="annCands"></div>
+    <div style="margin-top:12px; display:flex; gap:8px; justify-content:flex-end">
+      <button onclick="annClear()">Wyczyść</button>
+      <button onclick="closeModal()">Zamknij</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
+let LAST_RESULTS = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
+  return res.json();
+}
+
+async function loadState() {
+  STATE = await api('/api/state');
+  document.getElementById('dir').textContent = STATE.exportDir;
+  if (!PICKED_MODELS.size) ['claude-sonnet-4-6','gpt-5-nano','gemini-2.5-flash-lite'].forEach(m => MODELS_HAS(m) && PICKED_MODELS.add(m));
+  renderModels(); renderOps(); renderCaptures(); renderMap();
+}
+function MODELS_HAS(id){ return STATE.models.some(m=>m.id===id); }
+
+function renderModels() {
+  document.getElementById('models').innerHTML = STATE.models.map(m =>
+    `<div class="chip ${PICKED_MODELS.has(m.id)?'on':''}" onclick="toggleModel('${m.id}')">${m.label} <span class="mut small">$${m.price.in}/${m.price.out}</span></div>`
+  ).join('');
+  document.getElementById('judgeModels').innerHTML = STATE.models.map(m =>
+    `<div class="chip ${JUDGE_MODEL===m.id?'on':''}" onclick="setJudge('${m.id}')">${m.label}</div>`
+  ).join('');
+}
+function renderOps() {
+  document.getElementById('ops').innerHTML = ['peek','scan'].map(o =>
+    `<div class="chip ${PICKED_OPS.has(o)?'on':''}" onclick="toggleOp('${o}')">${o}</div>`
+  ).join('') + `<div class="chip ${PICKED_OPS.has('venue')?'on':''}" onclick="toggleOp('venue')">venue (Places + ground‑truth)</div>`;
+}
+function toggleModel(id){ PICKED_MODELS.has(id)?PICKED_MODELS.delete(id):PICKED_MODELS.add(id); renderModels(); }
+function setJudge(id){ JUDGE_MODEL=id; renderModels(); }
+function toggleOp(o){ PICKED_OPS.has(o)?PICKED_OPS.delete(o):PICKED_OPS.add(o); renderOps(); }
+
+function renderCaptures() {
+  document.getElementById('captures').innerHTML = STATE.captures.map(c => {
+    const gt = c.groundTruth;
+    return `<div class="cap ${SELECTED.has(c.id)?'sel':''}" id="cap-${c.id}">
+      <div class="row">
+        <img src="/api/image?id=${c.id}&n=0" onclick="event.stopPropagation();window.open('/api/image?id=${c.id}&n=0')" />
+        <div class="meta" onclick="toggleSel('${c.id}')">
+          <div class="nm">${c.name || new Date(c.createdAt).toLocaleString()}</div>
+          <div class="sub">${c.images} zdj · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
+          <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
+          <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
+        </div>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:6px">
+        <button onclick="toggleSel('${c.id}')">${SELECTED.has(c.id)?'✓ w teście':'+ do testu'}</button>
+        <button onclick="openAnnotate('${c.id}')">📍 Lokal</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleSel(id){ SELECTED.has(id)?SELECTED.delete(id):SELECTED.add(id); renderCaptures(); }
+
+function renderMap() {
+  if (!map) { map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(map); }
+  markers.forEach(m=>map.removeLayer(m)); markers=[];
+  const pts=[];
+  STATE.captures.forEach(c=>{
+    if(c.location){ const m=L.marker([c.location.lat,c.location.lng]).addTo(map).bindPopup(`<b>${c.name||c.id}</b><br>${c.locationSource||''} ${c.locationHint||''}<br><img src="/api/image?id=${c.id}&n=0" width="120">`); markers.push(m); pts.push([c.location.lat,c.location.lng]); }
+    const gt=c.groundTruth; if(gt&&gt.lat!=null){ const g=L.circleMarker([gt.lat,gt.lng],{radius:8,color:'#22c55e'}).addTo(map).bindPopup(`✓ prawda: <b>${gt.name}</b>`); markers.push(g); pts.push([gt.lat,gt.lng]); }
+  });
+  if(pts.length) map.fitBounds(pts,{padding:[30,30],maxZoom:16}); else map.setView([41.44,2.24],12);
+}
+
+/* ---- Ground truth ---- */
+let ANN_ID=null;
+function openAnnotate(id){ ANN_ID=id; const c=STATE.captures.find(x=>x.id===id);
+  document.getElementById('annCap').textContent=(c.name||id)+' · '+(c.locationHint||''); document.getElementById('annQuery').value=c.result?.restaurantName||''; document.getElementById('annCands').innerHTML='';
+  document.getElementById('annotateModal').style.display='flex'; }
+function closeModal(){ document.getElementById('annotateModal').style.display='none'; }
+async function annSearch(){ const c=STATE.captures.find(x=>x.id===ANN_ID); const q=document.getElementById('annQuery').value.trim(); if(!q) return;
+  document.getElementById('annCands').innerHTML='<div class="mut">szukam…</div>';
+  const r=await api('/api/places-search',{q, lat:c.location?.lat, lng:c.location?.lng});
+  document.getElementById('annCands').innerHTML=(r.candidates||[]).map(p=>`<div class="cand" onclick='annPick(${JSON.stringify(p).replace(/'/g,"&#39;")})'><b>${p.name}</b><div class="mut small">${p.address||''}</div></div>`).join('')||'<div class="mut">brak wyników</div>';
+}
+async function annPick(p){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:{name:p.name, placeId:p.placeId, lat:p.lat, lng:p.lng, address:p.address}}); closeModal(); await loadState(); }
+async function annClear(){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:null}); closeModal(); await loadState(); }
+
+/* ---- Run ---- */
+async function run(){
+  const ids=[...SELECTED]; if(!ids.length) return alert('Zaznacz migawki.');
+  if(!PICKED_MODELS.size) return alert('Wybierz modele.');
+  const ops=[...PICKED_OPS].filter(o=>o!=='venue'); const withVenue=PICKED_OPS.has('venue');
+  const btn=document.getElementById('runBtn'); btn.disabled=true; document.getElementById('runInfo').textContent='liczę… (to może chwilę potrwać)';
+  try{
+    const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue});
+    LAST_RESULTS=r.results; renderResults(); document.getElementById('runInfo').textContent='zapisano: '+r.file;
+    document.getElementById('judgePanel').style.display = ops.includes('scan')?'block':'none';
+  }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+}
+
+function renderResults(){
+  const el=document.getElementById('results'); if(!LAST_RESULTS){el.innerHTML='';return;}
+  el.innerHTML = LAST_RESULTS.map(cap=>{
+    const c=STATE.captures.find(x=>x.id===cap.captureId);
+    const models=Object.keys(cap.byModel);
+    const rows=models.map(mid=>{
+      const m=cap.byModel[mid]; const pk=m.peek, sc=m.scan;
+      const vm = sc&&'venueMatch'in sc ? (sc.venueMatch?'<span class="pill ok">trafił</span>':'<span class="pill no">pudło</span>') : '';
+      return `<tr>
+        <td><b>${mid}</b></td>
+        <td class="small">${pk?(pk.ok?`menu:${pk.isMenu?'✓':'✗'} · ${pk.cuisine||'—'} · ${pk.restaurantName||'—'}<br><span class="mut num">$${(pk.cost||0).toFixed(4)} · ${pk.ms}ms</span>`:'err'):''}</td>
+        <td class="small">${sc?(sc.ok?`${sc.restaurantName||'—'} · ${sc.cuisine||'—'}<br>${sc.sections} sek / <b>${sc.items}</b> dań<br><span class="mut num">$${(sc.cost||0).toFixed(4)} · ${sc.ms}ms</span>${sc.venue?`<br>lokal: ${sc.venue.name} ${vm}`:''}`:('err: '+(sc.error||'')) ):''}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="panel"><h3>${c?.name||cap.captureId} <span class="mut small">${cap.locationHint||''} ${cap.groundTruth?'· prawda: '+cap.groundTruth.name:''}</span></h3>
+      <table><thead><tr><th>model</th><th>peek</th><th>scan</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join('');
+}
+
+/* ---- Judge ---- */
+async function judge(){
+  if(!LAST_RESULTS) return; const btn=document.getElementById('judgeBtn'); btn.disabled=true; document.getElementById('judgeInfo').textContent='sędzia analizuje…';
+  try{
+    const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL});
+    document.getElementById('judgeOut').innerHTML = r.judgments.map(j=>{
+      const c=STATE.captures.find(x=>x.id===j.captureId); if(j.error) return `<div class="panel">${c?.name||j.captureId}: błąd ${j.error}</div>`;
+      const v=j.verdict; const rows=(v.perModel||[]).map(p=>`<tr><td><b>${p.model}</b></td><td class="num">${p.completeness}</td><td class="num">${p.accuracy}</td><td class="small">${p.notes||''}</td></tr>`).join('');
+      return `<div class="panel"><h3>${c?.name||j.captureId}</h3>
+        <table><thead><tr><th>model</th><th>kompletność</th><th>trafność</th><th>uwagi</th></tr></thead><tbody>${rows}</tbody></table>
+        <div style="margin-top:8px"><b>🏆 best:</b> ${v.best} · <b>💸 good‑enough:</b> ${v.goodEnough}</div>
+        <div class="mut small" style="margin-top:4px">${v.summary||''}</div></div>`;
+    }).join('');
+    document.getElementById('judgeInfo').textContent='';
+  }catch(e){ document.getElementById('judgeInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+}
+
+loadState();
+</script>
