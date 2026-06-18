@@ -23,9 +23,11 @@ import { describeDish, SYSTEM as DESCRIBE_SYSTEM } from "../src/dishInfo.ts";
 import { scoreDishPhotos, VERIFY_SYSTEM, verifyInstruction } from "../src/verifyPhotos.ts";
 import { matchVenuePhotos, VENUE_SYSTEM, venueInstruction } from "../src/venuePhotos.ts";
 import { genericWebImages } from "../src/dishPhotos.ts";
+import { runDishPhotos } from "../src/dishPhotosPipeline.ts";
 import { findRestaurant } from "../src/places.ts";
+import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
-import { MODELS, usesOpenAiApi, type ModelId } from "../src/models.ts";
+import { MODELS, DEFAULT_MODEL, usesOpenAiApi, type ModelId } from "../src/models.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
@@ -282,7 +284,8 @@ async function opVenuePhotos(cap: MetaCapture, model: ModelId) {
   const taPhotos = (rest.tripAdvisor?.photos ?? []).map((p: any) => ({ url: p.remoteUrl ?? p.url, caption: p.caption ?? null }));
   if (!photoNames.length && !taPhotos.length) return { ok: false, error: "brak zdjęć lokalu (Google/TA)" };
   const t0 = Date.now();
-  const { matches, usage } = await matchVenuePhotos({ photoNames, taPhotos, dishes, cuisine: menu.cuisine, model });
+  const certain = rest.nameVerified !== false && !rest.guessedByLocation;
+  const { matches, usage } = await matchVenuePhotos({ photoNames, taPhotos, dishes, cuisine: menu.cuisine, model, certain });
   return {
     ok: true,
     ms: Date.now() - t0,
@@ -556,6 +559,108 @@ app.post("/api/annotate", async (c) => {
   }
   await saveGroundTruth(store);
   return c.json({ ok: true });
+});
+
+// --- Symulacja aplikacji: TEN SAM kod co w apce (skan → lokal → zdjęcia per pozycja) ------
+// Cel: wziąć sampla, odczytać menu (extractMenu) i dla wybranej pozycji zobaczyć KROK PO KROKU,
+// co zwraca tor zdjęć (runDishPhotos: tier 1 strona lokalu/portale → vision → tier 2 web → tier 3
+// poglądowe), z ocenami i flagą fromVenue — żeby ocenić, czemu coś jest „z lokalu".
+
+// 1) Skan menu (+ opcjonalnie znajdź lokal w Places/TripAdvisor — jak /restaurant w apce).
+app.post("/api/sim-scan", async (c) => {
+  const { captureId, scanModel, withVenue } = await c.req.json<{ captureId: string; scanModel?: ModelId; withVenue?: boolean }>();
+  const cap = loadMeta().find((x) => x.id === captureId);
+  if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  const images = allImageInputs(cap);
+  if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
+  const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
+  const t0 = Date.now();
+  const { menu, usage } = await extractMenu(images, { targetLang: "polski", locationHint: cap.locationHint, model });
+  const items = (menu.sections ?? []).flatMap((s: any) =>
+    (s.items ?? []).map((it: any) => ({
+      section: s.name,
+      original: it.original,
+      translated: it.translated,
+      photoQuery: it.photo_query,
+      description: it.description,
+    })),
+  );
+  let venue: any = null;
+  if (withVenue && menu.restaurant_name) {
+    const rest = await findRestaurant({ name: menu.restaurant_name, lat: cap.location?.lat, lng: cap.location?.lng }).catch(() => null);
+    if (rest) {
+      const ta = await findTripAdvisor({ name: rest.name, lat: rest.location?.lat, lng: rest.location?.lng }).catch(() => null);
+      venue = {
+        name: rest.name,
+        address: rest.address,
+        website: rest.website,
+        placeId: rest.placeId,
+        location: rest.location,
+        nameVerified: rest.nameVerified, // czy Places trafił w nazwę (Tier 0: pewność lokalu)
+        photoNames: rest.photoNames ?? [],
+        taPhotos: (ta?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption })),
+        taUrl: ta?.url ?? null,
+      };
+    }
+  }
+  return c.json({
+    ms: Date.now() - t0,
+    usage,
+    scanModel: model,
+    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, sections: menu.sections.length, itemCount: items.length },
+    items,
+    venue,
+  });
+});
+
+// 2) Zdjęcia dla JEDNEJ pozycji — DOKŁADNIE runDishPhotos z apki, z pełnym śladem debug.
+app.post("/api/sim-dish", async (c) => {
+  const b = await c.req.json<{
+    dish: string;
+    photoQuery?: string;
+    cuisine?: string;
+    restaurantName?: string;
+    website?: string;
+    verifyModel?: string;
+    num?: number;
+    verify?: boolean;
+  }>();
+  if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
+  try {
+    const { photos, usage, debug } = await runDishPhotos({
+      dish: b.dish,
+      photoQuery: b.photoQuery,
+      restaurantHint: b.restaurantName, // w apce hint ≈ nazwa lokalu (bias zapytań portalowych)
+      restaurantName: b.restaurantName,
+      cuisine: b.cuisine,
+      website: b.website,
+      num: b.num ?? 4,
+      verify: b.verify !== false,
+      verifyModel: b.verifyModel,
+    });
+    return c.json({ photos, usage, debug });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+// 3) Tier 0 — dopasowanie puli zdjęć lokalu (Google Places + TripAdvisor) do dań.
+app.post("/api/sim-venue", async (c) => {
+  const b = await c.req.json<{ dishes: string[]; cuisine?: string; photoNames?: string[]; taPhotos?: { url: string; caption: string | null }[]; model?: string; certain?: boolean }>();
+  const t0 = Date.now();
+  try {
+    const { matches, usage } = await matchVenuePhotos({
+      photoNames: b.photoNames ?? [],
+      taPhotos: b.taPhotos ?? [],
+      dishes: b.dishes ?? [],
+      cuisine: b.cuisine,
+      model: b.model,
+      certain: b.certain !== false,
+    });
+    return c.json({ ms: Date.now() - t0, usage, pool: (b.photoNames?.length ?? 0) + (b.taPhotos?.length ?? 0), matches });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
 });
 
 // --- Zadania: długie eksperymenty w TLE (postęp / pauza / wznowienie / przerwanie) --------

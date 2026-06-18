@@ -41,6 +41,17 @@
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:20px; }
   .modal .box { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; width:520px; max-width:100%; max-height:80vh; overflow:auto; }
   input[type=text] { width:100%; background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:8px 10px; }
+  select { background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:6px 8px; font:inherit; }
+  .step { border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:8px; background:var(--bg); }
+  .step .hd { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .cands { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .ct { width:74px; }
+  .ct img { width:74px; height:74px; object-fit:cover; border-radius:6px; background:#000; display:block; }
+  .ct .cap2 { font-size:10px; line-height:1.2; margin-top:2px; color:var(--mut); word-break:break-word; }
+  .badge { display:inline-block; padding:0 5px; border-radius:6px; font-size:10px; font-weight:800; }
+  .badge.venue { background:#3a2a08; color:var(--warn); }
+  .badge.pass { background:#10341f; color:var(--ok); }
+  .badge.fail { background:#3a1414; color:var(--err); }
   .cand { padding:8px; border:1px solid var(--line); border-radius:8px; margin-top:6px; cursor:pointer; }
   .cand:hover { border-color:var(--acc); }
   .small { font-size:12px; }
@@ -108,6 +119,19 @@
       <div class="mut small" id="loadedTag" style="margin-top:6px"></div>
       <div id="runsList"></div>
     </div>
+    <div class="panel" id="simPanel">
+      <h3>🧪 Symulacja aplikacji — tor zdjęć dla pozycji</h3>
+      <div class="mut small" style="margin-bottom:8px">Ten sam kod co w apce (<b>extractMenu → runDishPhotos</b>). Używa <b>pierwszej zaznaczonej</b> migawki. Pokazuje krok po kroku, co który etap zwrócił + ocenę vision + flagę <b>„z lokalu"</b>.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <label class="small mut">skan:</label><select id="simScanModel"></select>
+        <label class="small mut">weryfikacja zdjęć:</label><select id="simVerifyModel"></select>
+        <span class="chip" id="simVenueChip" onclick="toggleSimVenue()">+ lokal (Places/TA)</span>
+      </div>
+      <button class="primary" style="margin-top:8px" id="simScanBtn" onclick="simScan()">1) Skanuj menu</button>
+      <span class="mut small" id="simInfo" style="margin-left:8px"></span>
+      <div id="simVenueBox"></div>
+      <div id="simItems"></div>
+    </div>
     <div id="results"></div>
     <div class="panel" id="judgePanel" style="display:none">
       <h3>4 · Werdykt sędziego</h3>
@@ -162,7 +186,7 @@ async function loadState() {
   STATE = await api('/api/state');
   document.getElementById('dir').textContent = (STATE.libraryDir||'') + ' · ' + STATE.captures.length + ' migawek';
   if (!PICKED_MODELS.size) ['claude-sonnet-4-6','gpt-5-nano','gemini-2.5-flash-lite'].forEach(m => MODELS_HAS(m) && PICKED_MODELS.add(m));
-  renderModels(); renderOps(); renderCaptures(); renderMap();
+  renderModels(); renderOps(); renderCaptures(); renderMap(); renderSimSelects();
 }
 function MODELS_HAS(id){ return STATE.models.some(m=>m.id===id); }
 
@@ -455,6 +479,117 @@ function showLeaderboard(){
         :`<div class="mut small" style="margin-top:6px">brak metryki jakości${op==='scan'?' — uruchom sędziego':''} (pokazane koszt/czas)</div>`}
     </div>`;
   }).join('') || '<div class="mut small">brak danych</div>';
+}
+
+/* ---- Symulacja aplikacji (tor zdjęć dla pozycji) ---- */
+let SIM = null, SIM_VENUE = false;
+function toggleSimVenue(){ SIM_VENUE=!SIM_VENUE; document.getElementById('simVenueChip').className='chip'+(SIM_VENUE?' on':''); }
+function renderSimSelects(){
+  const opts = STATE.models.map(m=>`<option value="${m.id}">${m.label}</option>`).join('');
+  const sc=document.getElementById('simScanModel'), vf=document.getElementById('simVerifyModel');
+  if(sc){ sc.innerHTML=opts; if(MODELS_HAS('claude-sonnet-4-6')) sc.value='claude-sonnet-4-6'; }
+  if(vf){ vf.innerHTML=opts; if(MODELS_HAS('claude-sonnet-4-6')) vf.value='claude-sonnet-4-6'; }
+  document.getElementById('simVenueChip').className='chip'+(SIM_VENUE?' on':'');
+}
+function trunc(s,n){ s=s||''; return s.length>n? s.slice(0,n)+'…' : s; }
+async function simScan(){
+  const id=[...SELECTED][0];
+  if(!id) return alert('Zaznacz JEDEN sample (klik miniaturę albo „+ do testu").');
+  const btn=document.getElementById('simScanBtn'); btn.disabled=true;
+  document.getElementById('simInfo').textContent='skanuję menu…';
+  document.getElementById('simVenueBox').innerHTML=''; document.getElementById('simItems').innerHTML='';
+  try{
+    const r=await api('/api/sim-scan',{captureId:id, scanModel:document.getElementById('simScanModel').value, withVenue:SIM_VENUE});
+    if(r.error) throw new Error(r.error);
+    SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items };
+    document.getElementById('simInfo').textContent=`✓ ${r.menu.restaurantName||'—'} · ${r.menu.cuisine||'—'} · ${r.items.length} pozycji · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms`;
+    renderSimVenue(); renderSimItems();
+  }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
+  finally{ btn.disabled=false; }
+}
+function renderSimVenue(){
+  const el=document.getElementById('simVenueBox'); const v=SIM?.venue;
+  if(!v){ el.innerHTML = SIM_VENUE ? '<div class="mut small" style="margin-top:8px">lokal: nie znaleziono w Places</div>' : ''; return; }
+  const certBadge = v.nameVerified===false
+    ? '<span class="badge fail">nazwa NIEpewna</span>'
+    : '<span class="badge pass">nazwa OK</span>';
+  el.innerHTML=`<div class="step"><div class="hd"><b>📍 lokal (Places):</b> ${esc(v.name||'—')} ${certBadge} ${v.website?`<a href="${esc(v.website)}" target="_blank" rel="noopener" class="small">${esc((''+v.website).replace(/^https?:\/\//,''))}</a>`:'<span class="mut small">brak strony www</span>'}</div>
+    <div class="mut small" style="margin-top:4px">${esc(v.address||'')} · Google: ${v.photoNames.length} zdj · TripAdvisor: ${v.taPhotos.length} zdj${v.nameVerified===false?' · <span class="mut">Tier 0 użyje ostrożnej instrukcji</span>':''}</div>
+    <button style="margin-top:6px" onclick="simVenue()" ${(v.photoNames.length+v.taPhotos.length)?'':'disabled'}>Tier 0 — dopasuj zdjęcia lokalu do dań</button>
+    <div id="simVenueOut"></div></div>`;
+}
+async function simVenue(){
+  if(!SIM?.venue) return;
+  const out=document.getElementById('simVenueOut'); out.innerHTML='<div class="mut small">dopasowuję pulę zdjęć lokalu…</div>';
+  const dishes=SIM.items.map(it=>it.original).filter(Boolean);
+  const certain = SIM.venue.nameVerified !== false;
+  const r=await api('/api/sim-venue',{dishes, cuisine:SIM.cuisine, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVerifyModel').value, certain});
+  if(r.error){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); return; }
+  const ms=(r.matches||[]).map(m=>{
+    const thumb = m.source==='tripadvisor' && m.url ? `<img src="${esc(m.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2">` : `<div style="width:74px;height:74px;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--mut)">Google</div>`;
+    return `<div class="ct">${thumb}<div class="cap2"><b>${esc(trunc(m.dish,22))}</b><br>${m.source} · ${m.confidence.toFixed(2)}${m.caption?'<br>'+esc(trunc(m.caption,30)):''}</div></div>`;
+  }).join('');
+  out.innerHTML=`<div class="mut small" style="margin-top:6px"><b>${r.matches.length}</b> dopasowań / pula ${r.pool} · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms</div><div class="cands">${ms||'<span class="mut small">brak dopasowań</span>'}</div>`;
+}
+function renderSimItems(){
+  const items=SIM?.items||[];
+  document.getElementById('simItems').innerHTML = '<div class="mut small" style="margin:10px 0 4px">Pozycje menu — „🔍 zdjęcia" puszcza tor dla danej pozycji:</div>' + items.map((it,i)=>`
+    <div class="cand" style="cursor:default">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <b>${esc(it.original||'—')}</b>
+        ${it.translated&&it.translated!==it.original?`<span class="mut small">${esc(it.translated)}</span>`:''}
+        ${it.photoQuery?`<span class="mut small">🔎 ${esc(it.photoQuery)}</span>`:''}
+        <span style="flex:1"></span>
+        <button onclick="simDish(${i})" id="simDishBtn-${i}">🔍 zdjęcia</button>
+      </div>
+      <div id="simDishOut-${i}"></div>
+    </div>`).join('');
+}
+function candCard(cd){
+  const badges = [
+    cd.score!=null ? `<span class="badge ${cd.passed?'pass':'fail'}">${cd.score.toFixed(2)}</span>` : '',
+    cd.fromVenue ? '<span class="badge venue">★ z lokalu</span>' : '',
+  ].filter(Boolean).join(' ');
+  let ctxHost = cd.domain||'';
+  try{ if(cd.context) ctxHost=new URL(cd.context).hostname.replace(/^www\./,''); }catch{}
+  const link = cd.context ? `<a href="${esc(cd.context)}" target="_blank" rel="noopener">${esc(trunc(ctxHost,16))}</a>` : esc(trunc(ctxHost,16));
+  return `<div class="ct"><img src="${esc(cd.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${badges}<br>${link}</div></div>`;
+}
+function renderSteps(dbg){
+  return ((dbg&&dbg.steps)||[]).map(s=>{
+    const cand=(s.candidates||[]);
+    return `<div class="step">
+      <div class="hd"><b>${esc(s.tier)}</b> <span class="mut small">${esc(s.provider)}</span>
+        <span class="mut small">q: „${esc(trunc(s.query,40))}"</span>
+        <span class="pill ${s.returned?'ok':'no'}">zwrócono ${s.returned}</span>
+        ${s.passed!=null?`<span class="pill ${s.passed?'ok':'no'}">przeszło ${s.passed}</span>`:''}
+      </div>
+      ${cand.length?`<div class="cands">${cand.map(candCard).join('')}</div>`:'<div class="mut small" style="margin-top:4px">brak kandydatów</div>'}
+    </div>`;
+  }).join('');
+}
+async function simDish(i){
+  const it=SIM?.items?.[i]; if(!it) return;
+  const btn=document.getElementById('simDishBtn-'+i), out=document.getElementById('simDishOut-'+i);
+  btn.disabled=true; out.innerHTML='<div class="mut small" style="margin-top:6px">szukam zdjęć (ten sam tor co apka)…</div>';
+  try{
+    const r=await api('/api/sim-dish',{
+      dish:it.original, photoQuery:it.photoQuery, cuisine:SIM.cuisine,
+      restaurantName:SIM.restaurantName, website:SIM.venue?.website,
+      verifyModel:document.getElementById('simVerifyModel').value, num:4,
+    });
+    if(r.error) throw new Error(r.error);
+    const finalThumbs=(r.photos||[]).map(p=>{
+      const tags=[p.fromVenue?'<span class="badge venue">★ z lokalu</span>':'', p.verified?'<span class="badge pass">vision✓</span>':'', p.representative?'<span class="mut" style="font-size:10px">poglądowe</span>':''].filter(Boolean).join(' ');
+      return `<div class="ct"><img src="${esc(p.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${tags}<br>${esc(p.source)}</div></div>`;
+    }).join('');
+    out.innerHTML = `
+      <div class="mut small" style="margin-top:6px">$${(r.usage?.costUsd||0).toFixed(4)} · zwrócono <b>${(r.photos||[]).length}</b> zdjęć (to, co pokazałaby apka):</div>
+      <div class="cands">${finalThumbs||'<span class="mut small">brak</span>'}</div>
+      <div class="mut small" style="margin:10px 0 0">Przebieg krok po kroku:</div>
+      ${renderSteps(r.debug)}`;
+  }catch(e){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(e.message); }
+  finally{ btn.disabled=false; }
 }
 
 loadState();

@@ -14,6 +14,14 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["expo", "start"],
       "port": 8081
+    },
+    {
+      "name": "lab",
+      "cwd": "server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "lab"],
+      "port": 8799,
+      "autoPort": false
     }
   ]
 }

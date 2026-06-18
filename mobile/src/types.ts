@@ -149,6 +149,9 @@ export interface RestaurantInfo {
   tripAdvisor?: TripAdvisorInfo | null;
   /** true = lokal zgadnięty po GPS+kuchni (nie po nazwie) — niepewny, można poprawić. */
   guessedByLocation?: boolean;
+  /** Czy nazwa zwróconego lokalu zgadza się z szukaną (Places bywa „najbliższym strzałem").
+   *  false → pula zdjęć z lokalu traktowana ostrożniej (Tier 0). */
+  nameVerified?: boolean;
 }
 
 export type ModelId =

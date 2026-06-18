@@ -26,6 +26,9 @@ export interface RestaurantInfo {
   tripAdvisor?: TripAdvisorInfo | null;
   /** true = lokal zgadnięty po GPS+kuchni (nie po nazwie) — niepewny. */
   guessedByLocation?: boolean;
+  /** Czy nazwa zwróconego lokalu zgadza się z szukaną (Places potrafi zwrócić „najbliższy strzał",
+   *  więc bez tego pula zdjęć bywa z innego lokalu). false → traktuj zdjęcia jako NIEPEWNE. */
+  nameVerified?: boolean;
 }
 
 interface FindParams {
@@ -139,6 +142,17 @@ const CUISINE_TYPES: { keys: string[]; types: string[] }[] = [
   { keys: ["wegan", "vegan"], types: ["vegan_restaurant"] },
 ];
 
+// Normalizacja nazwy do porównań (małe litery, bez akcentów, tylko alfanumeryczne).
+function normName(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
+}
+/** Czy nazwa zwrócona przez Places pasuje do szukanej (zawieranie w obie strony). */
+function nameMatches(query: string, candidate: string): boolean {
+  const want = normName(query);
+  const got = normName(candidate);
+  return want.length >= 3 && got.length >= 3 && (got.includes(want) || want.includes(got));
+}
+
 /** Zwraca pokrewne typy Google dla opisu kuchni (puste, gdy nie rozpoznano). */
 export function cuisineRelatedTypes(cuisine?: string): string[] {
   if (!cuisine) return [];
@@ -244,7 +258,12 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
   }
   const json = (await res.json()) as { places?: Place[] };
   const place = json.places?.[0];
-  return place ? toInfo(place) : null;
+  if (!place) return null;
+  const info = toInfo(place);
+  // Places zwraca „najbliższy strzał" nawet przy słabym dopasowaniu nazwy — oznacz, czy nazwa
+  // faktycznie pasuje, żeby Tier 0 wiedział, czy może ufać puli zdjęć jako „z tego lokalu".
+  info.nameVerified = nameMatches(params.name, info.name);
+  return info;
 }
 
 /** Pobiera bajty zdjęcia lokalu (proxy — klucz zostaje po stronie serwera). */

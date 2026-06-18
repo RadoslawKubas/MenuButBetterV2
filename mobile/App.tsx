@@ -1094,12 +1094,16 @@ export default function App() {
     );
     if (dishes.length === 0) return;
 
+    // Lokal pewny tylko, gdy nazwa potwierdzona i nie zgadnięty po GPS — inaczej serwer każe
+    // modelowi rygorystycznie odrzucać zdjęcia niepasujące do kuchni (pula może być z innego lokalu).
+    const certain = restaurant.nameVerified !== false && !restaurant.guessedByLocation;
     const { matches, usage } = await fetchVenuePhotos(
       photoNames,
       taPhotos,
       dishes,
       baseMenu.cuisine,
       modelsForScan(scanId).venue, // zdjęcia z lokalu — model zamrożony z tego menu
+      certain,
     ).catch(() => ({ matches: [] as VenueMatch[], usage: ZERO_USAGE }));
 
     // Grupuj po daniu (najpewniejsze pierwsze; serwer już posortował), max 3 zdjęcia/danie.

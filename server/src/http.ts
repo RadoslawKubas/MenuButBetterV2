@@ -10,20 +10,11 @@ import { extractMenu, isModelId, MODELS, type InputImage, type MediaType } from 
 import { describeDish } from "./dishInfo.ts";
 import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantInfo } from "./places.ts";
 import { findTripAdvisor } from "./tripadvisor.ts";
-import {
-  contextProviders,
-  genericWebImages,
-  restaurantSiteImages,
-  photoSourceCategory,
-  OpenverseProvider,
-  WikimediaProvider,
-  type DishPhoto,
-} from "./dishPhotos.ts";
-import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
+import { runDishPhotos } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, type Provider } from "./apiLog.ts";
-import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
+import { ZERO_USAGE } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
@@ -344,15 +335,8 @@ interface DishPhotosBody {
   representativeOnly?: boolean; // tylko poglądowe (Wikimedia, free, bez SerpApi/vision) — do tła
 }
 
-// Tylko litery/cyfry, bez diakrytyków — do porównań nazwa↔URL.
-function stripAlnum(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]/g, "");
-}
-
+// Cała logika toru (tier 1/2/3 + weryfikacja + flaga fromVenue) jest w runDishPhotos
+// (src/dishPhotosPipeline.ts) — TEN SAM kod używa LAB do symulacji na migawkach.
 app.post("/dish-photos", async (c) => {
   if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   let body: DishPhotosBody;
@@ -363,61 +347,20 @@ app.post("/dish-photos", async (c) => {
   }
   if (!body.dish?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
-  const dish = body.dish.trim();
-  // Termin do OGÓLNEGO szukania (typ dania) — generyczny `photo_query` z menu, jeśli jest.
-  // Lokalna/markowa nazwa „Nordic Taste" trafia gorzej niż „smoked salmon avocado toast".
-  const genericTerm = body.photoQuery?.trim() || dish;
   const verifyModel = body.verifyModel?.trim() || "claude-sonnet-4-6";
-  const hint = body.restaurantHint?.trim() || undefined;
-  const cuisine = body.cuisine?.trim() || undefined;
-  const num = body.num ?? 4;
-  // Domena strony lokalu (jeśli znana) — do osobnego wyszukiwania i kategorii „restaurant".
-  let restaurantDomain: string | undefined;
-  if (body.website?.trim()) {
-    try {
-      restaurantDomain = new URL(body.website.trim()).hostname.replace(/^www\./, "").toLowerCase();
-    } catch {
-      /* nieprawidłowy URL — pomijamy */
-    }
-  }
-  // Klucz nazwy lokalu (np. „curcuma") do potwierdzenia, że strona portalu jest TEGO lokalu.
-  const venueKey = body.restaurantName?.trim() ? stripAlnum(body.restaurantName) : "";
-
-  // Log debugowy ścieżki szukania zdjęć (zwracany w odpowiedzi → przycisk 🐛 przy daniu).
-  // `candidates` = co KONKRETNIE zwróciło API (URL + domena + strona źródłowa) oraz ocena
-  // weryfikacji vision per zdjęcie — żeby dało się analizować, czemu coś przeszło/odpadło.
-  type DbgCandidate = { url: string; domain?: string; context?: string; score?: number; passed?: boolean };
-  type DbgStep = {
-    tier: string;
-    provider: string;
-    query: string;
-    returned: number;
-    passed?: number;
-    candidates?: DbgCandidate[];
-  };
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const candListOf = (list: DishPhoto[]): DbgCandidate[] =>
-    list.map((p) => ({ url: p.url, domain: p.domain, context: p.contextUrl }));
-  const candScoredOf = (list: (DishPhoto & { score: number })[]): DbgCandidate[] =>
-    list.map((p) => ({ url: p.url, domain: p.domain, context: p.contextUrl, score: r2(p.score), passed: p.score >= MATCH_THRESHOLD }));
-  const dbg: { params: Record<string, unknown>; steps: DbgStep[]; resultCount: number } = {
-    params: {
-      dish,
-      photoQuery: body.photoQuery?.trim() || null,
-      genericTerm,
-      restaurantName: body.restaurantName || null,
-      restaurantDomain: restaurantDomain || null,
-      cuisine: cuisine || null,
-      num,
-      verify: body.verify !== false,
-      representativeOnly: !!body.representativeOnly,
-    },
-    steps: [],
-    resultCount: 0,
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const respond = (photos: any[], usage: Usage) => {
-    dbg.resultCount = photos.length;
+  try {
+    const { photos, usage, debug } = await runDishPhotos({
+      dish: body.dish.trim(),
+      photoQuery: body.photoQuery,
+      restaurantHint: body.restaurantHint,
+      restaurantName: body.restaurantName,
+      cuisine: body.cuisine,
+      website: body.website,
+      num: body.num,
+      verify: body.verify,
+      verifyModel,
+      representativeOnly: body.representativeOnly,
+    });
     logEvent({
       type: "ai",
       op: "dish-photos",
@@ -426,147 +369,9 @@ app.post("/dish-photos", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dish, resultCount: photos.length, representativeOnly: !!body.representativeOnly },
+      data: { dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly },
     });
-    return c.json({ photos, usage, debug: dbg });
-  };
-
-  // Zdjęcia POGLĄDOWE (typ dania): Serper (Google Images) → Wikimedia → Openverse fallback.
-  // Serper ma dużo wyższe pokrycie trafnych zdjęć dań niż Commons (zmierzone: 93% vs 60%);
-  // Commons często zwraca mapy/budynki/przypadkowe pliki, więc był słabym źródłem startowym.
-  // DOMYŚLNIE WERYFIKOWANE wizją; jak nic nie pokazuje dania → PUSTA lista (lepiej brak niż bzdura).
-  async function representatives(verify: boolean): Promise<{
-    photos: { url: string; source: string; attribution?: string; verified: boolean; representative: boolean }[];
-    usage: Usage;
-  }> {
-    const pool = Math.max(num * 2, 6);
-    let provider = "Serper (web)";
-    let found = await genericWebImages(genericTerm, pool, cuisine).catch(() => []);
-    if (found.length === 0) {
-      provider = "Wikimedia";
-      found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
-    }
-    if (found.length === 0) {
-      provider = "Openverse";
-      found = await new OpenverseProvider(pool).find(genericTerm).catch(() => []);
-    }
-    const step: DbgStep = { tier: "Poglądowe (typ dania)", provider, query: genericTerm, returned: found.length };
-    dbg.steps.push(step);
-    if (found.length === 0) return { photos: [], usage: ZERO_USAGE };
-    // Etykieta źródła: dla wyników z domeną (Serper) → kategoria (web/tripadvisor…),
-    // dla Wikimedia/Openverse (bez domeny) → ich własny source.
-    const srcOf = (p: DishPhoto) => (p.domain ? photoSourceCategory(p.domain) : p.source);
-    if (!verify) {
-      step.passed = Math.min(found.length, num);
-      step.candidates = candListOf(found);
-      return {
-        photos: found.slice(0, num).map((p) => ({
-          url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true,
-        })),
-        usage: ZERO_USAGE,
-      };
-    }
-    const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((p) => p.url), { cuisine, model: verifyModel });
-    const scored = found.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
-    step.candidates = candScoredOf(scored);
-    const filtered = scored
-      .filter((p) => p.score >= MATCH_THRESHOLD)
-      .sort((a, b) => b.score - a.score);
-    step.passed = filtered.length;
-    const photos = filtered
-      .slice(0, num)
-      .map((p) => ({ url: p.url, source: srcOf(p), attribution: p.attribution, verified: false, representative: true }));
-    return { photos, usage };
-  }
-
-  // Tryb poglądowy (do tła po skanie): Wikimedia/Openverse, też weryfikowane (chyba że verify:false).
-  if (body.representativeOnly) {
-    try {
-      const { photos, usage } = await representatives(body.verify !== false);
-      return respond(photos, usage);
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
-    }
-  }
-
-  try {
-    let total: Usage = ZERO_USAGE;
-    const verify = body.verify !== false;
-
-    // Weryfikuje listę i zwraca te, które pokazują danie (≥ próg), posortowane po trafności.
-    // `term` = po czym weryfikować (oryginał dla „z lokalu", generyczny dla web).
-    async function keepMatching(list: DishPhoto[], term: string = dish) {
-      const { scores, usage } = await scoreDishPhotos(term, list.map((p) => p.url), { cuisine, model: verifyModel });
-      total = addUsage(total, usage);
-      const scored = list.map((p, i) => ({ ...p, score: scores[i] ?? 0 }));
-      const passing = scored.filter((p) => p.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
-      return { passing, scored };
-    }
-    const cat = (p: DishPhoto) => photoSourceCategory(p.domain, restaurantDomain);
-    // POTWIERDZONE „z tego lokalu": własna domena LUB nazwa lokalu w URL strony portalu.
-    const fromVenue = (p: DishPhoto) =>
-      cat(p) === "restaurant" ||
-      (venueKey.length >= 4 && stripAlnum(p.contextUrl ?? "").includes(venueKey));
-
-    // TIER 1: „z lokalu" — OSOBNO strona lokalu (site:domena) + OSOBNO portale recenzenckie, scalone.
-    const tier1: DishPhoto[] = [];
-    if (restaurantDomain) {
-      const site = await restaurantSiteImages(dish, restaurantDomain, 6).catch(() => []);
-      dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: dish, returned: site.length, candidates: candListOf(site) });
-      tier1.push(...site);
-    }
-    for (const p of contextProviders()) {
-      const portal = await p.find(dish, hint).catch(() => []);
-      dbg.steps.push({ tier: "Tier1 portale", provider: p.constructor.name, query: dish, returned: portal.length, candidates: candListOf(portal) });
-      if (portal.length > 0) {
-        tier1.push(...portal);
-        break;
-      }
-    }
-    const seen = new Set<string>();
-    const ctx = tier1.filter((p) => p.url && !seen.has(p.url) && seen.add(p.url));
-
-    if (!verify && ctx.length > 0) {
-      const photos = ctx.slice(0, num).map((p) => ({
-        url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: false, fromVenue: fromVenue(p),
-      }));
-      return respond(photos, ZERO_USAGE);
-    }
-    if (verify && ctx.length > 0) {
-      const { passing, scored } = await keepMatching(ctx);
-      dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: "Sonnet", query: dish, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
-      if (passing.length > 0) {
-        const photos = passing
-          // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
-          .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || b.score - a.score)
-          .slice(0, num)
-          .map((p) => ({
-            url: p.url, source: cat(p), attribution: p.attribution, verified: true, representative: false, fromVenue: fromVenue(p),
-          }));
-        return respond(photos, total);
-      }
-    }
-
-    // TIER 2: SZEROKO z sieci (bez restauracji) — realne zdjęcia tego dania/produktu jako „typ dania".
-    if (verify) {
-      const generic = await genericWebImages(genericTerm, 6, cuisine);
-      if (generic.length > 0) {
-        const { passing, scored } = await keepMatching(generic, genericTerm);
-        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length, candidates: candScoredOf(scored) });
-        if (passing.length > 0) {
-          const photos = passing.slice(0, num).map((p) => ({
-            url: p.url, source: cat(p), attribution: p.attribution, verified: false, representative: true,
-          }));
-          return respond(photos, total);
-        }
-      } else {
-        dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: 0, passed: 0 });
-      }
-    }
-
-    // TIER 3: poglądowe (Serper→Wikimedia→Openverse) — ostatnia deska.
-    const rep = await representatives(verify);
-    return respond(rep.photos, addUsage(total, rep.usage));
+    return c.json({ photos, usage, debug });
   } catch (e) {
     console.error("dish-photos error:", e);
     return c.json({ error: `Wyszukiwanie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
@@ -644,6 +449,7 @@ app.post("/venue-photos", async (c) => {
       dishes?: string[];
       cuisine?: string;
       model?: string;
+      certain?: boolean; // lokal pewny? (z /restaurant: nameVerified && !guessedByLocation)
     };
     const venueModel = body.model?.trim() || "claude-sonnet-4-6";
     const { matches, usage } = await matchVenuePhotos({
@@ -652,6 +458,7 @@ app.post("/venue-photos", async (c) => {
       dishes: Array.isArray(body.dishes) ? body.dishes : [],
       cuisine: body.cuisine,
       model: venueModel,
+      certain: body.certain !== false,
     });
     logEvent({
       type: "ai",

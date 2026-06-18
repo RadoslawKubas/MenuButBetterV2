@@ -21,10 +21,18 @@ export const VENUE_SYSTEM =
   "Klasyfikujesz zdjęcia z profilu restauracji i dopasowujesz realne potrawy do pozycji menu. " +
   "Bezwzględnie oznaczasz stock/AI/render jako stock_or_ai=true.";
 
-export function venueInstruction(dishes: string[], cuisine?: string): string {
+// `certain` = lokal pewny (nazwa potwierdzona w Places, nie zgadnięty po GPS). Gdy niepewny,
+// NIE twierdzimy „na pewno z tego miejsca" i każemy modelowi odrzucać zdjęcia niepasujące do
+// kuchni/charakteru — bo pula może być z innego lokalu (zwrócona jako „najbliższy strzał").
+export function venueInstruction(dishes: string[], cuisine?: string, certain = true): string {
   const ctx = cuisine ? ` (kuchnia: ${cuisine})` : "";
+  const origin = certain
+    ? `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n`
+    : `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx}, ale dopasowanie lokalu jest NIEPEWNE — ` +
+      `pula może pochodzić z INNEGO miejsca. Bądź rygorystyczny: ODRZUCAJ (dish='', confidence niskie) zdjęcia, ` +
+      `które nie pasują do tej kuchni/charakteru menu.\n`;
   return (
-    `To zdjęcia z profilu lokalu (Google Maps / TripAdvisor)${ctx} — NA PEWNO z tego miejsca.\n` +
+    origin +
     "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
     "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
     "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
@@ -60,6 +68,9 @@ export interface VenuePhotosInput {
   cuisine?: string;
   /** Model dopasowania (Claude lub GPT). Domyślnie Sonnet. */
   model?: string;
+  /** Czy lokal jest PEWNY (nazwa potwierdzona, nie zgadnięty po GPS). Domyślnie true.
+   *  false → ostrożniejsza instrukcja (odrzucaj zdjęcia niepasujące do kuchni). */
+  certain?: boolean;
 }
 
 type ImgMedia = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
@@ -161,7 +172,7 @@ export async function matchVenuePhotos(
 
   const model = input.model || MODEL;
   const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
-  const instruction = venueInstruction(dishes, input.cuisine);
+  const instruction = venueInstruction(dishes, input.cuisine, input.certain !== false);
   const system = VENUE_SYSTEM;
 
   try {

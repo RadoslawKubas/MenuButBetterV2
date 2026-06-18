@@ -209,11 +209,12 @@ export async function fetchVenuePhotos(
   dishes: string[],
   cuisine?: string,
   model?: string,
+  certain = true,
 ): Promise<{ matches: VenueMatch[]; usage: Usage }> {
   const res = await loggedFetch("venue-photos", `${API_BASE}/venue-photos`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine, model }),
+    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine, model, certain }),
   });
   const json = (await res.json()) as { matches?: VenueMatch[]; usage?: Usage; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
