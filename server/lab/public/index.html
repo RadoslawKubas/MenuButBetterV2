@@ -75,9 +75,15 @@
       <div id="prompts"></div>
     </div>
     <div class="panel">
-      <h3>3 · Uruchom</h3>
-      <button class="primary" id="runBtn" onclick="run()">▶︎ Uruchom na zaznaczonych migawkach</button>
-      <span class="mut small" id="runInfo" style="margin-left:10px"></span>
+      <h3>3 · Uruchom / eksperymenty</h3>
+      <input type="text" id="expName" placeholder="Nazwa eksperymentu (opcjonalnie)" style="margin-bottom:8px" />
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <button class="primary" id="runBtn" onclick="run()">▶︎ Uruchom</button>
+        <button onclick="loadRuns()">📁 Zapisane eksperymenty</button>
+        <span class="mut small" id="runInfo"></span>
+      </div>
+      <div class="mut small" id="loadedTag" style="margin-top:6px"></div>
+      <div id="runsList"></div>
     </div>
     <div id="results"></div>
     <div class="panel" id="judgePanel" style="display:none">
@@ -110,7 +116,7 @@
 const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
 let WITH_VENUE = false, PROMPTS = null;
-let LAST_RESULTS = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
+let LAST_RESULTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-sonnet-4-6', map, markers = [];
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 async function api(path, body) {
@@ -211,10 +217,41 @@ async function run(){
   if(!ops.length) return alert('Wybierz operacje.');
   const btn=document.getElementById('runBtn'); btn.disabled=true; document.getElementById('runInfo').textContent='liczę… (to może chwilę potrwać)';
   try{
-    const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue});
-    LAST_RESULTS=r.results; renderResults(); document.getElementById('runInfo').textContent='zapisano: '+r.file;
+    const name=document.getElementById('expName').value;
+    const r=await api('/api/run',{captureIds:ids, models:[...PICKED_MODELS], operations:ops, withVenue, name});
+    LAST_RESULTS=r.results; CURRENT_RUN_ID=r.runId; renderResults();
+    document.getElementById('runInfo').textContent='zapisano eksperyment: '+r.runId;
+    document.getElementById('judgeOut').innerHTML='';
     document.getElementById('judgePanel').style.display = ops.includes('scan')?'block':'none';
   }catch(e){ document.getElementById('runInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+}
+
+async function loadRuns(){
+  const el=document.getElementById('runsList');
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  const r=await api('/api/runs');
+  if(!r.runs.length){ el.innerHTML='<div class="mut small" style="margin-top:8px">brak zapisanych eksperymentów</div>'; return; }
+  el.innerHTML='<div style="margin-top:8px">'+r.runs.map(x=>`
+    <div class="cand" onclick="loadRun('${x.id}')">
+      <b>${x.name||x.id}</b> ${x.judged?'<span class="pill ok">sędzia</span>':''}
+      <div class="mut small">${new Date(x.at).toLocaleString()} · ${x.captures} migawek · ${(x.models||[]).length} modeli · ops: ${(x.operations||[]).join(',')}</div>
+    </div>`).join('')+'</div>';
+}
+
+async function loadRun(id){
+  const e=await api('/api/run-get?id='+encodeURIComponent(id));
+  if(e.error) return alert(e.error);
+  // Wczytaj KONFIG (do powtórzenia) + wyniki + werdykty.
+  PICKED_MODELS=new Set(e.config?.models||[]); PICKED_OPS=new Set(e.config?.operations||[]); WITH_VENUE=!!e.config?.withVenue;
+  SELECTED=new Set(e.captureIds||[]); CURRENT_RUN_ID=e.id; LAST_RESULTS=e.results||[];
+  if(e.judgeModel) JUDGE_MODEL=e.judgeModel;
+  document.getElementById('expName').value=e.name||'';
+  document.getElementById('loadedTag').innerHTML=`📂 wczytano: <b>${e.name||e.id}</b> — możesz zmienić config / dodać lokale i „▶︎ Uruchom" (powstanie nowy eksperyment).`;
+  renderModels(); renderOps(); renderCaptures();
+  document.getElementById('judgePanel').style.display=(e.config?.operations||[]).includes('scan')?'block':'none';
+  renderResults();
+  if(e.judgments) renderJudgments(e.judgments); else document.getElementById('judgeOut').innerHTML='';
+  document.getElementById('runsList').innerHTML='';
 }
 
 function cellFor(op,r){
@@ -247,17 +284,20 @@ function renderResults(){
 async function judge(){
   if(!LAST_RESULTS) return; const btn=document.getElementById('judgeBtn'); btn.disabled=true; document.getElementById('judgeInfo').textContent='sędzia analizuje…';
   try{
-    const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL});
-    document.getElementById('judgeOut').innerHTML = r.judgments.map(j=>{
-      const c=STATE.captures.find(x=>x.id===j.captureId); if(j.error) return `<div class="panel">${c?.name||j.captureId}: błąd ${j.error}</div>`;
-      const v=j.verdict; const rows=(v.perModel||[]).map(p=>`<tr><td><b>${p.model}</b></td><td class="num">${p.completeness}</td><td class="num">${p.accuracy}</td><td class="small">${p.notes||''}</td></tr>`).join('');
-      return `<div class="panel"><h3>${c?.name||j.captureId}</h3>
-        <table><thead><tr><th>model</th><th>kompletność</th><th>trafność</th><th>uwagi</th></tr></thead><tbody>${rows}</tbody></table>
-        <div style="margin-top:8px"><b>🏆 best:</b> ${v.best} · <b>💸 good‑enough:</b> ${v.goodEnough}</div>
-        <div class="mut small" style="margin-top:4px">${v.summary||''}</div></div>`;
-    }).join('');
-    document.getElementById('judgeInfo').textContent='';
+    const r=await api('/api/judge',{results:LAST_RESULTS, judgeModel:JUDGE_MODEL, runId:CURRENT_RUN_ID});
+    renderJudgments(r.judgments);
+    document.getElementById('judgeInfo').textContent='zapisano w eksperymencie';
   }catch(e){ document.getElementById('judgeInfo').textContent='błąd: '+e.message; } finally { btn.disabled=false; }
+}
+function renderJudgments(judgments){
+  document.getElementById('judgeOut').innerHTML = (judgments||[]).map(j=>{
+    const c=STATE.captures.find(x=>x.id===j.captureId); if(j.error) return `<div class="panel">${c?.name||j.captureId}: błąd ${j.error}</div>`;
+    const v=j.verdict||{}; const rows=(v.perModel||[]).map(p=>`<tr><td><b>${p.model}</b></td><td class="num">${p.completeness}</td><td class="num">${p.accuracy}</td><td class="small">${esc(p.notes||'')}</td></tr>`).join('');
+    return `<div class="panel"><h3>${c?.name||j.captureId}</h3>
+      <table><thead><tr><th>model</th><th>kompletność</th><th>trafność</th><th>uwagi</th></tr></thead><tbody>${rows}</tbody></table>
+      <div style="margin-top:8px"><b>🏆 best:</b> ${v.best||'—'} · <b>💸 good‑enough:</b> ${v.goodEnough||'—'}</div>
+      <div class="mut small" style="margin-top:4px">${esc(v.summary||'')}</div></div>`;
+  }).join('');
 }
 
 loadState();
