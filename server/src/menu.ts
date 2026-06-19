@@ -141,8 +141,8 @@ async function extractMenuOpenAI(
         json_schema: { name: "menu", strict: tag === "openai", schema: MENU_SCHEMA as unknown as Record<string, unknown> },
       },
       stream: true,
-      // usage w strumieniu — wspierane przez OpenAI; dla Gemini compat pomijamy (bywa nieobsługiwane).
-      ...(tag === "openai" ? { stream_options: { include_usage: true } } : {}),
+      // usage w strumieniu (ostatni chunk). OpenAI i Gemini-compat to wspierają.
+      stream_options: { include_usage: true },
     });
     let acc = "";
     let finish: string | null = null;
