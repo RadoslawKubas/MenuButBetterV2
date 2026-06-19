@@ -125,8 +125,10 @@ async function extractMenuOpenAI(
   });
   parts.push({ type: "text", text: contextText(opts, images.length) });
 
-  const resp = await track(tag, "scan-menu", () =>
-    openai.chat.completions.create({
+  // STREAMING — jak Claude: zbieramy tekst na bieżąco i liczymy pozycje (marker "original"),
+  // żeby apka pokazała „Odczytano N pozycji…". Usage (OpenAI) przychodzi w ostatnim chunku.
+  const { text, finishReason, usageRaw } = await track(tag, "scan-menu", async () => {
+    const stream = await openai.chat.completions.create({
       model,
       max_completion_tokens: MODELS[model].maxOutput,
       messages: [
@@ -138,21 +140,43 @@ async function extractMenuOpenAI(
         type: "json_schema",
         json_schema: { name: "menu", strict: tag === "openai", schema: MENU_SCHEMA as unknown as Record<string, unknown> },
       },
-    }),
-  );
+      stream: true,
+      // usage w strumieniu — wspierane przez OpenAI; dla Gemini compat pomijamy (bywa nieobsługiwane).
+      ...(tag === "openai" ? { stream_options: { include_usage: true } } : {}),
+    });
+    let acc = "";
+    let finish: string | null = null;
+    let uRaw: import("openai").OpenAI.Completions.CompletionUsage | undefined;
+    let lastItems = -1;
+    for await (const chunk of stream) {
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta?.content;
+      if (delta) {
+        acc += delta;
+        if (opts.onProgress) {
+          const items = (acc.match(/"original"\s*:/g) || []).length;
+          if (items !== lastItems) {
+            lastItems = items;
+            opts.onProgress({ chars: acc.length, items });
+          }
+        }
+      }
+      if (choice?.finish_reason) finish = choice.finish_reason;
+      if (chunk.usage) uRaw = chunk.usage;
+    }
+    return { text: acc, finishReason: finish, usageRaw: uRaw };
+  });
 
-  const usage = usageFromOpenAI(model, resp.usage);
+  const usage = usageFromOpenAI(model, usageRaw);
   recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
   logUsage(`menu obrazów=${images.length} (${tag})`, model, usage);
 
-  const choice = resp.choices[0];
-  if (choice?.finish_reason === "length") {
+  if (finishReason === "length") {
     throw new Error(
       "Menu jest bardzo duże i przekroczyło limit jednego skanu. Spróbuj zeskanować mniej stron naraz (np. po 3–4).",
     );
   }
-  const text = choice?.message?.content;
-  if (!text) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${choice?.finish_reason ?? "?"}).`);
+  if (!text) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${finishReason ?? "?"}).`);
   try {
     return { menu: JSON.parse(text) as Menu, usage };
   } catch {
