@@ -211,6 +211,14 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   let total: Usage = ZERO_USAGE;
   const verify = p.verify !== false;
 
+  // Termin do WERYFIKACJI Tier 1 (zdjęcia „z lokalu"): najbardziej OPISOWY — nazwa z menu +
+  // photo_query (np. „Mango — mango curry indian"). Sama nazwa pozycji bywa wieloznaczna („Mango"
+  // → owoc? lassi? curry?), więc po niej SZUKAMY (tak danie figuruje na stronie/portalu lokalu),
+  // ale OCENIAMY po pełnym opisie, który model już wygenerował. Bez tego np. napój mango z portalu
+  // przechodził jako „Mango", choć pozycja to mango CURRY.
+  const pq = p.photoQuery?.trim();
+  const verifyTerm = pq && pq.toLowerCase() !== dish.toLowerCase() ? `${dish} — ${pq}` : dish;
+
   // Weryfikuje listę i zwraca te, które pokazują danie (≥ próg), posortowane po trafności.
   async function keepMatching(list: DishPhoto[], term: string = dish) {
     const { scores, usage } = await scoreDishPhotos(term, list.map((ph) => ph.url), { cuisine, model: verifyModel });
@@ -245,8 +253,8 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return finish(photos, ZERO_USAGE);
   }
   if (verify && ctx.length > 0) {
-    const { passing, scored } = await keepMatching(ctx);
-    dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: verifyModel, query: dish, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
+    const { passing, scored } = await keepMatching(ctx, verifyTerm);
+    dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: verifyModel, query: verifyTerm, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
     if (passing.length > 0) {
       const photos = passing
         // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
