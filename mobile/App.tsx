@@ -467,13 +467,14 @@ export default function App() {
         }
       };
       const onScanItem = (stub: ScanItemStub) => {
-        // Nazwy pokazujemy zawsze (za darmo); zdjęcia prefetchujemy tylko gdy auto-zdjęcia włączone
-        // i w ramach limitu z „Kosztów" (markowe pomijamy — i tak idą w generyk na dotknięcie).
+        // Nazwy pokazujemy zawsze (za darmo); zdjęcia prefetchujemy gdy auto-zdjęcia włączone i w
+        // ramach limitu z „Kosztów". Markowe też (Coca-Cola itp.) — dostają czysty generyk produktowy,
+        // żeby w podglądzie na żywo nie zostawały bez miniatury.
         setScanItems((prev) => [
           ...prev,
           { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
         ]);
-        if (costPrefs.autoPhotos && !stub.branded && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+        if (costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
           pfEnqueued++;
           pfQueue.push(stub);
           pumpPrefetch();
