@@ -61,6 +61,7 @@ export interface DbgCandidate {
   passed?: boolean;
   fromVenue?: boolean;
   fromVenueReason?: string;
+  textOverlay?: boolean;
 }
 export interface DbgStep {
   tier: string;
@@ -208,7 +209,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       const fv = fromVenueInfo(ph);
       return { url: ph.url, domain: ph.domain, context: ph.contextUrl, fromVenue: fv.isVenue, fromVenueReason: fv.reason };
     });
-  const candScoredOf = (list: (DishPhoto & { score: number })[]): DbgCandidate[] =>
+  const candScoredOf = (list: (DishPhoto & { score: number; textOverlay?: boolean })[]): DbgCandidate[] =>
     list.map((ph) => {
       const fv = fromVenueInfo(ph);
       return {
@@ -219,6 +220,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
         passed: ph.score >= passThreshold(ph),
         fromVenue: fv.isVenue,
         fromVenueReason: fv.reason,
+        textOverlay: ph.textOverlay,
       };
     });
   // Buduje finalne zdjęcie z werdyktem „z lokalu" + powodem (spójnie we wszystkich tierach).
@@ -289,10 +291,11 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
         usage: ZERO_USAGE,
       };
     }
-    const { scores, usage } = await scoreDishPhotos(genericTerm, found.map((ph) => ph.url), { cuisine, model: verifyModel });
-    const scored = found.map((ph, i) => ({ ...ph, score: scores[i] ?? 0 }));
+    const { scores, textOverlay, usage } = await scoreDishPhotos(genericTerm, found.map((ph) => ph.url), { cuisine, model: verifyModel });
+    const scored = found.map((ph, i) => ({ ...ph, score: scores[i] ?? 0, textOverlay: !!textOverlay[i] }));
     step.candidates = candScoredOf(scored);
-    const filtered = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
+    const rs = (ph: { score: number; textOverlay?: boolean }) => ph.score - (ph.textOverlay ? 0.15 : 0);
+    const filtered = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => rs(b) - rs(a));
     step.passed = filtered.length;
     const photos = filtered.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) }));
     return { photos, usage };
@@ -317,10 +320,14 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const cityQual = p.city?.trim() || undefined;
   const verifyTerm = nameCanon.toLowerCase() !== nameMenu.toLowerCase() ? `${nameMenu} — ${nameCanon}` : nameMenu;
 
-  // #5 DEDUP: globalny klucz — dla bezpośrednich plików (np. .../butter-chicken.jpg) po nazwie pliku
-  // (łapie ten sam obraz z różnych subdomen/stron lokalu), inaczej po pełnym URL-u.
+  // #5 DEDUP: globalny klucz. Social (FB/IG): po STRONIE ŹRÓDŁOWEJ (1 zdjęcie / post — łapie ten
+  // sam obraz w różnych miniaturach). Bezpośrednie pliki: po nazwie pliku (ten sam obraz z różnych
+  // subdomen/stron lokalu). Inaczej po pełnym URL-u (miniatury gstatic mają content-ID w URL).
   const seen = new Set<string>();
   const dedupKey = (ph: DishPhoto): string => {
+    if (photoSourceCategory(ph.domain, restaurantDomain) === "social" && ph.contextUrl) {
+      return `c:${ph.contextUrl.toLowerCase().split(/[?#]/)[0]}`;
+    }
     try {
       const base = (new URL(ph.url).pathname.split("/").pop() || "").toLowerCase();
       if (/\.(jpe?g|png|webp|gif)$/.test(base) && base.replace(/\.[a-z]+$/, "").length >= 8) return `f:${base}`;
@@ -336,12 +343,21 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const need = () => num - result.length;
   const pushPhotos = (ps: OutPhoto[]) => { for (const x of ps) if (result.length < num) result.push(x); };
 
-  // Weryfikacja listy → posortowane oceny (dolicza koszt). Pusty term → bez vision.
-  async function verifyScored(list: DishPhoto[], term: string): Promise<(DishPhoto & { score: number })[]> {
-    const { scores, usage } = await scoreDishPhotos(term, list.map((ph) => ph.url), { cuisine, model: verifyModel });
+  // Ocena do SORTOWANIA z karą za „wpalony tekst" (#3) — pin/przepis z napisem rankuje niżej niż
+  // czyste zdjęcie jedzenia (ale nadal może przejść próg — to tylko kolejność, nie odrzucenie).
+  type Scored = DishPhoto & { score: number; textOverlay?: boolean };
+  const rankScore = (ph: Scored) => ph.score - (ph.textOverlay ? 0.15 : 0);
+
+  // Weryfikacja listy → oceny + flaga „wpalony tekst" (dolicza koszt).
+  async function verifyScored(list: DishPhoto[], term: string): Promise<Scored[]> {
+    const { scores, textOverlay, usage } = await scoreDishPhotos(term, list.map((ph) => ph.url), { cuisine, model: verifyModel });
     total = addUsage(total, usage);
-    return list.map((ph, i) => ({ ...ph, score: scores[i] ?? 0 }));
+    return list.map((ph, i) => ({ ...ph, score: scores[i] ?? 0, textOverlay: !!textOverlay[i] }));
   }
+
+  // Słabo dopasowane zdjęcia z WŁASNEJ strony lokalu (próg 0.45–0.6) — trzymane na koniec: lepsze
+  // jest pewne (≥0.6) zdjęcie typu dania niż zły WARIANT z lokalu (np. białe lassi dla „mango lassi").
+  let weakVenue: Scored[] = [];
 
   // ---- A. ZDJĘCIA Z LOKALU (#1) — tylko POTWIERDZONE (własna domena / d<id> TA / nazwa-w-URL). ----
   if (!branded) {
@@ -372,11 +388,14 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       if (verify) {
         // #4: weryfikujemy NAJPIERW potwierdzone z lokalu (gdy lokal ma dobre pokrycie — tanio, bez B).
         const scored = await verifyScored(venueCands, verifyTerm);
-        const pass = scored
-          .filter((ph) => ph.score >= passThreshold(ph))
-          .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || b.score - a.score);
-        dbg.steps.push({ tier: "Z lokalu — weryfikacja vision", provider: verifyModel, query: verifyTerm, returned: venueCands.length, passed: pass.length, candidates: candScoredOf(scored) });
-        pushPhotos(pass.map((ph) => outPhoto(ph, { verified: true, representative: false })));
+        const passed = scored.filter((ph) => ph.score >= passThreshold(ph));
+        // #1: PEWNE z lokalu (≥0.6) idą od razu; SŁABE (0.45–0.6, próg own-site) na koniec.
+        const strong = passed
+          .filter((ph) => ph.score >= MATCH_THRESHOLD)
+          .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || rankScore(b) - rankScore(a));
+        weakVenue = passed.filter((ph) => ph.score < MATCH_THRESHOLD).sort((a, b) => rankScore(b) - rankScore(a));
+        dbg.steps.push({ tier: "Z lokalu — weryfikacja vision", provider: verifyModel, query: verifyTerm, returned: venueCands.length, passed: passed.length, candidates: candScoredOf(scored) });
+        pushPhotos(strong.map((ph) => outPhoto(ph, { verified: true, representative: false })));
       } else {
         pushPhotos(venueCands.map((ph) => outPhoto(ph, { verified: false, representative: false })));
       }
@@ -407,12 +426,17 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
         continue;
       }
       const scored = await verifyScored(found, genericTerm);
-      const pass = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
+      const pass = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => rankScore(b) - rankScore(a));
       dbg.steps.push({ tier: "Poglądowe (typ dania)", provider: s.name, query: genericTerm, returned: found.length, passed: pass.length, candidates: candScoredOf(scored) });
       pushPhotos(pass.map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) })));
     }
   }
   await fillRepresentative();
+
+  // #1: na samym końcu — słabe zdjęcia z WŁASNEJ strony lokalu (lepsze niż nic, ale po pewnych i generyku).
+  if (need() > 0 && weakVenue.length) {
+    pushPhotos(weakVenue.map((ph) => outPhoto(ph, { verified: true, representative: false })));
+  }
 
   return finish(result.slice(0, num), total);
 }

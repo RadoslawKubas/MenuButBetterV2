@@ -12,12 +12,15 @@ import { usesOpenAiApi } from "./models.ts";
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model weryfikacji (gdy nie podano innego)
 
-// Wpisuje oceny z JSON-a modelu do tablicy `scores` (po indeksie zdjęcia).
-function applyScores(jsonText: string, scores: number[]): void {
+// Wpisuje oceny + flagę „wpalony tekst" z JSON-a modelu (po indeksie zdjęcia).
+function applyScores(jsonText: string, scores: number[], textOverlay: boolean[]): void {
   try {
-    const parsed = JSON.parse(jsonText) as { results: { index: number; match: number }[] };
+    const parsed = JSON.parse(jsonText) as { results: { index: number; match: number; text_overlay?: boolean }[] };
     for (const r of parsed.results) {
-      if (r.index >= 0 && r.index < scores.length) scores[r.index] = Math.max(0, Math.min(1, r.match));
+      if (r.index >= 0 && r.index < scores.length) {
+        scores[r.index] = Math.max(0, Math.min(1, r.match));
+        textOverlay[r.index] = !!r.text_overlay;
+      }
     }
   } catch {
     /* niepoprawny JSON — zostają zera */
@@ -46,7 +49,10 @@ export function verifyInstruction(dish: string, cuisine?: string): string {
     "- budynek / fasada / wnętrze / ludzie / zwierzę / roślina / krajobraz / przedmiot niezwiązany z jedzeniem,\n" +
     "- INNA potrawa lub napój niż opisany (np. curry/chleb, gdy pozycja to woda lub napój gazowany).\n" +
     "match>0.8 TYLKO, gdy wyraźnie widać właśnie tę pozycję (to danie albo ten napój).\n" +
-    "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja."
+    "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja.\n" +
+    "Dodatkowo ustaw text_overlay=true, gdy na zdjęciu jest WPALONY tekst/napis (tytuł dania, " +
+    "logo przepisu, baner, kolaż z podpisem — typowe piny z blogów/Pinteresta) — chcemy czyste " +
+    "zdjęcia jedzenia; w przeciwnym razie false."
   );
 }
 
@@ -62,8 +68,9 @@ const SCHEMA = {
         properties: {
           index: { type: "integer" },
           match: { type: "number", description: "0..1 — jak pewnie zdjęcie przedstawia to danie." },
+          text_overlay: { type: "boolean", description: "true = wpalony tekst/napis na zdjęciu (pin/przepis)." },
         },
-        required: ["index", "match"],
+        required: ["index", "match", "text_overlay"],
       },
     },
   },
@@ -104,21 +111,22 @@ async function fetchImageB64(url: string): Promise<{ media_type: ImgMedia; data:
   }
 }
 
-/** Zwraca oceny 0..1 (zrównane z `urls`) + zużycie tokenów weryfikacji. */
+/** Zwraca oceny 0..1 + flagi „wpalony tekst" (zrównane z `urls`) + zużycie tokenów weryfikacji. */
 export async function scoreDishPhotos(
   dish: string,
   urls: string[],
   opts: ScoreOptions = {},
-): Promise<{ scores: number[]; usage: Usage }> {
-  if (urls.length === 0) return { scores: [], usage: ZERO_USAGE };
+): Promise<{ scores: number[]; textOverlay: boolean[]; usage: Usage }> {
+  if (urls.length === 0) return { scores: [], textOverlay: [], usage: ZERO_USAGE };
   const model = opts.model || MODEL;
   const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
   const scores = new Array<number>(urls.length).fill(0);
+  const textOverlay = new Array<boolean>(urls.length).fill(false);
 
   // Pobierz wszystkie miniaturki równolegle (base64). Nieudane pomijamy — zostaną z oceną 0.
   const imgs = await Promise.all(urls.map((u) => fetchImageB64(u)));
   const valid = urls.map((_, i) => i).filter((i) => imgs[i]);
-  if (valid.length === 0) return { scores, usage: ZERO_USAGE };
+  if (valid.length === 0) return { scores, textOverlay, usage: ZERO_USAGE };
 
   const instruction = verifyInstruction(dish, opts.cuisine);
   const system = VERIFY_SYSTEM;
@@ -140,8 +148,8 @@ export async function scoreDishPhotos(
         schemaName: "scores",
         schema: SCHEMA as unknown as Record<string, unknown>,
       });
-      if (json) applyScores(json, scores);
-      return { scores, usage };
+      if (json) applyScores(json, scores, textOverlay);
+      return { scores, textOverlay, usage };
     }
 
     const content: Anthropic.ContentBlockParam[] = [];
@@ -163,11 +171,11 @@ export async function scoreDishPhotos(
     const usage = usageFrom(model, resp.usage);
     recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
     const text = resp.content.find((b) => b.type === "text");
-    if (text && text.type === "text") applyScores(text.text, scores);
-    return { scores, usage };
+    if (text && text.type === "text") applyScores(text.text, scores, textOverlay);
+    return { scores, textOverlay, usage };
   } catch {
     // Błąd weryfikacji → zera: nic nie przejdzie progu, więc spadniemy na zdjęcia
     // poglądowe (bezpieczniej pokazać „przykład" niż przypadkowe zdjęcie).
-    return { scores, usage: ZERO_USAGE };
+    return { scores, textOverlay, usage: ZERO_USAGE };
   }
 }

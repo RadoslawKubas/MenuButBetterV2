@@ -591,6 +591,7 @@ function candCard(cd){
   const badges = [
     cd.score!=null ? `<span class="badge ${cd.passed?'pass':'fail'}">${cd.score.toFixed(2)}</span>` : '',
     cd.fromVenue ? '<span class="badge venue">★ z lokalu</span>' : '',
+    cd.textOverlay ? '<span class="badge fail" title="wpalony tekst — down-rank">📝txt</span>' : '',
   ].filter(Boolean).join(' ');
   let ctxHost = cd.domain||'';
   try{ if(cd.context) ctxHost=new URL(cd.context).hostname.replace(/^www\./,''); }catch{}
