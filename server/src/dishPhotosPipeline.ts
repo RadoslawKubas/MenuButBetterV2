@@ -80,9 +80,10 @@ export interface DishPhotosResult {
   debug: DishPhotosDebug;
 }
 
-// Kategorie źródeł, gdzie nazwa lokalu w URL realnie znaczy „strona TEGO lokalu" (ma własny
-// profil per lokal). Blog/social/web z nazwą w URL to NIE dowód, że zdjęcie jest z tej restauracji.
-const VENUE_PORTAL_CATS = new Set(["tripadvisor", "yelp", "zomato", "thefork", "foursquare"]);
+// Kategorie źródeł, gdzie lokal ma WŁASNY profil i nazwa w URL realnie znaczy „strona TEGO lokalu":
+// portale recenzenckie + media społecznościowe (Facebook/Instagram — ludzie wrzucają tam realne
+// zdjęcia z lokalu). Zwykły blog/web z nazwą w URL to NIE dowód i tu nie wchodzi.
+const VENUE_PORTAL_CATS = new Set(["tripadvisor", "yelp", "zomato", "thefork", "foursquare", "social"]);
 
 function deaccentLower(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -159,12 +160,13 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
         ? { isVenue: true, reason: `TripAdvisor: ten sam wpis lokalu (d${taLocId})` }
         : { isVenue: false, reason: `TripAdvisor: INNY wpis niż nasz lokal (brak d${taLocId} w URL: ${urlShown})` };
     }
+    const kind = category === "social" ? "profil społecznościowy" : "portal";
     if (!venueName) {
-      return { isVenue: false, reason: `portal „${category}", ale nie znamy nazwy lokalu do dopasowania w URL` };
+      return { isVenue: false, reason: `${kind} „${category}", ale nie znamy nazwy lokalu do dopasowania w URL` };
     }
     return venueNameInUrl(ph.contextUrl, venueName)
-      ? { isVenue: true, reason: `portal „${category}": nazwa „${venueName}" w URL — słabsza podstawa niż ID (${urlShown})` }
-      : { isVenue: false, reason: `portal „${category}", ale nazwy „${venueName}" NIE ma w URL (${urlShown})` };
+      ? { isVenue: true, reason: `${kind} „${category}": nazwa „${venueName}" w URL — słabsza podstawa niż ID (${urlShown})` }
+      : { isVenue: false, reason: `${kind} „${category}", ale nazwy „${venueName}" NIE ma w URL (${urlShown})` };
   };
   const fromVenue = (ph: DishPhoto) => fromVenueInfo(ph).isVenue;
 

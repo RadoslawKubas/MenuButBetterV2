@@ -393,7 +393,8 @@ export async function venuePortalImages(
   numPerName = 6,
 ): Promise<DishPhoto[]> {
   if (!process.env.SERPER_KEY) return [];
-  const domains = dishPhotoDomains();
+  // Portale recenzenckie + media społecznościowe lokalu (FB/IG — realne zdjęcia wrzucane przez ludzi).
+  const domains = [...dishPhotoDomains(), "facebook.com", "instagram.com"];
   const siteFilter = domains.length ? ` (${domains.map((d) => `site:${d}`).join(" OR ")})` : "";
   const venueQual = [restaurant, city].filter(Boolean).join(" ");
   const uniqNames = [...new Set(names.map((n) => n.trim()).filter(Boolean).map((n) => n.toLowerCase()))];
