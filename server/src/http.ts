@@ -72,6 +72,9 @@ interface ScanBody {
   locationHint?: string;
   cuisineHint?: string;
   model?: string;
+  /** Apka prosi o KROKI postępu (NDJSON: received → extracting… → done/error).
+   *  Bez tego — stare zachowanie (spacje keepalive + finalny JSON), zgodne ze starym buildem. */
+  stream?: boolean;
 }
 
 /** Normalizuje wejście (tablica lub pojedyncze) do InputImage[]. Rzuca przy błędzie. */
@@ -132,10 +135,16 @@ app.post("/scan", async (c) => {
   // >60 s) wysyłamy co kilka sekund spację — utrzymuje połączenie, żeby iOS nie
   // zerwał bezczynnego requestu (klasyczny „network error"). JSON.parse i tak
   // ignoruje wiodące białe znaki, więc finalny JSON parsuje się normalnie.
+  // Z `stream:true` (nowa apka) wysyłamy KROKI NDJSON („received" → cykliczne „extracting"
+  // z czasem → „done"/„error"). Bez tego — stare zachowanie: spacje keepalive + finalny JSON.
+  const wantSteps = body.stream === true;
+  const t0 = Date.now();
   return stream(c, async (s) => {
+    if (wantSteps) await s.write(JSON.stringify({ phase: "received", images: images.length }) + "\n");
     const keepalive = setInterval(() => {
-      s.write(" ").catch(() => {});
-    }, 5000);
+      const beat = wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ";
+      s.write(beat).catch(() => {});
+    }, wantSteps ? 2000 : 5000);
     try {
       const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
       const { menu, usage } = await extractMenu(images, {
@@ -165,10 +174,11 @@ app.post("/scan", async (c) => {
           cuisine: menu.cuisine ?? null,
         },
       });
-      await s.write(JSON.stringify({ menu, usage }));
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage }) + "\n" : JSON.stringify({ menu, usage }));
     } catch (e) {
       console.error("scan error:", e);
-      await s.write(JSON.stringify({ error: `Odczyt menu nie powiódł się: ${(e as Error).message}` }));
+      const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;
+      await s.write(wantSteps ? JSON.stringify({ error: msg }) + "\n" : JSON.stringify({ error: msg }));
     } finally {
       clearInterval(keepalive);
     }

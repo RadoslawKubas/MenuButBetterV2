@@ -72,26 +72,98 @@ export interface ScanParams {
   model: ModelId;
 }
 
-export async function scanMenu(params: ScanParams): Promise<{ menu: Menu; usage: Usage }> {
-  const res = await loggedFetch("scan", `${API_BASE}/scan`, {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify({
-      images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-      targetLang: params.targetLang,
-      restaurantHint: params.restaurantHint,
-      locationHint: params.locationHint,
-      cuisineHint: params.cuisineHint,
-      model: params.model,
-    }),
+/** Postęp skanu: wysyłka zdjęć (%) → serwer odebrał → model czyta (czas) → składanie. */
+export type ScanPhase =
+  | { phase: "uploading"; pct: number }
+  | { phase: "received" }
+  | { phase: "extracting"; elapsedMs: number }
+  | { phase: "finalizing" };
+
+/**
+ * Skan menu z PODGLĄDEM POSTĘPU. Używa XMLHttpRequest (fetch w RN nie daje postępu wysyłki):
+ *  • `upload.onprogress` → ile zdjęć już poszło (%),
+ *  • strumień NDJSON z serwera (`stream:true`) → kroki „odebrano / model czyta (Ns)".
+ * Stary serwer i tak by zadziałał (zignoruje NDJSON), ale my parsujemy linie.
+ */
+export function scanMenu(
+  params: ScanParams,
+  onProgress?: (p: ScanPhase) => void,
+): Promise<{ menu: Menu; usage: Usage }> {
+  const t0 = Date.now();
+  const body = JSON.stringify({
+    images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
+    targetLang: params.targetLang,
+    restaurantHint: params.restaurantHint,
+    locationHint: params.locationHint,
+    cuisineHint: params.cuisineHint,
+    model: params.model,
+    stream: true,
   });
 
-  const json = (await res.json()) as { menu?: Menu; usage?: Usage; error?: string };
-  if (!res.ok || json.error) {
-    throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
-  }
-  if (!json.menu) throw new Error("Pusta odpowiedź serwera.");
-  return { menu: json.menu, usage: json.usage ?? ZERO_USAGE };
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/scan`);
+    Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
+    xhr.timeout = 180000; // model przy wielu stronach potrafi liczyć ~2 min
+
+    // Postęp WYSYŁKI zdjęć (najdłuższe przy wielu/dużych zdjęciach).
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.({ phase: "uploading", pct: e.loaded / e.total });
+    };
+    xhr.upload.onload = () => onProgress?.({ phase: "received" });
+
+    // Strumień odpowiedzi: parsujemy KROKI NDJSON w miarę napływu (responseText rośnie).
+    let scanned = 0;
+    const parseLines = (text: string) => {
+      const nl = text.lastIndexOf("\n");
+      if (nl < scanned) return;
+      const chunk = text.slice(scanned, nl);
+      scanned = nl + 1;
+      for (const line of chunk.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0 });
+          else if (ev.phase === "received") onProgress?.({ phase: "received" });
+        } catch {
+          /* niepełna linia — doczyta się później */
+        }
+      }
+    };
+    xhr.onprogress = () => parseLines(xhr.responseText);
+
+    const fail = (msg: string) => {
+      appLog.logCall({ ts: Date.now(), label: "scan", ok: false, ms: Date.now() - t0, detail: msg });
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => fail("Błąd sieci podczas skanu.");
+    xhr.ontimeout = () => fail("Skan trwał za długo (timeout).");
+    xhr.onload = () => {
+      appLog.logCall({ ts: Date.now(), label: "scan", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
+      onProgress?.({ phase: "finalizing" });
+      // Wynik: ostatnia kompletna linia JSON z `menu`/`error`/`done`.
+      const text = xhr.responseText || "";
+      let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
+      for (const line of text.split("\n")) {
+        const tt = line.trim();
+        if (!tt) continue;
+        try {
+          const ev = JSON.parse(tt);
+          if (ev.menu || ev.error || ev.done) result = ev;
+        } catch {
+          /* pomiń niepełne/keepalive */
+        }
+      }
+      if (!result) return fail(`Pusta/niepoprawna odpowiedź (HTTP ${xhr.status}).`);
+      if (xhr.status < 200 || xhr.status >= 300 || result.error) {
+        return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
+      }
+      if (!result.menu) return fail("Pusta odpowiedź serwera.");
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE });
+    };
+    xhr.send(body);
+  });
 }
 
 export interface DishInfoParams {

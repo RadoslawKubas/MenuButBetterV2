@@ -15,6 +15,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import {
   scanMenu,
+  type ScanPhase,
   fetchDishInfo,
   fetchDishPhotos,
   fetchRestaurant,
@@ -124,6 +125,20 @@ function matchTaPhotos(dishName: string, taPhotos: TripAdvisorPhoto[] | undefine
 type Status = "idle" | "scanning" | "done" | "error";
 type Tab = "scan" | "history";
 
+// Faza skanu → krótki, „żywy" opis kroku + ewentualny % wysyłki (do paska postępu).
+function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
+  switch (p.phase) {
+    case "uploading":
+      return { label: `Wysyłanie zdjęć… ${Math.round(p.pct * 100)}%`, pct: p.pct };
+    case "received":
+      return { label: "Serwer odebrał — model czyta menu…" };
+    case "extracting":
+      return { label: `Model czyta menu… ${Math.round(p.elapsedMs / 1000)} s` };
+    case "finalizing":
+      return { label: "Składam wynik…" };
+  }
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
@@ -135,6 +150,8 @@ export default function App() {
   const [status, setStatus] = useState<Status>("idle");
   // Postęp analizy gdy skan idzie partiami (duże menu). null = brak/jedna partia.
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
+  // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
+  const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
   const [images, setImages] = useState<PreparedImage[]>([]);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -339,6 +356,7 @@ export default function App() {
     if (opts.images.length === 0) return;
     setError(null);
     setStatus("scanning");
+    setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
       //  1) EXIF zdjęcia — najlepsze, bo wskazuje GDZIE zrobiono zdjęcie (lokal),
@@ -406,14 +424,17 @@ export default function App() {
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
           : opts.hint.trim() || undefined;
-        const { menu: incoming, usage } = await scanMenu({
-          images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-          targetLang: opts.targetLang,
-          restaurantHint: batchHint,
-          locationHint,
-          cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
-          model: opts.models.scan,
-        });
+        const { menu: incoming, usage } = await scanMenu(
+          {
+            images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
+            targetLang: opts.targetLang,
+            restaurantHint: batchHint,
+            locationHint,
+            cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
+            model: opts.models.scan,
+          },
+          (p) => setScanPhase(scanPhaseLabel(p)),
+        );
 
         if (!merged) {
           // Pierwsza partia → bazowe menu + zapis (kolejne tylko dokładają).
@@ -445,6 +466,7 @@ export default function App() {
       }
 
       setScanProgress(null);
+      setScanPhase(null);
       setStatus("done");
       setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
       setVenueQuery("");
@@ -480,6 +502,7 @@ export default function App() {
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
       setScanProgress(null);
+      setScanPhase(null);
     }
   }
 
@@ -1231,12 +1254,15 @@ export default function App() {
     setAppending(true);
     try {
       const hint = [baseMenu.restaurant_name, baseMenu.cuisine].filter(Boolean).join(" ") || undefined;
-      const { menu: incoming, usage } = await scanMenu({
-        images: newImages.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-        targetLang: scanLang,
-        restaurantHint: hint,
-        model: modelsForScan(scanId).scan, // dokładanie do zapisanego menu — model zamrożony
-      });
+      const { menu: incoming, usage } = await scanMenu(
+        {
+          images: newImages.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
+          targetLang: scanLang,
+          restaurantHint: hint,
+          model: modelsForScan(scanId).scan, // dokładanie do zapisanego menu — model zamrożony
+        },
+        (p) => setScanPhase(scanPhaseLabel(p)),
+      );
       const { menu: merged, addedItems, addedSections } = mergeMenus(baseMenu, incoming);
       await updateScanMenu(scanId, merged);
       await addScanUsage(scanId, usage);
@@ -1267,6 +1293,7 @@ export default function App() {
       Alert.alert("Nie udało się dodać", friendlyMessage(e instanceof Error ? e.message : undefined));
     } finally {
       setAppending(false);
+      setScanPhase(null);
     }
   }
 
@@ -1685,6 +1712,16 @@ export default function App() {
                       <Text style={styles.scanningSub}>Im więcej stron, tym dłużej — zwykle do minuty.</Text>
                     </>
                   )}
+                  {scanPhase ? (
+                    <>
+                      <Text style={styles.scanPhase}>{scanPhase.label}</Text>
+                      {scanPhase.pct != null ? (
+                        <View style={styles.progressTrack}>
+                          <View style={[styles.progressFill, { width: `${Math.round(scanPhase.pct * 100)}%` }]} />
+                        </View>
+                      ) : null}
+                    </>
+                  ) : null}
                 </View>
               ) : null}
 
@@ -2011,6 +2048,7 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", paddingVertical: 48 },
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
+  scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
   progressTrack: {
     width: "70%",
     height: 8,
