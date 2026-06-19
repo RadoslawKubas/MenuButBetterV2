@@ -129,6 +129,8 @@ export interface TripAdvisorPhoto {
 
 export interface TripAdvisorInfo {
   url: string | null;
+  /** ID wpisu lokalu na TripAdvisor — pewny werdykt „z lokalu" (d<id> w URL). */
+  locationId?: string | null;
   rating: number | null;
   reviews: number | null;
   photos: TripAdvisorPhoto[];

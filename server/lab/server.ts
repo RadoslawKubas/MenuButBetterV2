@@ -619,6 +619,7 @@ app.post("/api/sim-scan", async (c) => {
         photoNames: rest.photoNames ?? [],
         taPhotos: (ta?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption })),
         taUrl: ta?.url ?? null,
+        taLocationId: ta?.locationId ?? null, // pewny werdykt „z lokalu" dla TripAdvisora
       };
     }
   }
@@ -663,6 +664,7 @@ app.post("/api/sim-dish", async (c) => {
     cuisine?: string;
     restaurantName?: string;
     city?: string;
+    taLocationId?: string;
     website?: string;
     verifyModel?: string;
     num?: number;
@@ -677,6 +679,7 @@ app.post("/api/sim-dish", async (c) => {
       restaurantHint: b.restaurantName, // w apce hint ≈ nazwa lokalu (bias zapytań portalowych)
       restaurantName: b.restaurantName,
       city: b.city,
+      taLocationId: b.taLocationId,
       cuisine: b.cuisine,
       website: b.website,
       num: b.num ?? 4,

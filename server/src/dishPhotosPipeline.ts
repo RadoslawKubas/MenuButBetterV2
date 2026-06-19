@@ -26,6 +26,8 @@ export interface DishPhotosParams {
   restaurantName?: string;
   /** Miasto lokalu — doklejane do zapytań portalowych (odsiewa lokal o podobnej nazwie gdzie indziej). */
   city?: string;
+  /** location_id wpisu lokalu na TripAdvisor — PEWNY werdykt „z lokalu" dla TA (d<id> w URL). */
+  taLocationId?: string;
   cuisine?: string;
   /** Strona lokalu (z Google Places) — osobne źródło + kategoria „restaurant". */
   website?: string;
@@ -127,6 +129,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     }
   }
   const venueName = p.restaurantName?.trim() || "";
+  const taLocId = p.taLocationId?.trim() || "";
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const cat = (ph: DishPhoto) => photoSourceCategory(ph.domain, restaurantDomain);
@@ -147,12 +150,20 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
         : `domena „${dom}" nie jest portalem recenzenckim, a strony www lokalu nie znamy`;
       return { isVenue: false, reason: `źródło „${category}": ${why}` };
     }
+    const urlShown = (ph.contextUrl || "").replace(/^https?:\/\//, "").slice(0, 70);
+    // TripAdvisor: PEWNY werdykt po location_id wpisu PRAWDZIWEGO lokalu (d<id> w URL) — odróżnia
+    // dwa różne wpisy o tej samej nazwie (inne miasto/oddział), czego sama nazwa nie wyłapie.
+    if (category === "tripadvisor" && taLocId) {
+      const idRe = new RegExp(`(?:^|[^0-9])d${taLocId}(?:[^0-9]|$)`);
+      return idRe.test(ph.contextUrl || "")
+        ? { isVenue: true, reason: `TripAdvisor: ten sam wpis lokalu (d${taLocId})` }
+        : { isVenue: false, reason: `TripAdvisor: INNY wpis niż nasz lokal (brak d${taLocId} w URL: ${urlShown})` };
+    }
     if (!venueName) {
       return { isVenue: false, reason: `portal „${category}", ale nie znamy nazwy lokalu do dopasowania w URL` };
     }
-    const urlShown = (ph.contextUrl || "").replace(/^https?:\/\//, "").slice(0, 70);
     return venueNameInUrl(ph.contextUrl, venueName)
-      ? { isVenue: true, reason: `portal „${category}" + nazwa lokalu „${venueName}" w URL (${urlShown})` }
+      ? { isVenue: true, reason: `portal „${category}": nazwa „${venueName}" w URL — słabsza podstawa niż ID (${urlShown})` }
       : { isVenue: false, reason: `portal „${category}", ale nazwy „${venueName}" NIE ma w URL (${urlShown})` };
   };
   const fromVenue = (ph: DishPhoto) => fromVenueInfo(ph).isVenue;

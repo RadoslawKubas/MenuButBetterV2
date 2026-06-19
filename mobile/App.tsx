@@ -884,6 +884,7 @@ export default function App() {
     location?: string;
     website?: string;
     city?: string;
+    taLocationId?: string;
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void;
   }) {
     const item = opts.menu.sections[opts.si]?.items[opts.ii];
@@ -949,6 +950,7 @@ export default function App() {
                   website: opts.website,
                   restaurantName: opts.menu.restaurant_name ?? undefined,
                   city: opts.city,
+                  taLocationId: opts.taLocationId,
                   photoQuery: item.photo_query,
                   photoQueryLocal: item.photo_query_local,
                   verifyModel: eff.verify,
@@ -1364,6 +1366,7 @@ export default function App() {
         location: locationFor(menu, freshRestaurant),
         website: freshRestaurant?.website ?? undefined,
         city: freshRestaurant?.city ?? undefined,
+        taLocationId: freshRestaurant?.tripAdvisor?.locationId ?? undefined,
         applyMenu: setMenu,
       });
   }
@@ -1381,6 +1384,7 @@ export default function App() {
       location: locationFor(openScan.menu, openScan.restaurant),
       website: openScan.restaurant?.website ?? undefined,
       city: openScan.restaurant?.city ?? undefined,
+      taLocationId: openScan.restaurant?.tripAdvisor?.locationId ?? undefined,
       applyMenu: makeApplyMenu(openScan.id, true),
     });
   }

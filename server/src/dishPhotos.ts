@@ -397,11 +397,17 @@ export async function venuePortalImages(
   const siteFilter = domains.length ? ` (${domains.map((d) => `site:${d}`).join(" OR ")})` : "";
   const venueQual = [restaurant, city].filter(Boolean).join(" ");
   const uniqNames = [...new Set(names.map((n) => n.trim()).filter(Boolean).map((n) => n.toLowerCase()))];
+  // Filtr na portale: Google bywa, że IGNORUJE `site:` przy ubogich wynikach i zwraca blogi
+  // kulinarne — tu zostawiamy TYLKO realne portale (reszta i tak trafi do Tier 2 „web").
+  const onPortal = (im: DishPhoto) => {
+    const h = (im.domain || hostOf(im.contextUrl) || "").toLowerCase();
+    return domains.some((d) => h === d || h.endsWith(`.${d}`) || h.includes(d.replace(/\.[a-z]+$/, "")));
+  };
   const out: DishPhoto[] = [];
   const seen = new Set<string>();
   for (const name of uniqNames) {
     const imgs = await serperImages(`${name} ${venueQual}${siteFilter}`, numPerName).catch(() => []);
-    for (const im of imgs) if (im.url && !seen.has(im.url) && seen.add(im.url)) out.push(im);
+    for (const im of imgs) if (im.url && onPortal(im) && !seen.has(im.url) && seen.add(im.url)) out.push(im);
   }
   return out;
 }

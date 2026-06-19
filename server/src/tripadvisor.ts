@@ -35,6 +35,7 @@ export interface TripAdvisorPhoto {
 
 export interface TripAdvisorInfo {
   url: string | null; // web_url — strona lokalu na TripAdvisor
+  locationId: string | null; // ID wpisu TA tego lokalu — do PEWNEGO werdyktu „z lokalu" (d<id> w URL)
   rating: number | null;
   reviews: number | null;
   photos: TripAdvisorPhoto[]; // prawdziwe zdjęcia lokalu (z podpisami)
@@ -140,6 +141,7 @@ export async function findTripAdvisor(params: TaParams): Promise<TripAdvisorInfo
 
   return {
     url: d.web_url ?? null,
+    locationId: locId,
     rating: d.rating != null ? Number(d.rating) : null,
     reviews: d.num_reviews != null ? Number(d.num_reviews) : null,
     photos,
