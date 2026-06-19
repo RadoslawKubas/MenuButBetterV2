@@ -123,10 +123,22 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const num = p.num ?? 4;
 
   // Domena strony lokalu (jeśli znana) — do osobnego wyszukiwania i kategorii „restaurant".
+  // UWAGA: Google jako „website" potrafi podać PROFIL SPOŁECZNOŚCIOWY (np. instagram.com/lokal).
+  // Wtedy NIE wolno traktować całej domeny (instagram.com) jako strony lokalu — inaczej KAŻDE
+  // zdjęcie z instagrama dostaje ★. Rozpoznajemy wtedy konkretny PROFIL (instagram.com/handle).
+  const SOCIAL_HOSTS = new Set(["instagram.com", "facebook.com", "fb.com", "twitter.com", "x.com", "tiktok.com", "linktr.ee"]);
   let restaurantDomain: string | undefined;
+  let ownSocialUrl: string | undefined; // np. „instagram.com/ferrettibadalona" — profil TEGO lokalu
   if (p.website?.trim()) {
     try {
-      restaurantDomain = new URL(p.website.trim()).hostname.replace(/^www\./, "").toLowerCase();
+      const u = new URL(p.website.trim());
+      const host = u.hostname.replace(/^(www|m)\./, "").toLowerCase();
+      if (SOCIAL_HOSTS.has(host)) {
+        const path = u.pathname.replace(/\/+$/, "");
+        if (path && path !== "/") ownSocialUrl = (host + path).toLowerCase(); // tylko z konkretnym profilem
+      } else {
+        restaurantDomain = host;
+      }
     } catch {
       /* nieprawidłowy URL — pomijamy */
     }
@@ -144,6 +156,14 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const fromVenueInfo = (ph: DishPhoto): { isVenue: boolean; reason: string } => {
     const category = cat(ph);
     const dom = domOf(ph);
+    // Własny PROFIL społecznościowy lokalu (gdy „website" to instagram/facebook/…): pewne, ale tylko
+    // gdy URL zdjęcia jest pod tym profilem — nie cały serwis.
+    if (ownSocialUrl && ph.contextUrl) {
+      const ctxNorm = ph.contextUrl.replace(/^https?:\/\//, "").replace(/^(www|m)\./, "").toLowerCase();
+      if (ctxNorm.startsWith(ownSocialUrl + "/") || ctxNorm === ownSocialUrl) {
+        return { isVenue: true, reason: `własny profil lokalu (${ownSocialUrl})` };
+      }
+    }
     if (category === "restaurant") {
       return { isVenue: true, reason: `domena „${dom}" = strona lokalu (${restaurantDomain})` };
     }
