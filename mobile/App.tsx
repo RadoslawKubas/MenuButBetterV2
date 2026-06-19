@@ -133,7 +133,11 @@ function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
     case "received":
       return { label: "Serwer odebrał — model czyta menu…" };
     case "extracting":
-      return { label: `Model czyta menu… ${Math.round(p.elapsedMs / 1000)} s` };
+      return {
+        label: p.items && p.items > 0
+          ? `Odczytano ${p.items} pozycji… (${Math.round(p.elapsedMs / 1000)} s)`
+          : `Model czyta menu… ${Math.round(p.elapsedMs / 1000)} s`,
+      };
     case "finalizing":
       return { label: "Składam wynik…" };
   }

@@ -44,6 +44,9 @@ export interface ExtractOptions {
   cuisineHint?: string;
   /** Model do użycia. Domyślnie Sonnet 4.6. */
   model?: ModelId;
+  /** Postęp odczytu na żywo (Claude, streaming): ile pozycji już wypisał model i ile znaków.
+   *  Pozwala apce pokazać „Odczytano N pozycji…" zamiast samego licznika czasu. */
+  onProgress?: (p: { chars: number; items: number }) => void;
 }
 
 export const SYSTEM = [
@@ -188,6 +191,18 @@ export async function extractMenu(
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: MENU_SCHEMA } },
   });
+  // Postęp na żywo: licz pozycje po markerze "original" (jeden na danie) w tekście, który już
+  // napłynął. Throttle, by nie zalać klienta — emitujemy tylko gdy licznik pozycji wzrośnie.
+  if (opts.onProgress) {
+    let lastItems = -1;
+    stream.on("text", (_delta, snapshot) => {
+      const items = (snapshot.match(/"original"\s*:/g) || []).length;
+      if (items !== lastItems) {
+        lastItems = items;
+        opts.onProgress!({ chars: snapshot.length, items });
+      }
+    });
+  }
   const response = await track("claude", "scan-menu", () => stream.finalMessage());
 
   // Zużycie tokenów + koszt (do licznika w apce + diagnostyki).

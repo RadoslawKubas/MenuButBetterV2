@@ -141,8 +141,9 @@ app.post("/scan", async (c) => {
   const t0 = Date.now();
   return stream(c, async (s) => {
     if (wantSteps) await s.write(JSON.stringify({ phase: "received", images: images.length }) + "\n");
+    let latestItems = 0; // ile pozycji model już wypisał (z onProgress) — dokładane do każdego kroku
     const keepalive = setInterval(() => {
-      const beat = wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ";
+      const beat = wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0, items: latestItems }) + "\n" : " ";
       s.write(beat).catch(() => {});
     }, wantSteps ? 2000 : 5000);
     try {
@@ -153,6 +154,13 @@ app.post("/scan", async (c) => {
         locationHint: body.locationHint?.trim() || undefined,
         cuisineHint: body.cuisineHint?.trim() || undefined,
         model,
+        // Postęp odczytu na żywo (Claude): emituj krok z licznikiem pozycji, gdy wzrośnie.
+        onProgress: wantSteps
+          ? (p) => {
+              latestItems = p.items;
+              s.write(JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0, items: p.items }) + "\n").catch(() => {});
+            }
+          : undefined,
       });
       // Trwały log skanu — do statystyk „ile menu / dań / koszt per model".
       const items = menu.sections.reduce((n, sec) => n + sec.items.length, 0);

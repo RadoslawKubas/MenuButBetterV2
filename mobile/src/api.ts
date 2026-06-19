@@ -76,7 +76,7 @@ export interface ScanParams {
 export type ScanPhase =
   | { phase: "uploading"; pct: number }
   | { phase: "received" }
-  | { phase: "extracting"; elapsedMs: number }
+  | { phase: "extracting"; elapsedMs: number; items?: number }
   | { phase: "finalizing" };
 
 /**
@@ -124,7 +124,7 @@ export function scanMenu(
         if (!t) continue;
         try {
           const ev = JSON.parse(t);
-          if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0 });
+          if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
         } catch {
           /* niepełna linia — doczyta się później */
