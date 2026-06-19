@@ -48,6 +48,8 @@
   .ct { width:74px; }
   .ct img { width:74px; height:74px; object-fit:cover; border-radius:6px; background:#000; display:block; }
   .ct .cap2 { font-size:10px; line-height:1.2; margin-top:2px; color:var(--mut); word-break:break-word; }
+  .vreason { margin-top:2px; font-size:9px; line-height:1.15; color:var(--err); cursor:help; }
+  .vreason.ok { color:var(--ok); }
   .badge { display:inline-block; padding:0 5px; border-radius:6px; font-size:10px; font-weight:800; }
   .badge.venue { background:#3a2a08; color:var(--warn); }
   .badge.pass { background:#10341f; color:var(--ok); }
@@ -569,6 +571,12 @@ function renderSimItems(){
       <div id="simDishOut-${i}"></div>
     </div>`).join('');
 }
+function venueLine(isVenue, reason){
+  if(!reason) return '';
+  const mark = isVenue ? '✓ z lokalu' : '✗ nie z lokalu';
+  const cls = isVenue ? 'ok' : '';
+  return `<div class="vreason ${cls}" title="${esc(reason)}">${mark}: ${esc(trunc(reason,60))}</div>`;
+}
 function candCard(cd){
   const badges = [
     cd.score!=null ? `<span class="badge ${cd.passed?'pass':'fail'}">${cd.score.toFixed(2)}</span>` : '',
@@ -577,7 +585,7 @@ function candCard(cd){
   let ctxHost = cd.domain||'';
   try{ if(cd.context) ctxHost=new URL(cd.context).hostname.replace(/^www\./,''); }catch{}
   const link = cd.context ? `<a href="${esc(cd.context)}" target="_blank" rel="noopener">${esc(trunc(ctxHost,16))}</a>` : esc(trunc(ctxHost,16));
-  return `<div class="ct"><img src="${esc(cd.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${badges}<br>${link}</div></div>`;
+  return `<div class="ct" title="${esc(cd.fromVenueReason||'')}"><img src="${esc(cd.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${badges}<br>${link}${venueLine(cd.fromVenue, cd.fromVenueReason)}</div></div>`;
 }
 function renderSteps(dbg){
   return ((dbg&&dbg.steps)||[]).map(s=>{
@@ -620,7 +628,7 @@ async function simDish(i){
     if(r.error) throw new Error(r.error);
     const finalThumbs=(r.photos||[]).map(p=>{
       const tags=[p.fromVenue?'<span class="badge venue">★ z lokalu</span>':'', p.verified?'<span class="badge pass">vision✓</span>':'', p.representative?'<span class="mut" style="font-size:10px">poglądowe</span>':''].filter(Boolean).join(' ');
-      return `<div class="ct"><img src="${esc(p.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${tags}<br>${esc(p.source)}</div></div>`;
+      return `<div class="ct" title="${esc(p.fromVenueReason||'')}"><img src="${esc(p.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2"><div class="cap2">${tags}<br>${esc(p.source)}${venueLine(p.fromVenue, p.fromVenueReason)}</div></div>`;
     }).join('');
     out.innerHTML = `
       <div class="mut small" style="margin-top:6px">$${(r.usage?.costUsd||0).toFixed(4)} · zwrócono <b>${(r.photos||[]).length}</b> zdjęć (to, co pokazałaby apka):</div>

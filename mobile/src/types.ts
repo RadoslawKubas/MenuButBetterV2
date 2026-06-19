@@ -46,6 +46,8 @@ export interface PhotoDebugCandidate {
   context?: string; // strona, z której pochodzi zdjęcie (gdy znana)
   score?: number; // ocena vision 0..1 (gdy weryfikowano)
   passed?: boolean; // czy przeszło próg
+  fromVenue?: boolean; // werdykt „z lokalu"
+  fromVenueReason?: string; // DLACZEGO tak/nie (do podglądu)
 }
 export interface PhotoDebugStep {
   tier: string;
@@ -72,6 +74,8 @@ export interface DishPhotoLite {
   representative?: boolean;
   /** POTWIERDZONE, że pochodzi z tego lokalu (własna strona lub jego podstrona portalu). */
   fromVenue?: boolean;
+  /** DLACZEGO uznano (lub nie) zdjęcie za „z lokalu" — do podglądu w apce. */
+  fromVenueReason?: string;
   /** Źródłowy URL zdalny (gdy `url` to lokalny plik) — na wszelki wypadek. */
   remoteUrl?: string;
 }

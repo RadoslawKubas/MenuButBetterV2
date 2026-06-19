@@ -21,6 +21,7 @@ function toLightbox(photos: MenuItem["photos"]): LightboxPhoto[] {
     url: p.url,
     source: p.source,
     fromVenue: p.fromVenue,
+    fromVenueReason: p.fromVenueReason,
     attribution: p.attribution,
   }));
 }
@@ -90,11 +91,19 @@ function PhotoDebugPanel({ item }: { item: MenuItem }) {
               {st.passed != null ? ` → trafne ${st.passed}` : ""}
             </Text>
             {st.candidates?.map((cand, j) => (
-              <Text key={j} style={styles.debugCand} numberOfLines={1}>
-                {cand.passed === true ? "✓" : cand.passed === false ? "✗" : "·"}{" "}
-                {cand.score != null ? `${cand.score.toFixed(2)} ` : ""}
-                {cand.domain ?? hostOf(cand.url)}
-              </Text>
+              <View key={j}>
+                <Text style={styles.debugCand} numberOfLines={1}>
+                  {cand.passed === true ? "✓" : cand.passed === false ? "✗" : "·"}{" "}
+                  {cand.score != null ? `${cand.score.toFixed(2)} ` : ""}
+                  {cand.domain ?? hostOf(cand.url)}
+                  {cand.fromVenue != null ? (cand.fromVenue ? "  ★ z lokalu" : "  ✗ nie z lokalu") : ""}
+                </Text>
+                {cand.fromVenueReason ? (
+                  <Text style={[styles.debugCand, cand.fromVenue ? styles.venueOk : styles.venueNo]}>
+                    ↳ {cand.fromVenueReason}
+                  </Text>
+                ) : null}
+              </View>
             ))}
           </View>
         ))
@@ -441,6 +450,8 @@ const styles = StyleSheet.create({
   debugHdr: { fontSize: 11, color: colors.muted, fontWeight: "700", marginTop: 4, marginBottom: 2 },
   debugStep: { fontSize: 11, color: colors.muted, marginBottom: 1 },
   debugCand: { fontSize: 10, color: colors.muted, marginLeft: 12, opacity: 0.85 },
+  venueOk: { color: "#2E7D32", opacity: 1, marginLeft: 20 },
+  venueNo: { color: colors.error, opacity: 0.9, marginLeft: 20 },
   debugDim: { fontSize: 11, color: colors.muted, marginTop: 4, fontStyle: "italic" },
   photoStrip: { marginBottom: 6 },
   dishPhotoWrap: { marginRight: 8, position: "relative" },

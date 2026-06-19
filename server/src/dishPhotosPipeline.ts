@@ -7,6 +7,7 @@ import {
   restaurantSiteImages,
   venuePortalImages,
   photoSourceCategory,
+  hostOf,
   OpenverseProvider,
   WikimediaProvider,
   type DishPhoto,
@@ -44,6 +45,8 @@ export interface OutPhoto {
   verified: boolean;
   representative: boolean;
   fromVenue?: boolean;
+  /** Czytelne UZASADNIENIE werdyktu „z lokalu" (czemu tak/nie) — do podglądu w apce i labie. */
+  fromVenueReason?: string;
 }
 
 export interface DbgCandidate {
@@ -53,6 +56,7 @@ export interface DbgCandidate {
   score?: number;
   passed?: boolean;
   fromVenue?: boolean;
+  fromVenueReason?: string;
 }
 export interface DbgStep {
   tier: string;
@@ -126,15 +130,32 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const cat = (ph: DishPhoto) => photoSourceCategory(ph.domain, restaurantDomain);
-  // POTWIERDZONE „z tego lokalu": (1) własna domena lokalu (mocne) albo (2) nazwa lokalu w URL,
-  // ale TYLKO na portalu recenzenckim (tripadvisor/yelp/…) i z granicą tokenów. Wcześniej był to
-  // surowy podciąg w dowolnym URL z webu → krótkie/pospolite nazwy łapały obce zdjęcia.
-  const fromVenue = (ph: DishPhoto) => {
+  const domOf = (ph: DishPhoto) => ph.domain || hostOf(ph.contextUrl) || "(brak domeny)";
+  // Werdykt „z tego lokalu" + UZASADNIENIE (czytelne, do podglądu). Zasady:
+  //  (1) własna domena lokalu (z website) → na pewno z lokalu,
+  //  (2) portal recenzencki (tripadvisor/yelp/…) z nazwą lokalu w URL (granica tokenów) → z lokalu,
+  //  (3) reszta → NIE (z wyjaśnieniem, czego zabrakło).
+  const fromVenueInfo = (ph: DishPhoto): { isVenue: boolean; reason: string } => {
     const category = cat(ph);
-    if (category === "restaurant") return true;
-    if (!VENUE_PORTAL_CATS.has(category)) return false;
-    return venueNameInUrl(ph.contextUrl, venueName);
+    const dom = domOf(ph);
+    if (category === "restaurant") {
+      return { isVenue: true, reason: `domena „${dom}" = strona lokalu (${restaurantDomain})` };
+    }
+    if (!VENUE_PORTAL_CATS.has(category)) {
+      const why = restaurantDomain
+        ? `domena „${dom}" ≠ strona lokalu (${restaurantDomain}) i nie jest portalem recenzenckim`
+        : `domena „${dom}" nie jest portalem recenzenckim, a strony www lokalu nie znamy`;
+      return { isVenue: false, reason: `źródło „${category}": ${why}` };
+    }
+    if (!venueName) {
+      return { isVenue: false, reason: `portal „${category}", ale nie znamy nazwy lokalu do dopasowania w URL` };
+    }
+    const urlShown = (ph.contextUrl || "").replace(/^https?:\/\//, "").slice(0, 70);
+    return venueNameInUrl(ph.contextUrl, venueName)
+      ? { isVenue: true, reason: `portal „${category}" + nazwa lokalu „${venueName}" w URL (${urlShown})` }
+      : { isVenue: false, reason: `portal „${category}", ale nazwy „${venueName}" NIE ma w URL (${urlShown})` };
   };
+  const fromVenue = (ph: DishPhoto) => fromVenueInfo(ph).isVenue;
 
   // Próg akceptacji vision per zdjęcie: dla WŁASNEJ strony lokalu łagodniejszy (znamy źródło —
   // wolimy pokazać zdjęcie „z lokalu" nawet przy umiarkowanym dopasowaniu), portale/web normalnie.
@@ -142,16 +163,36 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const passThreshold = (ph: DishPhoto) => (cat(ph) === "restaurant" ? OWN_SITE_THRESHOLD : MATCH_THRESHOLD);
 
   const candListOf = (list: DishPhoto[]): DbgCandidate[] =>
-    list.map((ph) => ({ url: ph.url, domain: ph.domain, context: ph.contextUrl, fromVenue: fromVenue(ph) }));
+    list.map((ph) => {
+      const fv = fromVenueInfo(ph);
+      return { url: ph.url, domain: ph.domain, context: ph.contextUrl, fromVenue: fv.isVenue, fromVenueReason: fv.reason };
+    });
   const candScoredOf = (list: (DishPhoto & { score: number })[]): DbgCandidate[] =>
-    list.map((ph) => ({
+    list.map((ph) => {
+      const fv = fromVenueInfo(ph);
+      return {
+        url: ph.url,
+        domain: ph.domain,
+        context: ph.contextUrl,
+        score: r2(ph.score),
+        passed: ph.score >= passThreshold(ph),
+        fromVenue: fv.isVenue,
+        fromVenueReason: fv.reason,
+      };
+    });
+  // Buduje finalne zdjęcie z werdyktem „z lokalu" + powodem (spójnie we wszystkich tierach).
+  const outPhoto = (ph: DishPhoto, o: { verified: boolean; representative: boolean; source?: string }): OutPhoto => {
+    const fv = fromVenueInfo(ph);
+    return {
       url: ph.url,
-      domain: ph.domain,
-      context: ph.contextUrl,
-      score: r2(ph.score),
-      passed: ph.score >= passThreshold(ph),
-      fromVenue: fromVenue(ph),
-    }));
+      source: o.source ?? cat(ph),
+      attribution: ph.attribution,
+      verified: o.verified,
+      representative: o.representative,
+      fromVenue: fv.isVenue,
+      fromVenueReason: fv.reason,
+    };
+  };
 
   const dbg: DishPhotosDebug = {
     params: {
@@ -202,9 +243,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       step.passed = Math.min(found.length, num);
       step.candidates = candListOf(found);
       return {
-        photos: found
-          .slice(0, num)
-          .map((ph) => ({ url: ph.url, source: srcOf(ph), attribution: ph.attribution, verified: false, representative: true })),
+        photos: found.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) })),
         usage: ZERO_USAGE,
       };
     }
@@ -213,9 +252,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     step.candidates = candScoredOf(scored);
     const filtered = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
     step.passed = filtered.length;
-    const photos = filtered
-      .slice(0, num)
-      .map((ph) => ({ url: ph.url, source: srcOf(ph), attribution: ph.attribution, verified: false, representative: true }));
+    const photos = filtered.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) }));
     return { photos, usage };
   }
 
@@ -276,9 +313,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   const ctx = tier1.filter((ph) => ph.url && !seen.has(ph.url) && seen.add(ph.url));
 
   if (!verify && ctx.length > 0) {
-    const photos = ctx.slice(0, num).map((ph) => ({
-      url: ph.url, source: cat(ph), attribution: ph.attribution, verified: false, representative: false, fromVenue: fromVenue(ph),
-    }));
+    const photos = ctx.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: false }));
     return finish(photos, ZERO_USAGE);
   }
   if (verify && ctx.length > 0) {
@@ -290,9 +325,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || b.score - a.score);
     dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: verifyModel, query: verifyTerm, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
     if (passing.length > 0) {
-      const photos = passing.slice(0, num).map((ph) => ({
-        url: ph.url, source: cat(ph), attribution: ph.attribution, verified: true, representative: false, fromVenue: fromVenue(ph),
-      }));
+      const photos = passing.slice(0, num).map((ph) => outPhoto(ph, { verified: true, representative: false }));
       return finish(photos, total);
     }
   }
@@ -304,9 +337,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       const { passing, scored } = await keepMatching(generic, genericTerm);
       dbg.steps.push({ tier: "Tier2 web (typ dania)", provider: "Serper", query: genericTerm, returned: generic.length, passed: passing.length, candidates: candScoredOf(scored) });
       if (passing.length > 0) {
-        const photos = passing.slice(0, num).map((ph) => ({
-          url: ph.url, source: cat(ph), attribution: ph.attribution, verified: false, representative: true,
-        }));
+        const photos = passing.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true }));
         return finish(photos, total);
       }
     } else {

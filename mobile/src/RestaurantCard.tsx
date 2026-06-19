@@ -71,8 +71,8 @@ export function RestaurantCard({
   const allPhotos = [...googleUrls, ...taUrls];
   // Zdjęcia lokalu są z definicji „z tego lokalu" (★) — Google Maps + TripAdvisor.
   const lbPhotos: LightboxPhoto[] = [
-    ...googleUrls.map((url) => ({ url, source: "google", fromVenue: true })),
-    ...taUrls.map((url) => ({ url, source: "tripadvisor", fromVenue: true, attribution: "TripAdvisor" })),
+    ...googleUrls.map((url) => ({ url, source: "google", fromVenue: true, fromVenueReason: "zdjęcie z profilu lokalu w Google Maps" })),
+    ...taUrls.map((url) => ({ url, source: "tripadvisor", fromVenue: true, attribution: "TripAdvisor", fromVenueReason: "zdjęcie z profilu lokalu w TripAdvisor" })),
   ];
   const open = (i: number) => setPreview({ photos: lbPhotos, index: i });
 

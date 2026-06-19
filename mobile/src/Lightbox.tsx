@@ -20,6 +20,7 @@ export interface LightboxPhoto {
   url: string;
   source: string;
   fromVenue?: boolean;
+  fromVenueReason?: string;
   attribution?: string;
 }
 
@@ -141,6 +142,11 @@ export function Lightbox({
             <View style={[styles.sourceDot, { backgroundColor: meta.color }]} />
             <Text style={styles.sourceLabel}>{meta.label}</Text>
           </View>
+          {cur.fromVenueReason ? (
+            <Text style={styles.venueReason} numberOfLines={2}>
+              {cur.fromVenue ? "✓" : "✗"} {cur.fromVenueReason}
+            </Text>
+          ) : null}
           {cur.attribution ? (
             <Text style={styles.attrib} numberOfLines={1}>
               {cur.attribution}
@@ -168,5 +174,6 @@ const styles = StyleSheet.create({
   sourceDot: { width: 9, height: 9, borderRadius: 5 },
   sourceLabel: { color: "#fff", fontSize: 14, fontWeight: "700" },
   attrib: { color: "#fff", fontSize: 12, opacity: 0.6, marginTop: 3, maxWidth: 280, textAlign: "center" },
+  venueReason: { color: "#fff", fontSize: 11, opacity: 0.7, marginTop: 5, maxWidth: 300, textAlign: "center" },
   counter: { color: "#fff", fontSize: 13, opacity: 0.75, marginTop: 8 },
 });

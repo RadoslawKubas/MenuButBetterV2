@@ -1122,6 +1122,7 @@ export default function App() {
         attribution: m.source === "tripadvisor" ? "TripAdvisor" : "Google Maps",
         verified: true,
         fromVenue: true,
+        fromVenueReason: `Tier 0: zdjęcie z profilu lokalu (${m.source === "tripadvisor" ? "TripAdvisor" : "Google Maps"}) dopasowane wizją do dania (pewność ${m.confidence.toFixed(2)})`,
       });
       byDish.set(m.dish, arr);
     }

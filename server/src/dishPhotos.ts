@@ -55,7 +55,7 @@ export interface DishPhoto {
 }
 
 /** Host z URL-a (bez www), best-effort. */
-function hostOf(u?: string): string | undefined {
+export function hostOf(u?: string): string | undefined {
   if (!u) return undefined;
   try {
     return new URL(u).hostname.replace(/^www\./, "").toLowerCase();
