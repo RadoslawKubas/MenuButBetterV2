@@ -330,6 +330,7 @@ interface DishPhotosBody {
   restaurantName?: string; // czysta nazwa lokalu — do zawężenia portali + POTWIERDZENIA źródła
   city?: string; // miasto lokalu — doklejane do zapytań portalowych
   taLocationId?: string; // location_id wpisu TripAdvisor — pewny werdykt „z lokalu" dla TA
+  branded?: boolean; // markowy produkt → generyk zamiast szukania u lokalu
   cuisine?: string; // kontekst kuchni — poprawia trafność weryfikacji
   website?: string; // strona lokalu (z Google Places) — dodatkowe źródło zdjęć
   num?: number;
@@ -360,6 +361,7 @@ app.post("/dish-photos", async (c) => {
       restaurantName: body.restaurantName,
       city: body.city,
       taLocationId: body.taLocationId,
+      branded: body.branded,
       cuisine: body.cuisine,
       website: body.website,
       num: body.num,

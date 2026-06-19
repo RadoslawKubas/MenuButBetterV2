@@ -600,6 +600,7 @@ app.post("/api/sim-scan", async (c) => {
       translated: it.translated,
       photoQuery: it.photo_query,
       photoQueryLocal: it.photo_query_local,
+      branded: it.branded,
       description: it.description,
     })),
   );
@@ -665,6 +666,7 @@ app.post("/api/sim-dish", async (c) => {
     restaurantName?: string;
     city?: string;
     taLocationId?: string;
+    branded?: boolean;
     website?: string;
     verifyModel?: string;
     num?: number;
@@ -680,6 +682,7 @@ app.post("/api/sim-dish", async (c) => {
       restaurantName: b.restaurantName,
       city: b.city,
       taLocationId: b.taLocationId,
+      branded: b.branded,
       cuisine: b.cuisine,
       website: b.website,
       num: b.num ?? 4,

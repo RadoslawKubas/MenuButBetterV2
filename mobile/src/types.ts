@@ -21,6 +21,8 @@ export interface MenuItem {
   photo_query?: string;
   /** Nazwa dania w języku kraju lokalu — dodatkowy wariant do portali (lokalne trafienia). */
   photo_query_local?: string;
+  /** Markowy/paczkowany produkt (Coca-Cola itp.) — generyk zamiast szukania u lokalu. */
+  branded?: boolean;
   description: string;
   ingredients: string[];
   allergens: string[];

@@ -24,6 +24,8 @@ export interface MenuItem {
   translated: string;
   photo_query: string;
   photo_query_local: string;
+  /** Markowy/paczkowany produkt (Coca-Cola, butelkowany napój) — lepszy generyczny produktowy shot. */
+  branded: boolean;
   description: string;
   ingredients: string[];
   allergens: string[];
@@ -96,6 +98,11 @@ export const MENU_SCHEMA = {
                   description:
                     "Nazwa dania do wyszukiwania zdjęć W JĘZYKU KRAJU, w którym jest lokal (kraj wynika z podanej lokalizacji) — tak, jak ludzie szukają tego dania w tym kraju. Gdy język menu = język kraju, zwykle = original. Gdy menu jest w innym języku (np. po angielsku, a lokal w Polsce), podaj nazwę w języku kraju (np. 'kurczak maślany'). Gdy nie da się sensownie podać — powtórz photo_query.",
                 },
+                branded: {
+                  type: "boolean",
+                  description:
+                    "true = markowy/paczkowany produkt o znanym wyglądzie (np. Coca-Cola, Sprite, Fanta, butelkowana woda, batonik), dla którego najlepsze jest GENERYCZNE zdjęcie produktu, a NIE zdjęcie z lokalu. false = potrawa/danie przyrządzane (kuchnia), gdzie warto szukać zdjęcia z tego lokalu.",
+                },
                 description: {
                   type: "string",
                   description:
@@ -135,6 +142,7 @@ export const MENU_SCHEMA = {
                 "translated",
                 "photo_query",
                 "photo_query_local",
+                "branded",
                 "description",
                 "ingredients",
                 "allergens",

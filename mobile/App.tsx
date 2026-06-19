@@ -951,6 +951,7 @@ export default function App() {
                   restaurantName: opts.menu.restaurant_name ?? undefined,
                   city: opts.city,
                   taLocationId: opts.taLocationId,
+                  branded: item.branded,
                   photoQuery: item.photo_query,
                   photoQueryLocal: item.photo_query_local,
                   verifyModel: eff.verify,

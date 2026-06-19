@@ -563,6 +563,7 @@ function renderSimItems(){
         ${it.translated&&it.translated!==it.original?`<span class="mut small">${esc(it.translated)}</span>`:''}
         ${it.photoQuery?`<span class="mut small">🔎 ${esc(it.photoQuery)}</span>`:''}
         ${it.photoQueryLocal&&it.photoQueryLocal!==it.photoQuery?`<span class="mut small">🌍 ${esc(it.photoQueryLocal)}</span>`:''}
+        ${it.branded?`<span class="badge venue" title="markowy produkt → generyk">🏷 markowy</span>`:''}
         <span style="flex:1"></span>
         <button onclick="simDescribe(${i})" id="simDescBtn-${i}">📝 opis</button>
         <button onclick="simDish(${i})" id="simDishBtn-${i}">🔍 zdjęcia</button>
@@ -622,7 +623,7 @@ async function simDish(i){
   try{
     const r=await api('/api/sim-dish',{
       dish:it.original, photoQuery:it.photoQuery, photoQueryLocal:it.photoQueryLocal, cuisine:SIM.cuisine,
-      restaurantName:SIM.restaurantName, city:SIM.venue?.city, taLocationId:SIM.venue?.taLocationId, website:SIM.venue?.website,
+      restaurantName:SIM.restaurantName, city:SIM.venue?.city, taLocationId:SIM.venue?.taLocationId, branded:it.branded, website:SIM.venue?.website,
       verifyModel:document.getElementById('simVerifyModel').value, num:4,
     });
     if(r.error) throw new Error(r.error);
