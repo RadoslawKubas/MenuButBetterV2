@@ -166,6 +166,12 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     if (!venueName) {
       return { isVenue: false, reason: `${kind} „${category}", ale nie znamy nazwy lokalu do dopasowania w URL` };
     }
+    // Sama nazwa w URL to słaba podstawa, a dla SIECI o jednoczłonowej marce („Ferretti") łapie
+    // każdy oddział → wymagamy nazwy WIELOCZŁONOWEJ (np. „Indian Taste"), inaczej nie ufamy.
+    const tokens = deaccentLower(venueName).match(/[a-z0-9]+/g) ?? [];
+    if (tokens.length < 2) {
+      return { isVenue: false, reason: `${kind} „${category}": nazwa „${venueName}" jest jednoczłonowa — zbyt ogólna, by potwierdzić oddział (możliwy inny lokal tej marki)` };
+    }
     return venueNameInUrl(ph.contextUrl, venueName)
       ? { isVenue: true, reason: `${kind} „${category}": nazwa „${venueName}" w URL — słabsza podstawa niż ID (${urlShown})` }
       : { isVenue: false, reason: `${kind} „${category}", ale nazwy „${venueName}" NIE ma w URL (${urlShown})` };

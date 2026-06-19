@@ -142,6 +142,16 @@ const CUISINE_TYPES: { keys: string[]; types: string[] }[] = [
   { keys: ["wegan", "vegan"], types: ["vegan_restaurant"] },
 ];
 
+// Odległość w metrach (haversine) — do wyboru właściwego oddziału sieci po GPS.
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const p = Math.PI / 180;
+  const dLat = (lat2 - lat1) * p;
+  const dLng = (lng2 - lng1) * p;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * p) * Math.cos(lat2 * p) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 // Normalizacja nazwy do porównań (małe litery, bez akcentów, tylko alfanumeryczne).
 function normName(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
@@ -230,14 +240,17 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
   const key = KEY();
   if (!key) throw new Error("Brak GOOGLE_MAPS_KEY w środowisku.");
 
+  const hasGeo = params.lat != null && params.lng != null;
   const textQuery = [params.name, "restauracja", params.address].filter(Boolean).join(" ");
   const body: Record<string, unknown> = {
     textQuery,
     languageCode: params.lang ?? "pl",
-    maxResultCount: 1,
+    // Z GPS bierzemy kilku kandydatów, by wśród oddziałów SIECI wybrać najbliższy (Places domyślnie
+    // rankuje po popularności, więc bez tego potrafi wskazać inny oddział tej samej marki).
+    maxResultCount: hasGeo ? 8 : 1,
   };
   // Jeśli mamy współrzędne — biasuj wyszukiwanie do okolicy (promień 8 km).
-  if (params.lat != null && params.lng != null) {
+  if (hasGeo) {
     body.locationBias = {
       circle: { center: { latitude: params.lat, longitude: params.lng }, radius: 8000 },
     };
@@ -257,8 +270,20 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
     throw new Error(`Places HTTP ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as { places?: Place[] };
-  const place = json.places?.[0];
-  if (!place) return null;
+  const places = json.places ?? [];
+  if (places.length === 0) return null;
+  let place = places[0]!;
+  // SIEĆ: spośród kandydatów PASUJĄCYCH NAZWĄ wybierz NAJBLIŻSZY GPS — to niemal zawsze właściwy
+  // oddział (np. Ferretti Badalona 15 m zamiast Ferretti Poblenou 4,9 km). Bez GPS — wynik #0.
+  if (hasGeo && places.length > 1) {
+    const matching = places.filter((pl) => nameMatches(params.name, pl.displayName?.text ?? ""));
+    const pool = matching.length ? matching : places;
+    const distOf = (pl: Place): number =>
+      pl.location?.latitude != null && pl.location?.longitude != null
+        ? haversineM(params.lat!, params.lng!, pl.location.latitude, pl.location.longitude)
+        : Infinity;
+    place = pool.reduce((best, pl) => (distOf(pl) < distOf(best) ? pl : best), pool[0]!);
+  }
   const info = toInfo(place);
   // Places zwraca „najbliższy strzał" nawet przy słabym dopasowaniu nazwy — oznacz, czy nazwa
   // faktycznie pasuje, żeby Tier 0 wiedział, czy może ufać puli zdjęć jako „z tego lokalu".

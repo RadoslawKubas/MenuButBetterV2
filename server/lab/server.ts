@@ -62,6 +62,16 @@ interface MetaCapture {
   sig?: string;
   images: MetaImage[];
   result?: { restaurantName?: string | null; cuisine?: string; models?: Record<string, string>; menu?: unknown } | null;
+  /** Zapisany skan z LABU (najlepsza wersja menu + lokal) — by testy zdjęć nie skanowały od nowa. */
+  labScan?: LabScan;
+}
+interface LabScan {
+  scanModel: string;
+  at: number;
+  peek: unknown;
+  menu: { restaurantName: string | null; cuisine: string; itemCount: number };
+  items: unknown[];
+  venue: unknown;
 }
 interface GroundTruth {
   name: string;
@@ -415,6 +425,9 @@ app.get("/api/state", (c) => {
     result: cap.result
       ? { restaurantName: cap.result.restaurantName ?? null, cuisine: cap.result.cuisine ?? null }
       : null,
+    labScan: cap.labScan
+      ? { scanModel: cap.labScan.scanModel, at: cap.labScan.at, itemCount: cap.labScan.menu.itemCount, hasVenue: !!cap.labScan.venue }
+      : null,
     groundTruth: gtFor(cap),
     archived: isArchived(cap),
   }));
@@ -568,11 +581,17 @@ app.post("/api/annotate", async (c) => {
 
 // 1) Skan menu — jak w apce: najpierw peek (kuchnia→cuisineHint), potem scan; opcjonalnie lokal.
 app.post("/api/sim-scan", async (c) => {
-  const { captureId, scanModel, peekModel, withVenue, withPeek } = await c.req.json<{
-    captureId: string; scanModel?: ModelId; peekModel?: ModelId; withVenue?: boolean; withPeek?: boolean;
+  const { captureId, scanModel, peekModel, withVenue, withPeek, forceRescan } = await c.req.json<{
+    captureId: string; scanModel?: ModelId; peekModel?: ModelId; withVenue?: boolean; withPeek?: boolean; forceRescan?: boolean;
   }>();
   const cap = loadMeta().find((x) => x.id === captureId);
   if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  // CACHE: jeśli jest zapisany skan i nie wymuszono ponownego — zwróć natychmiast (testy zdjęć
+  // nie skanują od nowa). „Skanuj na nowo" ustawia forceRescan i nadpisuje zapis.
+  if (!forceRescan && cap.labScan) {
+    return c.json({ ms: 0, usage: { costUsd: 0, inputTokens: 0, outputTokens: 0 }, cached: true, ...cap.labScan });
+  }
+  try {
   const images = allImageInputs(cap);
   if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
   const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
@@ -624,15 +643,38 @@ app.post("/api/sim-scan", async (c) => {
       };
     }
   }
-  return c.json({
-    ms: Date.now() - t0,
-    usage,
+  // Zapisz skan przy samplu (najlepsza wersja) — przeżywa restart, testy zdjęć biorą go natychmiast.
+  const labScan: LabScan = {
     scanModel: model,
+    at: Date.now(),
     peek,
-    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, sections: menu.sections.length, itemCount: items.length },
+    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, itemCount: items.length },
     items,
     venue,
-  });
+  };
+  const all = loadMeta();
+  const idx = all.findIndex((x) => x.id === captureId);
+  if (idx >= 0) {
+    all[idx]!.labScan = labScan;
+    saveMeta(all);
+  }
+  return c.json({ ms: Date.now() - t0, usage, cached: false, ...labScan });
+  } catch (e) {
+    console.error("sim-scan error:", e);
+    return c.json({ error: `skan nie powiódł się: ${(e as Error).message}` }, 502);
+  }
+});
+
+// Usuń zapisany skan sampla (gdy chcesz wymusić świeży przy kolejnym teście).
+app.post("/api/sim-scan-clear", async (c) => {
+  const { captureId } = await c.req.json<{ captureId: string }>();
+  const all = loadMeta();
+  const idx = all.findIndex((x) => x.id === captureId);
+  if (idx >= 0) {
+    delete all[idx]!.labScan;
+    saveMeta(all);
+  }
+  return c.json({ ok: true });
 });
 
 // 1b) Opis dania (rola „describe") — jak /dish-info w apce.

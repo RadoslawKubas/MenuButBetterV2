@@ -138,8 +138,11 @@
         <span class="chip" id="simPeekChip" onclick="toggleSimPeek()">👁 peek przy skanie</span>
         <span class="chip" id="simVenueChip" onclick="toggleSimVenue()">+ lokal (Places/TA)</span>
       </div>
-      <button class="primary" style="margin-top:8px" id="simScanBtn" onclick="simScan()">1) Skanuj menu</button>
-      <span class="mut small" id="simInfo" style="margin-left:8px"></span>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <button class="primary" id="simScanBtn" onclick="simScan(false)">1) Skanuj menu</button>
+        <button id="simRescanBtn" onclick="simScan(true)" title="zignoruj zapisany skan i zeskanuj od nowa (nadpisze)">🔄 na nowo</button>
+        <span class="mut small" id="simInfo"></span>
+      </div>
       <div id="simVenueBox"></div>
       <div id="simItems"></div>
     </div>
@@ -246,6 +249,7 @@ function renderCaptures() {
           <div class="nm">${c.archived?'🗄 ':''}${c.name || new Date(c.createdAt).toLocaleString()}</div>
           <div class="sub">${c.images} zdj · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
           <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
+          ${c.labScan?`<div class="sub" style="color:var(--acc)">💾 zapisany skan: ${c.labScan.scanModel} · ${c.labScan.itemCount} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
           <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
         </div>
       </div>
@@ -509,15 +513,18 @@ function renderSimSelects(){
   document.getElementById('simPeekChip').className='chip'+(SIM_PEEK?' on':'');
 }
 function trunc(s,n){ s=s||''; return s.length>n? s.slice(0,n)+'…' : s; }
-async function simScan(){
+function simSavedScan(id){ return (STATE?.captures||[]).find(c=>c.id===id)?.labScan || null; }
+async function simScan(force){
   const id=[...SELECTED][0];
   if(!id) return alert('Zaznacz JEDEN sample (klik miniaturę albo „+ do testu").');
-  const btn=document.getElementById('simScanBtn'); btn.disabled=true;
-  document.getElementById('simInfo').textContent='skanuję menu…';
+  const btn=document.getElementById('simScanBtn'), btn2=document.getElementById('simRescanBtn');
+  btn.disabled=true; btn2.disabled=true;
+  const saved=simSavedScan(id);
+  document.getElementById('simInfo').textContent = (!force && saved) ? 'wczytuję zapisany skan…' : 'skanuję menu (zapis przy samplu)…';
   document.getElementById('simVenueBox').innerHTML=''; document.getElementById('simItems').innerHTML='';
   try{
     const r=await api('/api/sim-scan',{
-      captureId:id,
+      captureId:id, forceRescan:!!force,
       scanModel:document.getElementById('simScanModel').value,
       peekModel:document.getElementById('simPeekModel').value,
       withPeek:SIM_PEEK, withVenue:SIM_VENUE,
@@ -525,10 +532,12 @@ async function simScan(){
     if(r.error) throw new Error(r.error);
     SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items, peek:r.peek };
     const pk = r.peek ? ` · 👁 peek(${r.peek.model}): ${r.peek.isMenu?'menu✓':'nie‑menu'} · ${r.peek.cuisine||'—'}` : '';
-    document.getElementById('simInfo').innerHTML=`✓ ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms<span class="mut small">${esc(pk)}</span>`;
+    const tag = r.cached ? `💾 zapisany skan (${esc(r.scanModel||'?')})` : `✓ świeży skan zapisany (${esc(r.scanModel||'?')}) · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms`;
+    document.getElementById('simInfo').innerHTML=`${tag} · ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji<span class="mut small">${esc(pk)}</span>`;
     renderSimVenue(); renderSimItems();
+    if(!r.cached) loadState(); // odśwież wskaźnik „zapisany skan" na liście
   }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
-  finally{ btn.disabled=false; }
+  finally{ btn.disabled=false; btn2.disabled=false; }
 }
 function renderSimVenue(){
   const el=document.getElementById('simVenueBox'); const v=SIM?.venue;
