@@ -462,11 +462,15 @@ app.get("/diagnostics", (c) => {
   if (other && other.total > 0) {
     providers.push({ label: "Inne", paid: false, configured: true, ...other });
   }
-  // Sumy zbiorcze — łączny ruch (egress płatny na Railway) i koszt AI.
-  const totals = providers.reduce(
+  // Sumy zbiorcze — łączny ruch (egress płatny na Railway) i koszt AI. Koszt transferu liczymy
+  // z egressu (bytesSent) wg stawki EGRESS_USD_PER_GB (Railway ~$0.10/GB). Total = AI + transfer.
+  const egressUsdPerGB = Number(process.env.EGRESS_USD_PER_GB) || 0.1;
+  const sum = providers.reduce(
     (a, p) => ({ bytesSent: a.bytesSent + p.bytesSent, bytesRecv: a.bytesRecv + p.bytesRecv, costUsd: a.costUsd + p.costUsd }),
     { bytesSent: 0, bytesRecv: 0, costUsd: 0 },
   );
+  const dataCostUsd = (sum.bytesSent / 1e9) * egressUsdPerGB;
+  const totals = { ...sum, egressUsdPerGB, dataCostUsd, grandTotalUsd: sum.costUsd + dataCostUsd };
   return c.json({ now: Date.now(), providers, totals });
 });
 

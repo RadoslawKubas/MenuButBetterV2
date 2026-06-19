@@ -18,6 +18,12 @@ const OTHER_APIS: { name: string; cost: string; status: "używane" | "zapas" | "
   { name: "Openverse", cost: "free", status: "free", note: "zdjęcia poglądowe (fallback)" },
   { name: "SerpApi (Google Images)", cost: "od $50 / 5000", status: "zapas", note: "rezerwowe źródło zdjęć" },
   { name: "Google CSE", cost: "100/dzień free, dalej $5/1000", status: "zapas", note: "stare konta / opcjonalne" },
+  {
+    name: "Transfer danych (Railway egress)",
+    cost: "~$0.10 / GB (wysłane)",
+    status: "używane",
+    note: "serwer relayuje zdjęcia do API + odpowiedzi do apki — realny koszt sesji w Diagnostyce",
+  },
 ];
 
 function fmtUsd(n: number): string {

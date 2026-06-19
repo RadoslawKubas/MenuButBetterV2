@@ -52,36 +52,68 @@ export interface ExtractOptions {
   onItem?: (item: ScanItemStub) => void;
 }
 
-/** Minimalna pozycja wyłuskana ze strumienia — do podglądu nazw i wczesnego dociągania zdjęć. */
+/** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
 export interface ScanItemStub {
   original: string;
   translated: string;
   photoQuery: string;
   photoQueryLocal: string;
   branded: boolean;
+  description: string;
+  price: string | null;
+  currency: string | null;
 }
 
-// Wyłuskuje KOMPLETNE pozycje z (jeszcze niepełnego) strumienia JSON — po stałej kolejności pól
-// schematu (original→translated→photo_query→photo_query_local→branded). Emituje tylko NOWE.
-const ITEM_RE =
-  /"original"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"translated"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"photo_query"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"photo_query_local"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"branded"\s*:\s*(true|false)/g;
+// Wyłuskuje KOMPLETNE pozycje z (jeszcze niepełnego) strumienia JSON: znajduje obiekty `{…}`
+// zawierające "original" i parsuje je gdy domknięte (świadome stringów/escape/zagnieżdżeń).
+// Daje pełne pola (nazwa, cena…). Emituje tylko NOWE (po liczniku).
 function emitNewItems(text: string, state: { emitted: number }, onItem: (i: ScanItemStub) => void): void {
-  const dec = (s: string) => {
-    try {
-      return JSON.parse(`"${s}"`) as string;
-    } catch {
-      return s;
+  let found = 0;
+  let i = 0;
+  while (true) {
+    const k = text.indexOf('"original"', i);
+    if (k < 0) break;
+    const start = text.lastIndexOf("{", k); // obiekt pozycji otwiera się tuż przed "original" (1. pole)
+    if (start < 0) {
+      i = k + 10;
+      continue;
     }
-  };
-  ITEM_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  let idx = 0;
-  while ((m = ITEM_RE.exec(text))) {
-    if (idx >= state.emitted) {
-      onItem({ original: dec(m[1]!), translated: dec(m[2]!), photoQuery: dec(m[3]!), photoQueryLocal: dec(m[4]!), branded: m[5] === "true" });
-      state.emitted = idx + 1;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let end = -1;
+    for (let p = start; p < text.length; p++) {
+      const ch = text[p]!;
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) { end = p; break; } }
     }
-    idx++;
+    if (end < 0) break; // obiekt jeszcze niedomknięty — doczyta się później
+    found++;
+    if (found > state.emitted) {
+      try {
+        const o = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+        if (typeof o.original === "string") {
+          onItem({
+            original: o.original,
+            translated: typeof o.translated === "string" ? o.translated : o.original,
+            photoQuery: typeof o.photo_query === "string" ? o.photo_query : "",
+            photoQueryLocal: typeof o.photo_query_local === "string" ? o.photo_query_local : "",
+            branded: o.branded === true,
+            description: typeof o.description === "string" ? o.description : "",
+            price: typeof o.price === "string" ? o.price : null,
+            currency: typeof o.currency === "string" ? o.currency : null,
+          });
+          state.emitted = found;
+        }
+      } catch {
+        /* niepoprawny fragment — pomiń */
+      }
+    }
+    i = end + 1;
   }
 }
 

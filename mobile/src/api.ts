@@ -86,6 +86,9 @@ export interface ScanItemStub {
   photoQuery: string;
   photoQueryLocal: string;
   branded: boolean;
+  description: string;
+  price: string | null;
+  currency: string | null;
 }
 
 /**
@@ -137,7 +140,16 @@ export function scanMenu(
           if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
           else if (ev.phase === "item")
-            onItem?.({ original: ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded });
+            onItem?.({
+              original: ev.original,
+              translated: ev.translated,
+              photoQuery: ev.photoQuery,
+              photoQueryLocal: ev.photoQueryLocal,
+              branded: !!ev.branded,
+              description: ev.description ?? "",
+              price: ev.price ?? null,
+              currency: ev.currency ?? null,
+            });
         } catch {
           /* niepełna linia — doczyta się później */
         }
@@ -167,7 +179,11 @@ export function scanMenu(
           /* pomiń niepełne/keepalive */
         }
       }
-      if (!result) return fail(`Pusta/niepoprawna odpowiedź (HTTP ${xhr.status}).`);
+      if (!result) {
+        // Strumień się zaczął (były kroki/pozycje), ale nie doszła finalna linia → połączenie urwane.
+        const truncated = text.length > 0;
+        return fail(truncated ? "Połączenie przerwane w trakcie skanu — spróbuj ponownie." : `Pusta odpowiedź serwera (HTTP ${xhr.status}).`);
+      }
       if (xhr.status < 200 || xhr.status >= 300 || result.error) {
         return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
       }
@@ -364,6 +380,9 @@ export interface DiagTotals {
   bytesSent: number;
   bytesRecv: number;
   costUsd: number;
+  egressUsdPerGB?: number;
+  dataCostUsd?: number;
+  grandTotalUsd?: number;
 }
 
 /** Pobiera log/statystyki zewnętrznych API z serwera (ekran Diagnostyka). */

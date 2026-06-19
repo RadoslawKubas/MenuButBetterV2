@@ -157,8 +157,10 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
-  // Pozycje pojawiające się NA ŻYWO w trakcie skanu (nazwa + miniatura poglądowa, gdy dociągnięta).
-  const [scanItems, setScanItems] = useState<{ original: string; translated: string; branded: boolean; photo?: string }[]>([]);
+  // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
+  const [scanItems, setScanItems] = useState<
+    { original: string; translated: string; branded: boolean; price: string | null; currency: string | null; description: string; photo?: string }[]
+  >([]);
   // Prefetch tanich zdjęć poglądowych podczas skanu — reużywane po skanie (bez ponownego szukania).
   const prefetchedPhotos = useRef<Map<string, DishPhotoLite[]>>(new Map());
   const [images, setImages] = useState<PreparedImage[]>([]);
@@ -435,7 +437,8 @@ export default function App() {
       let pfActive = 0;
       let pfEnqueued = 0; // szanuje limit auto-dociągania (Koszty)
       const pumpPrefetch = () => {
-        while (pfActive < 3 && pfQueue.length > 0) {
+        // Łagodnie (2 równolegle) — żeby prefetch nie dociążał strumienia skanu (ryzyko urwania).
+        while (pfActive < 2 && pfQueue.length > 0) {
           const stub = pfQueue.shift()!;
           pfActive++;
           void (async () => {
@@ -466,7 +469,10 @@ export default function App() {
       const onScanItem = (stub: ScanItemStub) => {
         // Nazwy pokazujemy zawsze (za darmo); zdjęcia prefetchujemy tylko gdy auto-zdjęcia włączone
         // i w ramach limitu z „Kosztów" (markowe pomijamy — i tak idą w generyk na dotknięcie).
-        setScanItems((prev) => [...prev, { original: stub.original, translated: stub.translated, branded: stub.branded }]);
+        setScanItems((prev) => [
+          ...prev,
+          { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
+        ]);
         if (costPrefs.autoPhotos && !stub.branded && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
           pfEnqueued++;
           pfQueue.push(stub);
@@ -1819,23 +1825,38 @@ export default function App() {
                     </>
                   ) : null}
                   {scanItems.length > 0 ? (
-                    <ScrollView style={styles.scanItemsBox} contentContainerStyle={{ paddingVertical: 4 }}>
-                      {scanItems.map((it, i) => (
-                        <View key={i} style={styles.scanItemRow}>
-                          {it.photo ? (
-                            <Image source={{ uri: resolveCachedUri(it.photo) ?? it.photo }} style={styles.scanItemThumb} />
-                          ) : (
-                            <View style={[styles.scanItemThumb, styles.scanItemThumbEmpty]}>
-                              <ActivityIndicator size="small" color={colors.muted} />
+                    <>
+                      <Text style={styles.scanItemsHdr}>📖 Podgląd menu na żywo — {scanItems.length} pozycji (możesz przewijać)</Text>
+                      <ScrollView style={styles.scanItemsBox} contentContainerStyle={{ paddingVertical: 4 }}>
+                        {scanItems.map((it, i) => (
+                          <View key={i} style={styles.scanCard}>
+                            {it.photo ? (
+                              <Image source={{ uri: resolveCachedUri(it.photo) ?? it.photo }} style={styles.scanCardThumb} />
+                            ) : (
+                              <View style={[styles.scanCardThumb, styles.scanItemThumbEmpty]}>
+                                {it.branded ? <Text style={{ fontSize: 18 }}>🏷</Text> : <ActivityIndicator size="small" color={colors.muted} />}
+                              </View>
+                            )}
+                            <View style={styles.scanCardBody}>
+                              <Text style={styles.scanCardName} numberOfLines={1}>
+                                {it.translated || it.original}
+                              </Text>
+                              {it.description ? (
+                                <Text style={styles.scanCardDesc} numberOfLines={2}>
+                                  {it.description}
+                                </Text>
+                              ) : null}
                             </View>
-                          )}
-                          <Text style={styles.scanItemName} numberOfLines={1}>
-                            {it.translated || it.original}
-                            {it.branded ? "  🏷" : ""}
-                          </Text>
-                        </View>
-                      ))}
-                    </ScrollView>
+                            {it.price ? (
+                              <Text style={styles.scanCardPrice}>
+                                {it.price}
+                                {it.currency && /^[\d.,\s]+$/.test(it.price) ? " " + it.currency : ""}
+                              </Text>
+                            ) : null}
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </>
                   ) : null}
                 </View>
               ) : null}
@@ -2164,11 +2185,24 @@ const styles = StyleSheet.create({
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
   scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
-  scanItemsBox: { marginTop: 14, maxHeight: 260, alignSelf: "stretch", marginHorizontal: 16 },
-  scanItemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4 },
-  scanItemThumb: { width: 36, height: 36, borderRadius: 6, backgroundColor: colors.badgeBg, marginRight: 10 },
+  scanItemsHdr: { marginTop: 14, fontSize: 13, fontWeight: "700", color: colors.muted, alignSelf: "stretch", marginHorizontal: 16 },
+  scanItemsBox: { marginTop: 6, maxHeight: 320, alignSelf: "stretch", marginHorizontal: 12 },
+  scanCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: colors.badgeBg,
+  },
+  scanCardThumb: { width: 48, height: 48, borderRadius: 8, backgroundColor: colors.badgeBg, marginRight: 10 },
   scanItemThumbEmpty: { alignItems: "center", justifyContent: "center" },
-  scanItemName: { flex: 1, fontSize: 14, color: colors.text },
+  scanCardBody: { flex: 1, minWidth: 0 },
+  scanCardName: { fontSize: 14, fontWeight: "700", color: colors.text },
+  scanCardDesc: { fontSize: 12, color: colors.muted, marginTop: 1 },
+  scanCardPrice: { fontSize: 14, fontWeight: "800", color: colors.accent, marginLeft: 8 },
   progressTrack: {
     width: "70%",
     height: 8,

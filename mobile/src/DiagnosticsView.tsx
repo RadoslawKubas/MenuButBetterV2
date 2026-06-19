@@ -24,6 +24,7 @@ import {
   API_BASE,
   type DiagProvider,
   type DiagStats,
+  type DiagTotals,
   type DiagEvent,
 } from "./api";
 import { getCalls, classifyError, type ClientCall } from "./appLog";
@@ -97,6 +98,7 @@ export function DiagnosticsView() {
   const [open, setOpen] = useState<string | null>(null);
   const [calls, setCalls] = useState<ClientCall[]>(getCalls());
   const [stats, setStats] = useState<DiagStats | null>(null);
+  const [totals, setTotals] = useState<DiagTotals | null>(null);
   const [events, setEvents] = useState<DiagEvent[]>([]);
   const [exporting, setExporting] = useState(false);
   const [onlyErrors, setOnlyErrors] = useState(false);
@@ -158,6 +160,7 @@ export function DiagnosticsView() {
         fetchEvents(200).then(setEvents).catch(() => setEvents([])),
       ]);
       setProviders(diag.providers);
+      setTotals(diag.totals ?? null);
       setCalls(getCalls());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Nie udało się pobrać diagnostyki.");
@@ -323,11 +326,19 @@ export function DiagnosticsView() {
       {/* Ruch danych tej sesji — egress (wysłane) jest płatny na Railway. */}
       {providers.some((p) => p.bytesSent > 0 || p.bytesRecv > 0) ? (
         <View style={styles.costBox}>
-          <Text style={styles.costBig}>📡 Ruch danych (sesja)</Text>
+          <Text style={styles.costBig}>
+            📡 Ruch danych (sesja): {fmtUsd(totals?.dataCostUsd ?? 0)}
+          </Text>
           <Text style={styles.costSub}>
             ⬆️ wysłane {fmtBytes(providers.reduce((n, p) => n + p.bytesSent, 0))} ·{" "}
             ⬇️ odebrane {fmtBytes(providers.reduce((n, p) => n + p.bytesRecv, 0))}
+            {totals?.egressUsdPerGB ? `  ·  egress $${totals.egressUsdPerGB}/GB` : ""}
           </Text>
+          {totals?.grandTotalUsd != null ? (
+            <Text style={[styles.costSub, { fontWeight: "800", color: colors.text, marginTop: 4 }]}>
+              Σ łącznie (AI + transfer): {fmtUsd(totals.grandTotalUsd)}
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
