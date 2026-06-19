@@ -883,6 +883,7 @@ export default function App() {
     photoHint?: string;
     location?: string;
     website?: string;
+    city?: string;
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void;
   }) {
     const item = opts.menu.sections[opts.si]?.items[opts.ii];
@@ -947,7 +948,9 @@ export default function App() {
                   cuisine: opts.menu.cuisine,
                   website: opts.website,
                   restaurantName: opts.menu.restaurant_name ?? undefined,
+                  city: opts.city,
                   photoQuery: item.photo_query,
+                  photoQueryLocal: item.photo_query_local,
                   verifyModel: eff.verify,
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
@@ -1359,6 +1362,7 @@ export default function App() {
         photoHint: photoHintFor(menu, freshRestaurant),
         location: locationFor(menu, freshRestaurant),
         website: freshRestaurant?.website ?? undefined,
+        city: freshRestaurant?.city ?? undefined,
         applyMenu: setMenu,
       });
   }
@@ -1375,6 +1379,7 @@ export default function App() {
       photoHint: photoHintFor(openScan.menu, openScan.restaurant),
       location: locationFor(openScan.menu, openScan.restaurant),
       website: openScan.restaurant?.website ?? undefined,
+      city: openScan.restaurant?.city ?? undefined,
       applyMenu: makeApplyMenu(openScan.id, true),
     });
   }

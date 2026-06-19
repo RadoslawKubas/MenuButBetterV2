@@ -324,9 +324,11 @@ app.post("/restaurant", async (c) => {
 
 interface DishPhotosBody {
   dish?: string;
-  photoQuery?: string; // generyczna nazwa dania (EN) do szukania OGÓLNEGO zdjęcia (lepsze trafienia)
+  photoQuery?: string; // kanoniczna nazwa dania do szukania OGÓLNEGO zdjęcia (lepsze trafienia)
+  photoQueryLocal?: string; // nazwa dania w języku kraju — dodatkowy wariant do portali
   restaurantHint?: string;
-  restaurantName?: string; // czysta nazwa lokalu — do POTWIERDZENIA, że zdjęcie jest z jego strony
+  restaurantName?: string; // czysta nazwa lokalu — do zawężenia portali + POTWIERDZENIA źródła
+  city?: string; // miasto lokalu — doklejane do zapytań portalowych
   cuisine?: string; // kontekst kuchni — poprawia trafność weryfikacji
   website?: string; // strona lokalu (z Google Places) — dodatkowe źródło zdjęć
   num?: number;
@@ -352,8 +354,10 @@ app.post("/dish-photos", async (c) => {
     const { photos, usage, debug } = await runDishPhotos({
       dish: body.dish.trim(),
       photoQuery: body.photoQuery,
+      photoQueryLocal: body.photoQueryLocal,
       restaurantHint: body.restaurantHint,
       restaurantName: body.restaurantName,
+      city: body.city,
       cuisine: body.cuisine,
       website: body.website,
       num: body.num,

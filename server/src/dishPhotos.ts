@@ -353,6 +353,59 @@ export async function restaurantSiteImages(dish: string, domain: string, num = 6
   }
 }
 
+/** Niskopoziomowe szukanie obrazów w Serper (Google Images). Pusta lista przy braku klucza/błędzie. */
+async function serperImages(query: string, num: number, fallbackDomain?: string): Promise<DishPhoto[]> {
+  const key = process.env.SERPER_KEY;
+  if (!key) return [];
+  try {
+    const res = await trackedFetch("https://google.serper.dev/images", {
+      method: "POST",
+      headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+      body: JSON.stringify({ q: query, num }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as SerperResponse;
+    return (json.images ?? [])
+      .slice(0, num)
+      .map((it) => ({
+        url: it.thumbnailUrl ?? it.imageUrl ?? "",
+        source: "serper",
+        attribution: it.source ?? it.domain,
+        contextUrl: it.link,
+        domain: it.domain ?? hostOf(it.link) ?? fallbackDomain,
+      }))
+      .filter((p) => p.url);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Zdjęcia dania ZAWĘŻONE do KONKRETNEGO lokalu na portalach recenzenckich:
+ * „{nazwa} {restauracja} {miasto} (site:tripadvisor.com OR yelp.com OR …)". Miasto odsiewa
+ * lokal o podobnej nazwie z innego miasta. `names` to warianty nazwy dania (np. nazwa z menu
+ * + kanoniczna) — odpytujemy każdą, scalamy bez duplikatów URL.
+ */
+export async function venuePortalImages(
+  names: string[],
+  restaurant: string,
+  city: string | undefined,
+  numPerName = 6,
+): Promise<DishPhoto[]> {
+  if (!process.env.SERPER_KEY) return [];
+  const domains = dishPhotoDomains();
+  const siteFilter = domains.length ? ` (${domains.map((d) => `site:${d}`).join(" OR ")})` : "";
+  const venueQual = [restaurant, city].filter(Boolean).join(" ");
+  const uniqNames = [...new Set(names.map((n) => n.trim()).filter(Boolean).map((n) => n.toLowerCase()))];
+  const out: DishPhoto[] = [];
+  const seen = new Set<string>();
+  for (const name of uniqNames) {
+    const imgs = await serperImages(`${name} ${venueQual}${siteFilter}`, numPerName).catch(() => []);
+    for (const im of imgs) if (im.url && !seen.has(im.url) && seen.add(im.url)) out.push(im);
+  }
+  return out;
+}
+
 /**
  * SZEROKIE wyszukiwanie zdjęć dania w całym webie — BEZ restauracji i BEZ ograniczenia
  * do domen. Łapie generyczne/markowe pozycje (woda, 7UP, naan, ryż), których mała knajpa

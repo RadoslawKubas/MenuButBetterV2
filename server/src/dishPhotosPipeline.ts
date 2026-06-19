@@ -3,9 +3,9 @@
 // LAB mógł odpalić DOKŁADNIE ten sam przebieg (te same tiery, weryfikację, flagę fromVenue)
 // na wyeksportowanej migawce i pokazać krok po kroku, co który etap zwrócił.
 import {
-  contextProviders,
   genericWebImages,
   restaurantSiteImages,
+  venuePortalImages,
   photoSourceCategory,
   OpenverseProvider,
   WikimediaProvider,
@@ -16,11 +16,15 @@ import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 
 export interface DishPhotosParams {
   dish: string;
-  /** Generyczny termin (EN) do szukania OGÓLNEGO zdjęcia (lepsze trafienia niż markowa nazwa). */
+  /** Kanoniczna nazwa (EN/native) do szukania OGÓLNEGO zdjęcia (lepsze trafienia niż markowa nazwa). */
   photoQuery?: string;
+  /** Nazwa dania w języku KRAJU lokalu — dodatkowy wariant do portali (lokalne trafienia). */
+  photoQueryLocal?: string;
   restaurantHint?: string;
-  /** Czysta nazwa lokalu — do POTWIERDZENIA, że zdjęcie jest z jego strony. */
+  /** Czysta nazwa lokalu — do zawężenia portali i POTWIERDZENIA, że zdjęcie jest z jego strony. */
   restaurantName?: string;
+  /** Miasto lokalu — doklejane do zapytań portalowych (odsiewa lokal o podobnej nazwie gdzie indziej). */
+  city?: string;
   cuisine?: string;
   /** Strona lokalu (z Google Places) — osobne źródło + kategoria „restaurant". */
   website?: string;
@@ -132,6 +136,11 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return venueNameInUrl(ph.contextUrl, venueName);
   };
 
+  // Próg akceptacji vision per zdjęcie: dla WŁASNEJ strony lokalu łagodniejszy (znamy źródło —
+  // wolimy pokazać zdjęcie „z lokalu" nawet przy umiarkowanym dopasowaniu), portale/web normalnie.
+  const OWN_SITE_THRESHOLD = 0.45;
+  const passThreshold = (ph: DishPhoto) => (cat(ph) === "restaurant" ? OWN_SITE_THRESHOLD : MATCH_THRESHOLD);
+
   const candListOf = (list: DishPhoto[]): DbgCandidate[] =>
     list.map((ph) => ({ url: ph.url, domain: ph.domain, context: ph.contextUrl, fromVenue: fromVenue(ph) }));
   const candScoredOf = (list: (DishPhoto & { score: number })[]): DbgCandidate[] =>
@@ -140,7 +149,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       domain: ph.domain,
       context: ph.contextUrl,
       score: r2(ph.score),
-      passed: ph.score >= MATCH_THRESHOLD,
+      passed: ph.score >= passThreshold(ph),
       fromVenue: fromVenue(ph),
     }));
 
@@ -148,8 +157,10 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     params: {
       dish,
       photoQuery: p.photoQuery?.trim() || null,
+      photoQueryLocal: p.photoQueryLocal?.trim() || null,
       genericTerm,
       restaurantName: p.restaurantName || null,
+      city: p.city?.trim() || null,
       restaurantDomain: restaurantDomain || null,
       cuisine: cuisine || null,
       num,
@@ -164,18 +175,24 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return { photos, usage, debug: dbg };
   };
 
-  // Zdjęcia POGLĄDOWE (typ dania): Serper (Google Images) → Wikimedia → Openverse fallback.
+  // Zdjęcia POGLĄDOWE (typ dania). Kolejność źródeł zależy od REPRESENTATIVE_CC_FIRST:
+  //  • domyślnie (tryb testowy): Serper (Google Images, ~93% trafień) → Wikimedia → Openverse,
+  //  • CC‑first (produkcja, legalnie bezpieczne): Wikimedia → Openverse (licencje CC/PD) → Serper.
+  const CC_FIRST = process.env.REPRESENTATIVE_CC_FIRST === "1";
   async function representatives(verify: boolean): Promise<{ photos: OutPhoto[]; usage: Usage }> {
     const pool = Math.max(num * 2, 6);
-    let provider = "Serper (web)";
-    let found = await genericWebImages(genericTerm, pool, cuisine).catch(() => []);
-    if (found.length === 0) {
-      provider = "Wikimedia";
-      found = await new WikimediaProvider(pool).find(genericTerm).catch(() => []);
-    }
-    if (found.length === 0) {
-      provider = "Openverse";
-      found = await new OpenverseProvider(pool).find(genericTerm).catch(() => []);
+    const sources: { name: string; run: () => Promise<DishPhoto[]> }[] = [
+      { name: "Serper (web)", run: () => genericWebImages(genericTerm, pool, cuisine) },
+      { name: "Wikimedia", run: () => new WikimediaProvider(pool).find(genericTerm) },
+      { name: "Openverse", run: () => new OpenverseProvider(pool).find(genericTerm) },
+    ];
+    const ordered = CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources;
+    let provider = ordered[0]!.name;
+    let found: DishPhoto[] = [];
+    for (const s of ordered) {
+      provider = s.name;
+      found = await s.run().catch(() => []);
+      if (found.length > 0) break;
     }
     const step: DbgStep = { tier: "Poglądowe (typ dania)", provider, query: genericTerm, returned: found.length };
     dbg.steps.push(step);
@@ -216,8 +233,14 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   // → owoc? lassi? curry?), więc po niej SZUKAMY (tak danie figuruje na stronie/portalu lokalu),
   // ale OCENIAMY po pełnym opisie, który model już wygenerował. Bez tego np. napój mango z portalu
   // przechodził jako „Mango", choć pozycja to mango CURRY.
-  const pq = p.photoQuery?.trim();
-  const verifyTerm = pq && pq.toLowerCase() !== dish.toLowerCase() ? `${dish} — ${pq}` : dish;
+  // Nazwy do szukania: nazwa z menu (lokalna, jak danie figuruje u lokalu) + kanoniczna (photo_query)
+  // + nazwa w języku kraju (photo_query_local). Do WERYFIKACJI używamy terminu opisowego — sama
+  // nazwa pozycji bywa wieloznaczna („Mango" → owoc? lassi? curry?).
+  const nameMenu = dish;
+  const nameCanon = p.photoQuery?.trim() || dish;
+  const nameLocal = p.photoQueryLocal?.trim() || "";
+  const cityQual = p.city?.trim() || undefined;
+  const verifyTerm = nameCanon.toLowerCase() !== nameMenu.toLowerCase() ? `${nameMenu} — ${nameCanon}` : nameMenu;
 
   // Weryfikuje listę i zwraca te, które pokazują danie (≥ próg), posortowane po trafności.
   async function keepMatching(list: DishPhoto[], term: string = dish) {
@@ -228,20 +251,26 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return { passing, scored };
   }
 
-  // TIER 1: „z lokalu" — OSOBNO strona lokalu (site:domena) + OSOBNO portale recenzenckie, scalone.
+  // TIER 1: „z lokalu" — strona lokalu (site:domena, po nazwie z menu) + portale ZAWĘŻONE do
+  // lokalu+miasta (po nazwie z menu, kanonicznej i lokalnej), scalone i zweryfikowane wizją.
   const tier1: DishPhoto[] = [];
   if (restaurantDomain) {
-    const site = await restaurantSiteImages(dish, restaurantDomain, 6).catch(() => []);
-    dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: dish, returned: site.length, candidates: candListOf(site) });
+    let site = await restaurantSiteImages(nameMenu, restaurantDomain, 6).catch(() => []);
+    if (site.length === 0 && nameCanon !== nameMenu) site = await restaurantSiteImages(nameCanon, restaurantDomain, 6).catch(() => []);
+    dbg.steps.push({ tier: "Tier1 strona lokalu", provider: `site:${restaurantDomain}`, query: nameMenu, returned: site.length, candidates: candListOf(site) });
     tier1.push(...site);
   }
-  for (const prov of contextProviders()) {
-    const portal = await prov.find(dish, hint).catch(() => []);
-    dbg.steps.push({ tier: "Tier1 portale", provider: prov.constructor.name, query: dish, returned: portal.length, candidates: candListOf(portal) });
-    if (portal.length > 0) {
-      tier1.push(...portal);
-      break;
-    }
+  {
+    const venueQ = [venueName, cityQual].filter(Boolean).join(" ") || hint || "";
+    const portal = await venuePortalImages([nameMenu, nameCanon, nameLocal], venueName, cityQual, 6).catch(() => []);
+    dbg.steps.push({
+      tier: "Tier1 portale (lokal+miasto)",
+      provider: "Serper site:portale",
+      query: `[${[nameMenu, nameCanon, nameLocal].filter(Boolean).join(" / ")}] ${venueQ}`.trim(),
+      returned: portal.length,
+      candidates: candListOf(portal),
+    });
+    tier1.push(...portal);
   }
   const seen = new Set<string>();
   const ctx = tier1.filter((ph) => ph.url && !seen.has(ph.url) && seen.add(ph.url));
@@ -253,16 +282,17 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return finish(photos, ZERO_USAGE);
   }
   if (verify && ctx.length > 0) {
-    const { passing, scored } = await keepMatching(ctx, verifyTerm);
+    const { scored } = await keepMatching(ctx, verifyTerm);
+    // Próg per-zdjęcie: własna strona lokalu łagodniej (0.45), portale/web normalnie (0.6).
+    const passing = scored
+      .filter((ph) => ph.score >= passThreshold(ph))
+      // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
+      .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || b.score - a.score);
     dbg.steps.push({ tier: "Tier1 weryfikacja vision", provider: verifyModel, query: verifyTerm, returned: ctx.length, passed: passing.length, candidates: candScoredOf(scored) });
     if (passing.length > 0) {
-      const photos = passing
-        // Potwierdzone „z tego lokalu" najpierw, potem reszta (w grupie — po trafności).
-        .sort((a, b) => (fromVenue(a) ? 0 : 1) - (fromVenue(b) ? 0 : 1) || b.score - a.score)
-        .slice(0, num)
-        .map((ph) => ({
-          url: ph.url, source: cat(ph), attribution: ph.attribution, verified: true, representative: false, fromVenue: fromVenue(ph),
-        }));
+      const photos = passing.slice(0, num).map((ph) => ({
+        url: ph.url, source: cat(ph), attribution: ph.attribution, verified: true, representative: false, fromVenue: fromVenue(ph),
+      }));
       return finish(photos, total);
     }
   }

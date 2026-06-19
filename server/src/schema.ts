@@ -23,6 +23,7 @@ export interface MenuItem {
   original: string;
   translated: string;
   photo_query: string;
+  photo_query_local: string;
   description: string;
   ingredients: string[];
   allergens: string[];
@@ -88,7 +89,12 @@ export const MENU_SCHEMA = {
                 photo_query: {
                   type: "string",
                   description:
-                    "Krótka, GENERYCZNA nazwa dania PO ANGIELSKU do wyszukania zdjęcia w internecie — opisz, CZYM danie jest (typ potrawy), a NIE markową/lokalną nazwą z menu. Przykłady: 'Nordic Taste' → 'smoked salmon avocado toast'; 'Cúrcuma Platter' → 'indian mixed appetizer platter'; 'Patates Braves' → 'patatas bravas'; 'Double Smash BBQ' → 'bbq smash burger'. Dla zwykłych, jednoznacznych nazw może to być po prostu ta nazwa po angielsku.",
+                    "KANONICZNA nazwa dania do wyszukiwania zdjęć — najlepiej rozpoznawalna nazwa potrawy w jej własnej kuchni (zromanizowana), z dopisanym typem/kuchnią dla jednoznaczności. Opisz CZYM danie jest, NIE markową/lokalną nazwą z menu. Przykłady: 'Mango' (curry) → 'mango chicken curry indian'; 'Nordic Taste' → 'smoked salmon avocado toast'; 'Patates Braves' → 'patatas bravas'; danie tajskie → 'pad thai noodles'. Dla zwykłych nazw — ta nazwa po angielsku + typ.",
+                },
+                photo_query_local: {
+                  type: "string",
+                  description:
+                    "Nazwa dania do wyszukiwania zdjęć W JĘZYKU KRAJU, w którym jest lokal (kraj wynika z podanej lokalizacji) — tak, jak ludzie szukają tego dania w tym kraju. Gdy język menu = język kraju, zwykle = original. Gdy menu jest w innym języku (np. po angielsku, a lokal w Polsce), podaj nazwę w języku kraju (np. 'kurczak maślany'). Gdy nie da się sensownie podać — powtórz photo_query.",
                 },
                 description: {
                   type: "string",
@@ -128,6 +134,7 @@ export const MENU_SCHEMA = {
                 "original",
                 "translated",
                 "photo_query",
+                "photo_query_local",
                 "description",
                 "ingredients",
                 "allergens",

@@ -52,6 +52,9 @@
   .badge.venue { background:#3a2a08; color:var(--warn); }
   .badge.pass { background:#10341f; color:var(--ok); }
   .badge.fail { background:#3a1414; color:var(--err); }
+  #simPanel select { width:100%; margin-top:2px; }
+  .simgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:6px 10px; }
+  .simgrid label { font-size:12px; color:var(--mut); }
   .cand { padding:8px; border:1px solid var(--line); border-radius:8px; margin-top:6px; cursor:pointer; }
   .cand:hover { border-color:var(--acc); }
   .small { font-size:12px; }
@@ -121,10 +124,16 @@
     </div>
     <div class="panel" id="simPanel">
       <h3>🧪 Symulacja aplikacji — tor zdjęć dla pozycji</h3>
-      <div class="mut small" style="margin-bottom:8px">Ten sam kod co w apce (<b>extractMenu → runDishPhotos</b>). Używa <b>pierwszej zaznaczonej</b> migawki. Pokazuje krok po kroku, co który etap zwrócił + ocenę vision + flagę <b>„z lokalu"</b>.</div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
-        <label class="small mut">skan:</label><select id="simScanModel"></select>
-        <label class="small mut">weryfikacja zdjęć:</label><select id="simVerifyModel"></select>
+      <div class="mut small" style="margin-bottom:8px">Ten sam kod co w apce (<b>peek → extractMenu → runDishPhotos / describeDish / Tier 0</b>). Używa <b>pierwszej zaznaczonej</b> migawki. Model osobno dla każdej roli — jak w ustawieniach apki.</div>
+      <div class="simgrid">
+        <label>👁 peek<select id="simPeekModel"></select></label>
+        <label>📖 skan<select id="simScanModel"></select></label>
+        <label>📝 opis dania<select id="simDescribeModel"></select></label>
+        <label>🔍 zdjęcia (weryfikacja)<select id="simVerifyModel"></select></label>
+        <label>📍 lokal Tier 0<select id="simVenueModel"></select></label>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <span class="chip" id="simPeekChip" onclick="toggleSimPeek()">👁 peek przy skanie</span>
         <span class="chip" id="simVenueChip" onclick="toggleSimVenue()">+ lokal (Places/TA)</span>
       </div>
       <button class="primary" style="margin-top:8px" id="simScanBtn" onclick="simScan()">1) Skanuj menu</button>
@@ -482,14 +491,20 @@ function showLeaderboard(){
 }
 
 /* ---- Symulacja aplikacji (tor zdjęć dla pozycji) ---- */
-let SIM = null, SIM_VENUE = false;
+let SIM = null, SIM_VENUE = false, SIM_PEEK = true;
 function toggleSimVenue(){ SIM_VENUE=!SIM_VENUE; document.getElementById('simVenueChip').className='chip'+(SIM_VENUE?' on':''); }
+function toggleSimPeek(){ SIM_PEEK=!SIM_PEEK; document.getElementById('simPeekChip').className='chip'+(SIM_PEEK?' on':''); }
+// Domyślne modele per rola — jak DEFAULT_MODELS w apce (peek=nano, reszta=Sonnet).
+const SIM_DEFAULTS = { simPeekModel:'gpt-5-nano', simScanModel:'claude-sonnet-4-6', simDescribeModel:'claude-sonnet-4-6', simVerifyModel:'claude-sonnet-4-6', simVenueModel:'claude-sonnet-4-6' };
 function renderSimSelects(){
   const opts = STATE.models.map(m=>`<option value="${m.id}">${m.label}</option>`).join('');
-  const sc=document.getElementById('simScanModel'), vf=document.getElementById('simVerifyModel');
-  if(sc){ sc.innerHTML=opts; if(MODELS_HAS('claude-sonnet-4-6')) sc.value='claude-sonnet-4-6'; }
-  if(vf){ vf.innerHTML=opts; if(MODELS_HAS('claude-sonnet-4-6')) vf.value='claude-sonnet-4-6'; }
+  Object.entries(SIM_DEFAULTS).forEach(([id,def])=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.innerHTML=opts;
+    if(MODELS_HAS(def)) el.value=def; else if(MODELS_HAS('claude-sonnet-4-6')) el.value='claude-sonnet-4-6';
+  });
   document.getElementById('simVenueChip').className='chip'+(SIM_VENUE?' on':'');
+  document.getElementById('simPeekChip').className='chip'+(SIM_PEEK?' on':'');
 }
 function trunc(s,n){ s=s||''; return s.length>n? s.slice(0,n)+'…' : s; }
 async function simScan(){
@@ -499,10 +514,16 @@ async function simScan(){
   document.getElementById('simInfo').textContent='skanuję menu…';
   document.getElementById('simVenueBox').innerHTML=''; document.getElementById('simItems').innerHTML='';
   try{
-    const r=await api('/api/sim-scan',{captureId:id, scanModel:document.getElementById('simScanModel').value, withVenue:SIM_VENUE});
+    const r=await api('/api/sim-scan',{
+      captureId:id,
+      scanModel:document.getElementById('simScanModel').value,
+      peekModel:document.getElementById('simPeekModel').value,
+      withPeek:SIM_PEEK, withVenue:SIM_VENUE,
+    });
     if(r.error) throw new Error(r.error);
-    SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items };
-    document.getElementById('simInfo').textContent=`✓ ${r.menu.restaurantName||'—'} · ${r.menu.cuisine||'—'} · ${r.items.length} pozycji · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms`;
+    SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items, peek:r.peek };
+    const pk = r.peek ? ` · 👁 peek(${r.peek.model}): ${r.peek.isMenu?'menu✓':'nie‑menu'} · ${r.peek.cuisine||'—'}` : '';
+    document.getElementById('simInfo').innerHTML=`✓ ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms<span class="mut small">${esc(pk)}</span>`;
     renderSimVenue(); renderSimItems();
   }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
   finally{ btn.disabled=false; }
@@ -523,7 +544,7 @@ async function simVenue(){
   const out=document.getElementById('simVenueOut'); out.innerHTML='<div class="mut small">dopasowuję pulę zdjęć lokalu…</div>';
   const dishes=SIM.items.map(it=>it.original).filter(Boolean);
   const certain = SIM.venue.nameVerified !== false;
-  const r=await api('/api/sim-venue',{dishes, cuisine:SIM.cuisine, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVerifyModel').value, certain});
+  const r=await api('/api/sim-venue',{dishes, cuisine:SIM.cuisine, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVenueModel').value, certain});
   if(r.error){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); return; }
   const ms=(r.matches||[]).map(m=>{
     const thumb = m.source==='tripadvisor' && m.url ? `<img src="${esc(m.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2">` : `<div style="width:74px;height:74px;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--mut)">Google</div>`;
@@ -539,9 +560,12 @@ function renderSimItems(){
         <b>${esc(it.original||'—')}</b>
         ${it.translated&&it.translated!==it.original?`<span class="mut small">${esc(it.translated)}</span>`:''}
         ${it.photoQuery?`<span class="mut small">🔎 ${esc(it.photoQuery)}</span>`:''}
+        ${it.photoQueryLocal&&it.photoQueryLocal!==it.photoQuery?`<span class="mut small">🌍 ${esc(it.photoQueryLocal)}</span>`:''}
         <span style="flex:1"></span>
+        <button onclick="simDescribe(${i})" id="simDescBtn-${i}">📝 opis</button>
         <button onclick="simDish(${i})" id="simDishBtn-${i}">🔍 zdjęcia</button>
       </div>
+      <div id="simDescOut-${i}"></div>
       <div id="simDishOut-${i}"></div>
     </div>`).join('');
 }
@@ -568,14 +592,29 @@ function renderSteps(dbg){
     </div>`;
   }).join('');
 }
+async function simDescribe(i){
+  const it=SIM?.items?.[i]; if(!it) return;
+  const btn=document.getElementById('simDescBtn-'+i), out=document.getElementById('simDescOut-'+i);
+  btn.disabled=true; out.innerHTML='<div class="mut small" style="margin-top:6px">generuję opis…</div>';
+  try{
+    const r=await api('/api/sim-describe',{
+      dish:it.original, description:it.description, cuisine:SIM.cuisine,
+      restaurant:SIM.restaurantName, location:SIM.venue?.address||undefined,
+      model:document.getElementById('simDescribeModel').value,
+    });
+    if(r.error) throw new Error(r.error);
+    out.innerHTML=`<div class="mut small" style="margin-top:6px">📝 opis (${esc(document.getElementById('simDescribeModel').value)}) · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms</div><pre class="pre">${esc(r.text||'')}</pre>`;
+  }catch(e){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(e.message); }
+  finally{ btn.disabled=false; }
+}
 async function simDish(i){
   const it=SIM?.items?.[i]; if(!it) return;
   const btn=document.getElementById('simDishBtn-'+i), out=document.getElementById('simDishOut-'+i);
   btn.disabled=true; out.innerHTML='<div class="mut small" style="margin-top:6px">szukam zdjęć (ten sam tor co apka)…</div>';
   try{
     const r=await api('/api/sim-dish',{
-      dish:it.original, photoQuery:it.photoQuery, cuisine:SIM.cuisine,
-      restaurantName:SIM.restaurantName, website:SIM.venue?.website,
+      dish:it.original, photoQuery:it.photoQuery, photoQueryLocal:it.photoQueryLocal, cuisine:SIM.cuisine,
+      restaurantName:SIM.restaurantName, city:SIM.venue?.city, website:SIM.venue?.website,
       verifyModel:document.getElementById('simVerifyModel').value, num:4,
     });
     if(r.error) throw new Error(r.error);

@@ -17,8 +17,10 @@ export type DishCategory =
 export interface MenuItem {
   original: string;
   translated: string;
-  /** Generyczna nazwa dania (EN) do wyszukiwania zdjęcia — lepsze trafienia. */
+  /** Kanoniczna nazwa dania (EN/native) do wyszukiwania zdjęcia — lepsze trafienia globalne. */
   photo_query?: string;
+  /** Nazwa dania w języku kraju lokalu — dodatkowy wariant do portali (lokalne trafienia). */
+  photo_query_local?: string;
   description: string;
   ingredients: string[];
   allergens: string[];

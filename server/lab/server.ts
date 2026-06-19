@@ -566,22 +566,40 @@ app.post("/api/annotate", async (c) => {
 // co zwraca tor zdjęć (runDishPhotos: tier 1 strona lokalu/portale → vision → tier 2 web → tier 3
 // poglądowe), z ocenami i flagą fromVenue — żeby ocenić, czemu coś jest „z lokalu".
 
-// 1) Skan menu (+ opcjonalnie znajdź lokal w Places/TripAdvisor — jak /restaurant w apce).
+// 1) Skan menu — jak w apce: najpierw peek (kuchnia→cuisineHint), potem scan; opcjonalnie lokal.
 app.post("/api/sim-scan", async (c) => {
-  const { captureId, scanModel, withVenue } = await c.req.json<{ captureId: string; scanModel?: ModelId; withVenue?: boolean }>();
+  const { captureId, scanModel, peekModel, withVenue, withPeek } = await c.req.json<{
+    captureId: string; scanModel?: ModelId; peekModel?: ModelId; withVenue?: boolean; withPeek?: boolean;
+  }>();
   const cap = loadMeta().find((x) => x.id === captureId);
   if (!cap) return c.json({ error: "nie ma migawki" }, 404);
   const images = allImageInputs(cap);
   if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
   const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
   const t0 = Date.now();
-  const { menu, usage } = await extractMenu(images, { targetLang: "polski", locationHint: cap.locationHint, model });
+  // Peek (jak w apce) — z pierwszego zdjęcia; jego kuchnia trafia jako cuisineHint do skanu.
+  let peek: any = null;
+  if (withPeek !== false) {
+    const pm = (peekModel && peekModel in MODELS ? peekModel : DEFAULT_MODEL) as ModelId;
+    const img0 = imageInput(cap, 0);
+    if (img0) {
+      const r = await quickPeek(img0, pm).catch(() => null);
+      if (r) peek = { model: pm, isMenu: r.result.isMenu, cuisine: r.result.cuisine, restaurantName: r.result.restaurantName, cost: r.usage.costUsd };
+    }
+  }
+  const { menu, usage } = await extractMenu(images, {
+    targetLang: "polski",
+    locationHint: cap.locationHint,
+    cuisineHint: peek?.cuisine || undefined,
+    model,
+  });
   const items = (menu.sections ?? []).flatMap((s: any) =>
     (s.items ?? []).map((it: any) => ({
       section: s.name,
       original: it.original,
       translated: it.translated,
       photoQuery: it.photo_query,
+      photoQueryLocal: it.photo_query_local,
       description: it.description,
     })),
   );
@@ -596,6 +614,7 @@ app.post("/api/sim-scan", async (c) => {
         website: rest.website,
         placeId: rest.placeId,
         location: rest.location,
+        city: rest.city, // do zawężenia zapytań portalowych
         nameVerified: rest.nameVerified, // czy Places trafił w nazwę (Tier 0: pewność lokalu)
         photoNames: rest.photoNames ?? [],
         taPhotos: (ta?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption })),
@@ -607,10 +626,32 @@ app.post("/api/sim-scan", async (c) => {
     ms: Date.now() - t0,
     usage,
     scanModel: model,
+    peek,
     menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, sections: menu.sections.length, itemCount: items.length },
     items,
     venue,
   });
+});
+
+// 1b) Opis dania (rola „describe") — jak /dish-info w apce.
+app.post("/api/sim-describe", async (c) => {
+  const b = await c.req.json<{ dish: string; description?: string; cuisine?: string; location?: string; restaurant?: string; model?: ModelId }>();
+  if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
+  try {
+    const t0 = Date.now();
+    const { text, usage } = await describeDish({
+      name: b.dish,
+      description: b.description,
+      cuisine: b.cuisine,
+      location: b.location,
+      restaurant: b.restaurant,
+      targetLang: "polski",
+      model: (b.model && b.model in MODELS ? b.model : DEFAULT_MODEL) as ModelId,
+    });
+    return c.json({ ms: Date.now() - t0, text, usage });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
 });
 
 // 2) Zdjęcia dla JEDNEJ pozycji — DOKŁADNIE runDishPhotos z apki, z pełnym śladem debug.
@@ -618,8 +659,10 @@ app.post("/api/sim-dish", async (c) => {
   const b = await c.req.json<{
     dish: string;
     photoQuery?: string;
+    photoQueryLocal?: string;
     cuisine?: string;
     restaurantName?: string;
+    city?: string;
     website?: string;
     verifyModel?: string;
     num?: number;
@@ -630,8 +673,10 @@ app.post("/api/sim-dish", async (c) => {
     const { photos, usage, debug } = await runDishPhotos({
       dish: b.dish,
       photoQuery: b.photoQuery,
+      photoQueryLocal: b.photoQueryLocal,
       restaurantHint: b.restaurantName, // w apce hint ≈ nazwa lokalu (bias zapytań portalowych)
       restaurantName: b.restaurantName,
+      city: b.city,
       cuisine: b.cuisine,
       website: b.website,
       num: b.num ?? 4,
