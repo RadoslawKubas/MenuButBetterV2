@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,6 +16,7 @@ import { StatusBar } from "expo-status-bar";
 import {
   scanMenu,
   type ScanPhase,
+  type ScanItemStub,
   fetchDishInfo,
   fetchDishPhotos,
   fetchRestaurant,
@@ -25,7 +26,7 @@ import {
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
-import { cacheImage, cachePhotos } from "./src/imageCache";
+import { cacheImage, cachePhotos, resolveCachedUri } from "./src/imageCache";
 import { mergeMenus } from "./src/mergeMenu";
 import {
   captureFromCamera,
@@ -156,6 +157,10 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
+  // Pozycje pojawiające się NA ŻYWO w trakcie skanu (nazwa + miniatura poglądowa, gdy dociągnięta).
+  const [scanItems, setScanItems] = useState<{ original: string; translated: string; branded: boolean; photo?: string }[]>([]);
+  // Prefetch tanich zdjęć poglądowych podczas skanu — reużywane po skanie (bez ponownego szukania).
+  const prefetchedPhotos = useRef<Map<string, DishPhotoLite[]>>(new Map());
   const [images, setImages] = useState<PreparedImage[]>([]);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -420,6 +425,54 @@ export default function App() {
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
+
+      // PREFETCH zdjęć poglądowych NA ŻYWO: gdy model wypisze pozycję, od razu dociągamy dla niej
+      // tanie zdjęcie (Serper) — gotowe, zanim skan się skończy; potem reużyte (bez ponownego szukania).
+      prefetchedPhotos.current.clear();
+      setScanItems([]);
+      const eff = opts.models;
+      const pfQueue: ScanItemStub[] = [];
+      let pfActive = 0;
+      let pfEnqueued = 0; // szanuje limit auto-dociągania (Koszty)
+      const pumpPrefetch = () => {
+        while (pfActive < 3 && pfQueue.length > 0) {
+          const stub = pfQueue.shift()!;
+          pfActive++;
+          void (async () => {
+            try {
+              const { photos } = await fetchDishPhotos(stub.original, undefined, {
+                representativeOnly: true,
+                num: 1,
+                photoQuery: stub.photoQuery,
+                verifyModel: eff.verify,
+              });
+              if (photos.length > 0) {
+                const cached = await cachePhotos(photos);
+                prefetchedPhotos.current.set(stub.original, cached);
+                const thumb = cached[0]?.url;
+                setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, photo: thumb } : x)));
+                // Jeśli menu już jest (kolejne partie) — wstaw od razu, z guardem (nie nadpisuj lepszych).
+                setMenu((prev) => (prev ? attachPhotosByName(prev, stub.original, cached) : prev));
+              }
+            } catch {
+              /* ciche — fillDishPhotos po skanie dociągnie brakujące */
+            } finally {
+              pfActive--;
+              pumpPrefetch();
+            }
+          })();
+        }
+      };
+      const onScanItem = (stub: ScanItemStub) => {
+        // Nazwy pokazujemy zawsze (za darmo); zdjęcia prefetchujemy tylko gdy auto-zdjęcia włączone
+        // i w ramach limitu z „Kosztów" (markowe pomijamy — i tak idą w generyk na dotknięcie).
+        setScanItems((prev) => [...prev, { original: stub.original, translated: stub.translated, branded: stub.branded }]);
+        if (costPrefs.autoPhotos && !stub.branded && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+          pfEnqueued++;
+          pfQueue.push(stub);
+          pumpPrefetch();
+        }
+      };
       if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
 
       for (let bi = 0; bi < batches.length; bi++) {
@@ -438,6 +491,7 @@ export default function App() {
             model: opts.models.scan,
           },
           (p) => setScanPhase(scanPhaseLabel(p)),
+          onScanItem,
         );
 
         if (!merged) {
@@ -476,6 +530,20 @@ export default function App() {
       setVenueQuery("");
       const result = merged!;
 
+      // REUŻYCIE prefetchu: dołącz do menu zdjęcia poglądowe dociągnięte już w trakcie skanu —
+      // dzięki temu pokazują się od razu, a fillDishPhotos je pominie (bez ponownego szukania).
+      result.sections.forEach((sec) =>
+        sec.items.forEach((it) => {
+          if (it && !(it.photos && it.photos.length > 0)) {
+            const pf = prefetchedPhotos.current.get(it.original);
+            if (pf && pf.length > 0) it.photos = pf;
+          }
+        }),
+      );
+      setMenu(result);
+      if (scanId) void updateScanMenu(scanId, result);
+      setScanItems([]);
+
       // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
       if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
 
@@ -507,6 +575,7 @@ export default function App() {
       setStatus("error");
       setScanProgress(null);
       setScanPhase(null);
+      setScanItems([]);
     }
   }
 
@@ -860,6 +929,21 @@ export default function App() {
     };
   }
 
+  // Wstaw zdjęcia poglądowe (prefetch) do pozycji o danej nazwie — z guardem: nie nadpisuj, gdy
+  // pozycja już ma zdjęcia (np. lepsze z dotknięcia). Reużywa prefetch, nie szukając ponownie.
+  function attachPhotosByName(m: Menu, original: string, photos: DishPhotoLite[]): Menu {
+    let changed = false;
+    const sections = m.sections.map((s) => ({
+      ...s,
+      items: s.items.map((it) => {
+        if (changed || it.original !== original || (it.photos && it.photos.length > 0) || it.photosUpgraded) return it;
+        changed = true;
+        return { ...it, photos };
+      }),
+    }));
+    return changed ? { ...m, sections } : m;
+  }
+
   // Modele OBOWIĄZUJĄCE dla akcji w obrębie danego skanu: ZAMROŻONE z chwili skanu
   // (gdy zapisane), inaczej bieżące ustawienia (starsze skany / świeży skan przed odświeżeniem
   // stanu — wtedy zamrożone == bieżące, więc bezpiecznie). Dzięki temu opisy/zdjęcia w zapisanym
@@ -1026,7 +1110,15 @@ export default function App() {
           jobs.push({ si, ii, name: it.original, photoQuery: it.photo_query });
       }),
     );
-    if (costPrefs.autoLimit > 0) jobs.length = Math.min(jobs.length, costPrefs.autoLimit); // limit auto-dociągania
+    if (costPrefs.autoLimit > 0) {
+      // autoLimit = ŁĄCZNY limit. Zdjęcia dociągnięte już w trakcie skanu (prefetch) liczą się do
+      // niego, więc dobieramy tylko brakujące do limitu (a nie kolejne `autoLimit` ponad prefetch).
+      const have = baseMenu.sections.reduce(
+        (n, s) => n + s.items.filter((it) => it.photos && it.photos.length > 0).length,
+        0,
+      );
+      jobs.length = Math.min(jobs.length, Math.max(0, costPrefs.autoLimit - have));
+    }
 
     const eff = modelsForScan(scanId); // weryfikacja zdjęć — model zamrożony z tego menu
     const CONCURRENCY = 4;
@@ -1726,6 +1818,25 @@ export default function App() {
                       ) : null}
                     </>
                   ) : null}
+                  {scanItems.length > 0 ? (
+                    <ScrollView style={styles.scanItemsBox} contentContainerStyle={{ paddingVertical: 4 }}>
+                      {scanItems.map((it, i) => (
+                        <View key={i} style={styles.scanItemRow}>
+                          {it.photo ? (
+                            <Image source={{ uri: resolveCachedUri(it.photo) ?? it.photo }} style={styles.scanItemThumb} />
+                          ) : (
+                            <View style={[styles.scanItemThumb, styles.scanItemThumbEmpty]}>
+                              <ActivityIndicator size="small" color={colors.muted} />
+                            </View>
+                          )}
+                          <Text style={styles.scanItemName} numberOfLines={1}>
+                            {it.translated || it.original}
+                            {it.branded ? "  🏷" : ""}
+                          </Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  ) : null}
                 </View>
               ) : null}
 
@@ -2053,6 +2164,11 @@ const styles = StyleSheet.create({
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
   scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
+  scanItemsBox: { marginTop: 14, maxHeight: 260, alignSelf: "stretch", marginHorizontal: 16 },
+  scanItemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4 },
+  scanItemThumb: { width: 36, height: 36, borderRadius: 6, backgroundColor: colors.badgeBg, marginRight: 10 },
+  scanItemThumbEmpty: { alignItems: "center", justifyContent: "center" },
+  scanItemName: { flex: 1, fontSize: 14, color: colors.text },
   progressTrack: {
     width: "70%",
     height: 8,

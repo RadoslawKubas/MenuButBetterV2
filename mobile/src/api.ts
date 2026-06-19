@@ -79,6 +79,15 @@ export type ScanPhase =
   | { phase: "extracting"; elapsedMs: number; items?: number }
   | { phase: "finalizing" };
 
+/** Pozycja wyłuskana NA ŻYWO ze strumienia (nazwa + photo_query) — do podglądu i prefetchu zdjęć. */
+export interface ScanItemStub {
+  original: string;
+  translated: string;
+  photoQuery: string;
+  photoQueryLocal: string;
+  branded: boolean;
+}
+
 /**
  * Skan menu z PODGLĄDEM POSTĘPU. Używa XMLHttpRequest (fetch w RN nie daje postępu wysyłki):
  *  • `upload.onprogress` → ile zdjęć już poszło (%),
@@ -88,6 +97,7 @@ export type ScanPhase =
 export function scanMenu(
   params: ScanParams,
   onProgress?: (p: ScanPhase) => void,
+  onItem?: (item: ScanItemStub) => void,
 ): Promise<{ menu: Menu; usage: Usage }> {
   const t0 = Date.now();
   const body = JSON.stringify({
@@ -126,6 +136,8 @@ export function scanMenu(
           const ev = JSON.parse(t);
           if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
+          else if (ev.phase === "item")
+            onItem?.({ original: ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded });
         } catch {
           /* niepełna linia — doczyta się później */
         }

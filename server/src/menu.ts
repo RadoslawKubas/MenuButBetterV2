@@ -47,6 +47,42 @@ export interface ExtractOptions {
   /** Postęp odczytu na żywo (Claude, streaming): ile pozycji już wypisał model i ile znaków.
    *  Pozwala apce pokazać „Odczytano N pozycji…" zamiast samego licznika czasu. */
   onProgress?: (p: { chars: number; items: number }) => void;
+  /** Każda sparsowana pozycja (nazwa + photo_query) NA ŻYWO ze strumienia — apka pokazuje nazwy
+   *  i od razu dociąga dla nich tanie zdjęcia poglądowe (gotowe, zanim skan się skończy). */
+  onItem?: (item: ScanItemStub) => void;
+}
+
+/** Minimalna pozycja wyłuskana ze strumienia — do podglądu nazw i wczesnego dociągania zdjęć. */
+export interface ScanItemStub {
+  original: string;
+  translated: string;
+  photoQuery: string;
+  photoQueryLocal: string;
+  branded: boolean;
+}
+
+// Wyłuskuje KOMPLETNE pozycje z (jeszcze niepełnego) strumienia JSON — po stałej kolejności pól
+// schematu (original→translated→photo_query→photo_query_local→branded). Emituje tylko NOWE.
+const ITEM_RE =
+  /"original"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"translated"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"photo_query"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"photo_query_local"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"branded"\s*:\s*(true|false)/g;
+function emitNewItems(text: string, state: { emitted: number }, onItem: (i: ScanItemStub) => void): void {
+  const dec = (s: string) => {
+    try {
+      return JSON.parse(`"${s}"`) as string;
+    } catch {
+      return s;
+    }
+  };
+  ITEM_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  let idx = 0;
+  while ((m = ITEM_RE.exec(text))) {
+    if (idx >= state.emitted) {
+      onItem({ original: dec(m[1]!), translated: dec(m[2]!), photoQuery: dec(m[3]!), photoQueryLocal: dec(m[4]!), branded: m[5] === "true" });
+      state.emitted = idx + 1;
+    }
+    idx++;
+  }
 }
 
 export const SYSTEM = [
@@ -148,6 +184,7 @@ async function extractMenuOpenAI(
     let finish: string | null = null;
     let uRaw: import("openai").OpenAI.Completions.CompletionUsage | undefined;
     let lastItems = -1;
+    const itemState = { emitted: 0 };
     for await (const chunk of stream) {
       const choice = chunk.choices?.[0];
       const delta = choice?.delta?.content;
@@ -160,6 +197,7 @@ async function extractMenuOpenAI(
             opts.onProgress({ chars: acc.length, items });
           }
         }
+        if (opts.onItem) emitNewItems(acc, itemState, opts.onItem);
       }
       if (choice?.finish_reason) finish = choice.finish_reason;
       if (chunk.usage) uRaw = chunk.usage;
@@ -215,16 +253,19 @@ export async function extractMenu(
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: MENU_SCHEMA } },
   });
-  // Postęp na żywo: licz pozycje po markerze "original" (jeden na danie) w tekście, który już
-  // napłynął. Throttle, by nie zalać klienta — emitujemy tylko gdy licznik pozycji wzrośnie.
-  if (opts.onProgress) {
+  // Postęp na żywo: licznik pozycji (po markerze "original") + emisja KOMPLETNYCH pozycji (onItem).
+  if (opts.onProgress || opts.onItem) {
     let lastItems = -1;
+    const itemState = { emitted: 0 };
     stream.on("text", (_delta, snapshot) => {
-      const items = (snapshot.match(/"original"\s*:/g) || []).length;
-      if (items !== lastItems) {
-        lastItems = items;
-        opts.onProgress!({ chars: snapshot.length, items });
+      if (opts.onProgress) {
+        const items = (snapshot.match(/"original"\s*:/g) || []).length;
+        if (items !== lastItems) {
+          lastItems = items;
+          opts.onProgress({ chars: snapshot.length, items });
+        }
       }
+      if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem);
     });
   }
   const response = await track("claude", "scan-menu", () => stream.finalMessage());

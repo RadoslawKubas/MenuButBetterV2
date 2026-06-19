@@ -154,11 +154,17 @@ app.post("/scan", async (c) => {
         locationHint: body.locationHint?.trim() || undefined,
         cuisineHint: body.cuisineHint?.trim() || undefined,
         model,
-        // Postęp odczytu na żywo (Claude): emituj krok z licznikiem pozycji, gdy wzrośnie.
+        // Postęp odczytu na żywo: krok z licznikiem pozycji (gdy wzrośnie).
         onProgress: wantSteps
           ? (p) => {
               latestItems = p.items;
               s.write(JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0, items: p.items }) + "\n").catch(() => {});
+            }
+          : undefined,
+        // Każda sparsowana pozycja NA ŻYWO — apka pokazuje nazwę i od razu dociąga zdjęcie poglądowe.
+        onItem: wantSteps
+          ? (it) => {
+              s.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {});
             }
           : undefined,
       });
