@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
 import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
-import { track, recordUsage } from "./apiLog.ts";
+import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, apiTag, type ModelId } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
 
@@ -207,6 +207,8 @@ async function extractMenuOpenAI(
 
   const usage = usageFromOpenAI(model, usageRaw);
   recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+  // Relay do API: wysłane ≈ base64 obrazów (dominują), odebrane ≈ długość odpowiedzi.
+  recordBytes(tag, images.reduce((n, i) => n + i.base64.length, 0), text.length);
   logUsage(`menu obrazów=${images.length} (${tag})`, model, usage);
 
   if (finishReason === "length") {
@@ -273,6 +275,8 @@ export async function extractMenu(
   // Zużycie tokenów + koszt (do licznika w apce + diagnostyki).
   const usage = usageFrom(model, response.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+  const claudeText = response.content.find((b) => b.type === "text");
+  recordBytes("claude", images.reduce((n, i) => n + i.base64.length, 0), claudeText?.type === "text" ? claudeText.text.length : 0);
   logUsage(`menu obrazów=${images.length} stop=${response.stop_reason}`, model, usage);
 
   if (response.stop_reason === "max_tokens") {

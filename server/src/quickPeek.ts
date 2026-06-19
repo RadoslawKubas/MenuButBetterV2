@@ -4,9 +4,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
-import { track, recordUsage } from "./apiLog.ts";
+import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
-import { usesOpenAiApi } from "./models.ts";
+import { usesOpenAiApi, apiTag } from "./models.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 
@@ -57,6 +57,7 @@ export async function quickPeek(
   const media = (["image/jpeg", "image/png", "image/webp"].includes(image.mediaType)
     ? image.mediaType
     : "image/jpeg") as ImgMedia;
+  recordBytes(apiTag(model), image.base64.length, 0); // relay zdjęcia podglądu do AI
   try {
     if (usesOpenAiApi(model)) {
       const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [

@@ -57,6 +57,12 @@ function fmtTok(n: number): string {
 function fmtUsd(n: number): string {
   return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
 }
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
 
 // Ładna etykieta modelu (z rejestru) — fallback do surowego id.
 function modelLabel(id: string | null): string {
@@ -314,6 +320,17 @@ export function DiagnosticsView() {
         </View>
       ) : null}
 
+      {/* Ruch danych tej sesji — egress (wysłane) jest płatny na Railway. */}
+      {providers.some((p) => p.bytesSent > 0 || p.bytesRecv > 0) ? (
+        <View style={styles.costBox}>
+          <Text style={styles.costBig}>📡 Ruch danych (sesja)</Text>
+          <Text style={styles.costSub}>
+            ⬆️ wysłane {fmtBytes(providers.reduce((n, p) => n + p.bytesSent, 0))} ·{" "}
+            ⬇️ odebrane {fmtBytes(providers.reduce((n, p) => n + p.bytesRecv, 0))}
+          </Text>
+        </View>
+      ) : null}
+
       {providers.map((p) => {
         const isOpen = open === p.provider;
         const last = p.entries[0];
@@ -353,6 +370,11 @@ export function DiagnosticsView() {
               {p.costUsd > 0 || p.inputTokens > 0 ? (
                 <Text style={styles.tokens}>
                   🔢 {fmtTok(p.inputTokens)} in · {fmtTok(p.outputTokens)} out · 💰 {fmtUsd(p.costUsd)}
+                </Text>
+              ) : null}
+              {p.bytesSent > 0 || p.bytesRecv > 0 ? (
+                <Text style={styles.tokens}>
+                  📡 ⬆️ {fmtBytes(p.bytesSent)} · ⬇️ {fmtBytes(p.bytesRecv)}
                 </Text>
               ) : null}
               {p.lastError ? (

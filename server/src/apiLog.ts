@@ -15,6 +15,7 @@ export type Provider =
   | "serpapi"
   | "wikimedia"
   | "openverse"
+  | "app" // ruch apka ↔ serwer (upload zdjęć + odpowiedzi) — mierzony w middleware
   | "other";
 
 export interface ApiLogEntry {
@@ -33,15 +34,34 @@ interface State {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  // Przesłane dane (bajty): wysłane przez serwer (egress — płatne na Railway) i odebrane (ingress).
+  bytesSent: number;
+  bytesRecv: number;
 }
 
 function getState(provider: Provider): State {
   let s = store.get(provider);
   if (!s) {
-    s = { entries: [], total: 0, errors: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    s = { entries: [], total: 0, errors: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 };
     store.set(provider, s);
   }
   return s;
+}
+
+/** Dolicza przesłane bajty (sent = wysłane przez serwer, recv = odebrane) do providera. */
+export function recordBytes(provider: Provider, sent: number, recv: number): void {
+  const s = getState(provider);
+  s.bytesSent += Math.max(0, Math.round(sent));
+  s.bytesRecv += Math.max(0, Math.round(recv));
+}
+
+/** Rozmiar w bajtach ciała żądania (string/Buffer/typed array) — do liczenia egressu. */
+export function bodyBytes(body: unknown): number {
+  if (!body) return 0;
+  if (typeof body === "string") return Buffer.byteLength(body);
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return 0;
 }
 
 const MAX = 40; // ostatnich wpisów na providera
@@ -127,6 +147,8 @@ export async function trackedFetch(input: string | URL, init?: RequestInit, op?:
       detail = `HTTP ${res.status}${body ? " " + body.replace(/\s+/g, " ").slice(0, 180) : ""}`;
     }
     record(d.provider, op ?? d.op, res.ok, Date.now() - t0, detail);
+    // Ruch: wysłane = ciało żądania; odebrane = z nagłówka Content-Length (best-effort, gdy jest).
+    recordBytes(d.provider, bodyBytes(init?.body), Number(res.headers.get("content-length")) || 0);
     return res;
   } catch (e) {
     const msg = ctrl.signal.aborted ? `timeout ${FETCH_TIMEOUT_MS}ms` : (e as Error)?.message ?? String(e);
@@ -147,6 +169,8 @@ export interface ProviderReport {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  bytesSent: number;
+  bytesRecv: number;
   entries: ApiLogEntry[];
 }
 
@@ -163,6 +187,8 @@ export function snapshot(): ProviderReport[] {
       inputTokens: s.inputTokens,
       outputTokens: s.outputTokens,
       costUsd: s.costUsd,
+      bytesSent: s.bytesSent,
+      bytesRecv: s.bytesRecv,
       entries: s.entries,
     }))
     .sort((a, b) => b.total - a.total);

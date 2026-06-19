@@ -355,15 +355,23 @@ export interface DiagProvider {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  bytesSent: number; // wysłane przez serwer (egress — płatne na Railway)
+  bytesRecv: number; // odebrane przez serwer (ingress)
   entries: DiagEntry[];
 }
 
+export interface DiagTotals {
+  bytesSent: number;
+  bytesRecv: number;
+  costUsd: number;
+}
+
 /** Pobiera log/statystyki zewnętrznych API z serwera (ekran Diagnostyka). */
-export async function fetchDiagnostics(): Promise<{ now: number; providers: DiagProvider[] }> {
+export async function fetchDiagnostics(): Promise<{ now: number; providers: DiagProvider[]; totals?: DiagTotals }> {
   const res = await loggedFetch("diagnostics", `${API_BASE}/diagnostics`, { headers: jsonHeaders() });
-  const json = (await res.json()) as { now?: number; providers?: DiagProvider[]; error?: string };
+  const json = (await res.json()) as { now?: number; providers?: DiagProvider[]; totals?: DiagTotals; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
-  return { now: json.now ?? Date.now(), providers: json.providers ?? [] };
+  return { now: json.now ?? Date.now(), providers: json.providers ?? [], totals: json.totals };
 }
 
 // --- Trwałe statystyki (Postgres) — przeżywają redeploy ---

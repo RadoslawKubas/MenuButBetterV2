@@ -13,7 +13,7 @@ import { findTripAdvisor } from "./tripadvisor.ts";
 import { runDishPhotos } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
-import { snapshot, type Provider } from "./apiLog.ts";
+import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
@@ -44,6 +44,16 @@ if (APP_TOKEN) {
     return next();
   });
 }
+
+// Ruch apka ↔ serwer: odebrane = upload od apki (Content-Length żądania, głównie zdjęcia),
+// wysłane = odpowiedź do apki (Content-Length, gdy nie strumień). Egress liczy się na Railway.
+app.use("/*", async (c, next) => {
+  if (c.req.path === "/health") return next();
+  const reqLen = Number(c.req.header("content-length")) || 0;
+  await next();
+  const resLen = Number(c.res.headers.get("content-length")) || 0;
+  recordBytes("app", resLen, reqLen);
+});
 
 app.get("/health", (c) => c.json({ ok: true, service: "menubutbetter" }));
 
@@ -429,6 +439,7 @@ app.get("/diagnostics", (c) => {
       paid: true,
       configured: !!(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX),
     },
+    { provider: "app", label: "Apka ↔ serwer", paid: false, configured: true },
   ];
   const providers = KNOWN.map((k) => {
     const r = reps.get(k.provider);
@@ -442,6 +453,8 @@ app.get("/diagnostics", (c) => {
       inputTokens: r?.inputTokens ?? 0,
       outputTokens: r?.outputTokens ?? 0,
       costUsd: r?.costUsd ?? 0,
+      bytesSent: r?.bytesSent ?? 0,
+      bytesRecv: r?.bytesRecv ?? 0,
       entries: r?.entries ?? [],
     };
   });
@@ -449,7 +462,12 @@ app.get("/diagnostics", (c) => {
   if (other && other.total > 0) {
     providers.push({ label: "Inne", paid: false, configured: true, ...other });
   }
-  return c.json({ now: Date.now(), providers });
+  // Sumy zbiorcze — łączny ruch (egress płatny na Railway) i koszt AI.
+  const totals = providers.reduce(
+    (a, p) => ({ bytesSent: a.bytesSent + p.bytesSent, bytesRecv: a.bytesRecv + p.bytesRecv, costUsd: a.costUsd + p.costUsd }),
+    { bytesSent: 0, bytesRecv: 0, costUsd: 0 },
+  );
+  return c.json({ now: Date.now(), providers, totals });
 });
 
 // Trwałe statystyki (Postgres) — agregaty przeżywające redeploy. enabled:false bez DB.

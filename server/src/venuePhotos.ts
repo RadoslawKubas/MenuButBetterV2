@@ -7,9 +7,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { fetchPlacePhoto } from "./places.ts";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
-import { track, recordUsage } from "./apiLog.ts";
+import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
-import { usesOpenAiApi } from "./models.ts";
+import { usesOpenAiApi, apiTag } from "./models.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model dopasowania (gdy nie podano innego)
@@ -172,6 +172,8 @@ export async function matchVenuePhotos(
 
   const model = input.model || MODEL;
   const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
+  // Relay całej puli zdjęć lokalu do AI (sent ≈ base64). Pobranie z Google idzie przez trackedFetch.
+  recordBytes(apiTag(model), items.reduce((n, it) => n + it.img.data.length, 0), 0);
   const instruction = venueInstruction(dishes, input.cuisine, input.certain !== false);
   const system = VENUE_SYSTEM;
 

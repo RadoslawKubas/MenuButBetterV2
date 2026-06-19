@@ -5,9 +5,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
-import { track, recordUsage } from "./apiLog.ts";
+import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
-import { usesOpenAiApi } from "./models.ts";
+import { usesOpenAiApi, apiTag } from "./models.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model weryfikacji (gdy nie podano innego)
@@ -127,6 +127,11 @@ export async function scoreDishPhotos(
   const imgs = await Promise.all(urls.map((u) => fetchImageB64(u)));
   const valid = urls.map((_, i) => i).filter((i) => imgs[i]);
   if (valid.length === 0) return { scores, textOverlay, usage: ZERO_USAGE };
+
+  // Ruch: pobranie zdjęć z sieci (recv) + relay tych zdjęć do AI (sent ≈ base64).
+  const sentBytes = valid.reduce((n, i) => n + imgs[i]!.data.length, 0);
+  recordBytes("other", 0, Math.round(sentBytes * 0.75)); // pobrane z webu (decoded ≈ 3/4 base64)
+  recordBytes(apiTag(model), sentBytes, 0); // relay do modelu wizji
 
   const instruction = verifyInstruction(dish, opts.cuisine);
   const system = VERIFY_SYSTEM;
