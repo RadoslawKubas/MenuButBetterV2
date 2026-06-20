@@ -19,6 +19,38 @@ export const DISH_CATEGORIES = [
 
 export type DishCategory = (typeof DISH_CATEGORIES)[number];
 
+// Adnotacje menu, które NIE są daniami (czas oczekiwania, dopłaty, VAT, napiwek, godziny itp.).
+export const NOTE_KINDS = ["wait", "fee", "tax", "tip", "hours", "info"] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
+export interface StructNote {
+  /** Treść adnotacji w oryginale (jak na menu). */
+  text: string;
+  /** Zakres: całe menu albo konkretna sekcja. */
+  scope: "menu" | "section";
+  /** Indeks sekcji (gdy scope="section"), inaczej null. */
+  section_index: number | null;
+  /** Typ do prezentacji: wait/fee/tax/tip/hours/info. */
+  kind: NoteKind;
+}
+export interface MenuNote extends StructNote {
+  /** Treść po przetłumaczeniu (uzupełniana w enrich). */
+  text_translated: string;
+}
+
+// Wspólny fragment schematu adnotacji (dla STRUCTURE i MENU single-pass).
+const NOTE_SCHEMA_ITEM = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    text: { type: "string", description: "Treść adnotacji DOKŁADNIE jak na menu (oryginał)." },
+    scope: { type: "string", enum: ["menu", "section"], description: "'menu' = dotyczy całego menu; 'section' = dotyczy KONKRETNEJ sekcji." },
+    section_index: { type: ["integer", "null"], description: "Indeks sekcji (kolejność w 'sections', licząc od 0), gdy scope='section'. Inaczej null." },
+    kind: { type: "string", enum: [...NOTE_KINDS], description: "Typ: wait=czas oczekiwania, fee=dopłata/serwis/cover/taras, tax=VAT/podatek, tip=napiwek, hours=godziny, info=inne (np. ceny zawierają/nie zawierają, minimalne zamówienie, alergeny)." },
+  },
+  required: ["text", "scope", "section_index", "kind"],
+} as const;
+const NOTES_SCHEMA_DESC = "Adnotacje menu, które NIE są daniami: czas oczekiwania, dopłaty (taras/serwis/cover), VAT/podatek, napiwek, godziny otwarcia, minimalne zamówienie, 'ceny zawierają/nie zawierają', ogólne uwagi o alergenach. NIE umieszczaj ich jako pozycje (dania) — tu jest ich miejsce. Gdy brak — pusta tablica.";
+
 export interface MenuItem {
   original: string;
   translated: string;
@@ -50,6 +82,8 @@ export interface Menu {
   restaurant_language: string;
   cuisine: string;
   sections: MenuSection[];
+  /** Adnotacje menu (czas oczekiwania, dopłaty, VAT…) — pokazywane osobno, nie jako dania. */
+  notes?: MenuNote[];
 }
 
 // ===== DWUPRZEBIEGOWY SKAN ==================================================================
@@ -72,6 +106,7 @@ export interface MenuStructure {
   restaurant_language: string;
   cuisine: string;
   sections: StructSection[];
+  notes: StructNote[];
 }
 
 export const STRUCTURE_SCHEMA = {
@@ -108,8 +143,9 @@ export const STRUCTURE_SCHEMA = {
         required: ["name", "items"],
       },
     },
+    notes: { type: "array", description: NOTES_SCHEMA_DESC, items: NOTE_SCHEMA_ITEM },
   },
-  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections"],
+  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections", "notes"],
 } as const;
 
 // Przebieg 2 (TEKST, wsadowo po nazwach): wzbogaca pozycje o pola, które NIE wymagają obrazu —
@@ -155,8 +191,13 @@ export const ENRICH_SCHEMA = {
         required: ["index", "translated", "photo_query", "photo_query_local", "branded", "description", "ingredients", "allergens", "category", "dietary", "spice_level"],
       },
     },
+    notes: {
+      type: "array",
+      description: "Tłumaczenia adnotacji menu (index = pozycja w tablicy notes z wejścia).",
+      items: { type: "object", additionalProperties: false, properties: { index: { type: "integer" }, text_translated: { type: "string" } }, required: ["index", "text_translated"] },
+    },
   },
-  required: ["sections", "items"],
+  required: ["sections", "items", "notes"],
 } as const;
 
 export const MENU_SCHEMA = {
@@ -267,6 +308,22 @@ export const MENU_SCHEMA = {
         required: ["name", "name_translated", "items"],
       },
     },
+    notes: {
+      type: "array",
+      description: NOTES_SCHEMA_DESC,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: { type: "string", description: "Treść adnotacji w oryginale." },
+          text_translated: { type: "string", description: "Treść adnotacji po przetłumaczeniu." },
+          scope: { type: "string", enum: ["menu", "section"] },
+          section_index: { type: ["integer", "null"], description: "Indeks sekcji (od 0) gdy scope='section', inaczej null." },
+          kind: { type: "string", enum: [...NOTE_KINDS] },
+        },
+        required: ["text", "text_translated", "scope", "section_index", "kind"],
+      },
+    },
   },
   required: [
     "restaurant_name",
@@ -274,5 +331,6 @@ export const MENU_SCHEMA = {
     "restaurant_language",
     "cuisine",
     "sections",
+    "notes",
   ],
 } as const;

@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import type { Menu, MenuItem } from "./types";
+import type { Menu, MenuItem, MenuNote } from "./types";
 import { colors } from "./theme";
 import { Lightbox, type LightboxPhoto, type LightboxState } from "./Lightbox";
 import { sourceMeta } from "./photoSource";
@@ -215,6 +215,31 @@ function InfoFooter({
   );
 }
 
+const NOTE_ICON: Record<string, string> = { wait: "⏱", fee: "➕", tax: "🧾", tip: "💶", hours: "🕒", info: "ℹ️" };
+
+/** Adnotacje menu (czas oczekiwania, dopłaty, VAT…) — osobny blok, nie dania. */
+function NotesBlock({ notes, title }: { notes: MenuNote[]; title?: string }) {
+  if (!notes.length) return null;
+  return (
+    <View style={styles.notesBlock}>
+      {title ? <Text style={styles.notesTitle}>{title}</Text> : null}
+      {notes.map((n, i) => {
+        const tr = (n.text_translated || n.text).trim();
+        const showOrig = tr && tr !== n.text.trim();
+        return (
+          <View key={i} style={styles.noteRow}>
+            <Text style={styles.noteIcon}>{NOTE_ICON[n.kind] || "ℹ️"}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.noteText}>{tr}</Text>
+              {showOrig ? <Text style={styles.noteOriginal}>{n.text}</Text> : null}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 export function MenuView({
   menu,
   infoLoading,
@@ -267,8 +292,14 @@ export function MenuView({
         </View>
       ) : null}
 
+      <NotesBlock
+        title="ℹ️ Dobrze wiedzieć"
+        notes={(menu.notes ?? []).filter((n) => n.scope === "menu" || n.section_index == null)}
+      />
+
       {menu.sections.map((section, si) => {
         const isCollapsed = collapsed.has(si);
+        const secNotes = (menu.notes ?? []).filter((n) => n.scope === "section" && n.section_index === si);
         return (
         <View key={si} style={styles.section}>
           <Pressable onPress={() => toggleSection(si)} style={styles.sectionHeader}>
@@ -281,6 +312,7 @@ export function MenuView({
               <Text style={styles.sectionOriginal}>{section.name}</Text>
             </View>
           </Pressable>
+          {!isCollapsed ? <NotesBlock notes={secNotes} /> : null}
           {!isCollapsed && section.items.map((item, ii) => {
             const key = `${si}-${ii}`;
             return (
@@ -376,6 +408,12 @@ const styles = StyleSheet.create({
   restaurantHeader: { marginBottom: 20 },
   restaurantName: { fontSize: 26, fontWeight: "800", color: colors.accent },
   restaurantAddress: { fontSize: 14, color: colors.muted, marginTop: 2 },
+  notesBlock: { backgroundColor: colors.accent + "14", borderRadius: 12, borderWidth: 1, borderColor: colors.accent + "33", padding: 12, marginBottom: 18 },
+  notesTitle: { fontSize: 13, fontWeight: "800", color: colors.accent, marginBottom: 6 },
+  noteRow: { flexDirection: "row", gap: 8, alignItems: "flex-start", marginTop: 4 },
+  noteIcon: { fontSize: 15, marginTop: 1 },
+  noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
+  noteOriginal: { fontSize: 12, color: colors.muted, fontStyle: "italic", marginTop: 1 },
   section: { marginBottom: 24 },
   // Nagłówek sekcji — klikalny (zwija/rozwija grupę).
   sectionHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 6 },

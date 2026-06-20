@@ -188,6 +188,11 @@ export const STRUCTURE_SYSTEM = [
   "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz, jeśli widać na okładce/",
   "szyldzie/stopce — `restaurant_name` i `restaurant_address` (inaczej null). Zdjęcie lokalu z",
   "zewnątrz służy tylko do nazwy/adresu — nie twórz z niego pozycji menu.",
+  "WAŻNE: teksty, które NIE są daniami (czas oczekiwania, dopłaty: taras/serwis/cover, VAT/podatek,",
+  "napiwek, godziny otwarcia, minimalne zamówienie, 'ceny zawierają/nie zawierają', ogólne uwagi o",
+  "alergenach) NIE mogą trafić jako pozycje (dania). Wydziel je do tablicy `notes`: `text` (oryginał),",
+  "`scope` ('menu' = całe menu, 'section' = konkretna sekcja), `section_index` (indeks sekcji od 0 gdy",
+  "scope='section', inaczej null) i `kind` (wait/fee/tax/tip/hours/info). Gdy brak adnotacji — `notes` puste.",
   "Nie wymyślaj pozycji, których nie ma na zdjęciach.",
 ].join(" ");
 
@@ -209,6 +214,8 @@ export const ENRICH_SYSTEM = [
   "zwykle = original; gdy się nie da — powtórz photo_query.",
   "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda),",
   "false dla potraw z kuchni.",
+  "Gdy dostaniesz ADNOTACJE menu (sekcja 'ADNOTACJE'), przetłumacz każdą na język docelowy i zwróć w",
+  "`notes` po jej `index` (zachowaj sens; krótko).",
 ].join(" ");
 
 // Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
@@ -520,9 +527,9 @@ function emitEnrichItems(text: string, state: { emitted: number }, items: { gi: 
   }
 }
 
-interface EnrichResult { sections: { index: number; name_translated: string }[]; items: ItemEnrich[]; usage: Usage }
+interface EnrichResult { sections: { index: number; name_translated: string }[]; items: ItemEnrich[]; notes: { index: number; text_translated: string }[]; usage: Usage }
 
-/** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI) dla podanych sekcji i pozycji. */
+/** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI) dla podanych sekcji, pozycji i adnotacji. */
 async function enrichCall(
   model: ModelId,
   opts: ExtractOptions,
@@ -530,6 +537,7 @@ async function enrichCall(
   country: string | undefined,
   sects: { idx: number; name: string }[],
   items: { gi: number; original: string; menu_description: string }[],
+  notes: { idx: number; text: string }[] = [],
 ): Promise<EnrichResult> {
   const ctx =
     `Kuchnia: ${cuisine}.\n` +
@@ -539,7 +547,8 @@ async function enrichCall(
     `Język docelowy: ${opts.targetLang}.\n\n`;
   const sectsTxt = sects.length ? "SEKCJE (index → nazwa) do przetłumaczenia:\n" + sects.map((s) => `[${s.idx}] ${s.name}`).join("\n") + "\n\n" : "";
   const itemsTxt = items.length ? "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n" + items.map((it) => `[${it.gi}] ${it.original}${it.menu_description ? ` | ${it.menu_description}` : ""}`).join("\n") : "";
-  const userText = ctx + sectsTxt + itemsTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji i pozycji), używając tych samych numerów index.";
+  const notesTxt = notes.length ? "\n\nADNOTACJE (index → tekst) do przetłumaczenia:\n" + notes.map((n) => `[${n.idx}] ${n.text}`).join("\n") : "";
+  const userText = ctx + sectsTxt + itemsTxt + notesTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji, pozycji i adnotacji), używając tych samych numerów index.";
 
   if (usesOpenAiApi(model)) {
     const openai = getClientForModel(model);
@@ -560,7 +569,7 @@ async function enrichCall(
     logUsage(`enrich pozycji=${items.length} (${tag})`, model, usage);
     const txt = resp.choices[0]?.message?.content;
     const parsed = txt ? (JSON.parse(txt) as Partial<EnrichResult>) : {};
-    return { sections: parsed.sections ?? [], items: parsed.items ?? [], usage };
+    return { sections: parsed.sections ?? [], items: parsed.items ?? [], notes: parsed.notes ?? [], usage };
   }
 
   // Streaming — duże menu daje duże wyjście; non-stream przy wysokim max_tokens odpala guard SDK
@@ -582,7 +591,7 @@ async function enrichCall(
   logUsage(`enrich pozycji=${items.length}`, model, usage);
   const t = resp.content.find((b) => b.type === "text");
   const parsed = t && t.type === "text" ? (JSON.parse(t.text) as Partial<EnrichResult>) : {};
-  return { sections: parsed.sections ?? [], items: parsed.items ?? [], usage };
+  return { sections: parsed.sections ?? [], items: parsed.items ?? [], notes: parsed.notes ?? [], usage };
 }
 
 /**
@@ -598,13 +607,17 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
   const flat: { original: string; menu_description: string }[] = [];
   for (const s of structure.sections) for (const it of s.items) flat.push({ original: it.original, menu_description: it.menu_description });
 
+  const notes = structure.notes ?? [];
   const itemKey = (original: string, md: string) => cacheKey("item-enrich", original, md, cuisine, country, targetLang, model);
   const sectKey = (name: string) => cacheKey("item-enrich", "§sect", name, targetLang, model);
+  const noteKey = (text: string) => cacheKey("item-enrich", "§note", text, targetLang, model);
 
   const enrichByGi = new Array<ItemEnrich | null>(flat.length).fill(null);
   const sectTrans = new Array<string | null>(structure.sections.length).fill(null);
+  const noteTrans = new Array<string | null>(notes.length).fill(null);
   const needItems: { gi: number; original: string; menu_description: string }[] = [];
   const needSects: { idx: number; name: string }[] = [];
+  const needNotes: { idx: number; text: string }[] = [];
 
   if (!opts.noCache) {
     await Promise.all(flat.map(async (f, gi) => {
@@ -615,9 +628,14 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
       const hit = await cacheGet<string>("item-enrich", sectKey(s.name), { op: "enrich" });
       if (hit != null) sectTrans[idx] = hit; else needSects.push({ idx, name: s.name });
     }));
+    await Promise.all(notes.map(async (n, idx) => {
+      const hit = await cacheGet<string>("item-enrich", noteKey(n.text), { op: "enrich" });
+      if (hit != null) noteTrans[idx] = hit; else needNotes.push({ idx, text: n.text });
+    }));
   } else {
     flat.forEach((f, gi) => needItems.push({ gi, original: f.original, menu_description: f.menu_description }));
     structure.sections.forEach((s, idx) => needSects.push({ idx, name: s.name }));
+    notes.forEach((n, idx) => needNotes.push({ idx, text: n.text }));
   }
 
   // Pozycje z CACHE → wyemituj od razu (apka wypełnia karty), reszta dojdzie ze strumienia enrich.
@@ -629,8 +647,8 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
   }
 
   let usage = ZERO_USAGE;
-  if (needItems.length || needSects.length) {
-    const r = await enrichCall(model, opts, cuisine, country, needSects, needItems);
+  if (needItems.length || needSects.length || needNotes.length) {
+    const r = await enrichCall(model, opts, cuisine, country, needSects, needItems, needNotes);
     usage = r.usage;
     for (const s of r.sections) {
       if (s.index >= 0 && s.index < sectTrans.length) {
@@ -642,6 +660,12 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
       if (it.index >= 0 && it.index < flat.length) {
         enrichByGi[it.index] = it;
         if (!opts.noCache) void cacheSet("item-enrich", itemKey(flat[it.index]!.original, flat[it.index]!.menu_description), it, { lang: targetLang });
+      }
+    }
+    for (const n of r.notes) {
+      if (n.index >= 0 && n.index < noteTrans.length) {
+        noteTrans[n.index] = n.text_translated;
+        if (!opts.noCache) void cacheSet("item-enrich", noteKey(notes[n.index]!.text), n.text_translated, { lang: targetLang });
       }
     }
   }
@@ -657,6 +681,7 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
       name_translated: sectTrans[si] ?? s.name,
       items: s.items.map((it) => assembleItem(it, enrichByGi[gi++] ?? null)),
     })),
+    notes: notes.map((n, i) => ({ text: n.text, text_translated: noteTrans[i] ?? n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
   };
   return { menu, usage };
 }

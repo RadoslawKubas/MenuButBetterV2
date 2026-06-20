@@ -200,7 +200,7 @@ interface LabScan {
   scanModel: string;
   at: number;
   peek: unknown;
-  menu: { restaurantName: string | null; cuisine: string; itemCount: number };
+  menu: { restaurantName: string | null; cuisine: string; itemCount: number; notes?: unknown[] };
   items: unknown[];
   venue: unknown;
 }
@@ -892,7 +892,7 @@ app.post("/api/sim-scan", async (c) => {
     scanModel: model,
     at: Date.now(),
     peek,
-    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, itemCount: items.length },
+    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, itemCount: items.length, notes: menu.notes ?? [] },
     items,
     venue,
   };

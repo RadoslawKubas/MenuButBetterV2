@@ -90,12 +90,29 @@ export interface MenuSection {
   items: MenuItem[];
 }
 
+export const NOTE_KINDS = ["wait", "fee", "tax", "tip", "hours", "info"] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
+export interface MenuNote {
+  /** Treść adnotacji w oryginale. */
+  text: string;
+  /** Treść po przetłumaczeniu. */
+  text_translated: string;
+  /** Zakres: całe menu albo konkretna sekcja. */
+  scope: "menu" | "section";
+  /** Indeks sekcji (gdy scope="section"), inaczej null. */
+  section_index: number | null;
+  /** Typ do prezentacji (ikona). */
+  kind: NoteKind;
+}
+
 export interface Menu {
   restaurant_name: string | null;
   restaurant_address: string | null;
   restaurant_language: string;
   cuisine?: string;
   sections: MenuSection[];
+  /** Adnotacje menu (czas oczekiwania, dopłaty, VAT…) — pokazywane osobno, nie jako dania. */
+  notes?: MenuNote[];
 }
 
 export interface GeoPoint {

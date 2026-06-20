@@ -677,10 +677,12 @@ async function simScan(force){
       withPeek:SIM_PEEK, withVenue:SIM_VENUE, useCache:SIM_CACHE,
     });
     if(r.error) throw new Error(r.error);
-    SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items, peek:r.peek };
+    SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items, peek:r.peek, notes:r.menu.notes||[] };
     const pk = r.peek ? ` · 👁 peek(${r.peek.model}): ${r.peek.isMenu?'menu✓':'nie‑menu'} · ${r.peek.cuisine||'—'}` : '';
     const tag = r.cached ? `💾 zapisany skan (${esc(r.scanModel||'?')})` : `✓ świeży skan zapisany (${esc(r.scanModel||'?')}) · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms`;
-    document.getElementById('simInfo').innerHTML=`${tag} · ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji<span class="mut small">${esc(pk)}</span>`;
+    const NOTE_ICO={wait:'⏱',fee:'➕',tax:'🧾',tip:'💶',hours:'🕒',info:'ℹ️'};
+    const notesHtml = SIM.notes.length ? `<div class="step" style="margin-top:6px"><div class="mut small" style="font-weight:700">ℹ️ Adnotacje (${SIM.notes.length}) — wydzielone, NIE dania:</div>${SIM.notes.map(n=>`<div class="mut small">${NOTE_ICO[n.kind]||'ℹ️'} ${esc(n.text_translated||n.text)} <span style="opacity:.6">[${esc(n.scope)}${n.section_index!=null?' §'+n.section_index:''}]</span></div>`).join('')}</div>` : '';
+    document.getElementById('simInfo').innerHTML=`${tag} · ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji<span class="mut small">${esc(pk)}</span>`+notesHtml;
     renderSimVenue(); renderSimItems();
     if(!r.cached) loadState(); // odśwież wskaźnik „zapisany skan" na liście
   }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
