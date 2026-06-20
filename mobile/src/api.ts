@@ -4,6 +4,7 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Device from "expo-device";
+import * as Application from "expo-application";
 import * as appLog from "./appLog";
 import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type PhotoDebug, type RestaurantInfo, type Usage } from "./types";
 
@@ -119,7 +120,10 @@ async function loggedFetch(label: string, input: string, init?: RequestInit): Pr
   }
 }
 
-const APP_VERSION = `${Constants.expoConfig?.version ?? "?"} (build ${Constants.nativeBuildVersion ?? "?"})`;
+// Wersja + numer buildu. Build jest remote w EAS (autoIncrement) → NIE ma go w app.json, a
+// Constants.nativeBuildVersion bywa puste. expo-application czyta natywny CFBundleVersion/versionCode
+// z gotowego buildu w runtime (niezawodne na TestFlight). Fallbacki na wypadek braku.
+const APP_VERSION = `${Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? "?"} (build ${Application.nativeBuildVersion ?? Constants.nativeBuildVersion ?? "?"})`;
 const ERR_QUEUE_KEY = "err-queue";
 
 type ErrPayload = { message: string; stack?: string; label?: string; context?: unknown; appVersion: string; platform: string; at: number };
