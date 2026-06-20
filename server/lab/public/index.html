@@ -1076,13 +1076,14 @@ function sampleCard(c, archived){
       <div style="font-weight:700">${archived?'🗄 ':''}${isNew?'<span class="badge pass" style="margin-right:4px">NEW</span>':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
       <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
       ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
-      <div class="mut small">wynik: ${esc(res)}</div>
+      <div class="mut small" style="cursor:pointer" title="kliknij, by poprawić/usunąć wynik" onclick="editCaptureResult('${c.id}')">wynik: ${esc(res)} ✏️</div>
       ${c.groundTruth
         ? `<div class="small" style="color:var(--ok); cursor:pointer" title="otwórz w Mapach Google (potwierdź lokal)" onclick="openGtMaps('${c.id}')">✓ lokal: ${esc(c.groundTruth.name)}${c.groundTruth.address?` · ${esc(c.groundTruth.address)}`:''} 🗺</div>`
         : `<div class="mut small" style="opacity:.7">✗ brak przypisanego lokalu</div>`}
       ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
       <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
         <button onclick="editSampleName('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ nazwa</button>
+        <button onclick="editCaptureResult('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ wynik</button>
         <button onclick="openAnnotate('${c.id}')" style="padding:3px 8px; font-size:12px">📍 ${c.groundTruth?'zmień lokal':'przypisz lokal'}</button>
         ${captureHasGeo(c)?`<button onclick="openSampleMap('${c.id}')" style="padding:3px 8px; font-size:12px">🗺 mapa</button>`:''}
         ${archived
@@ -1110,6 +1111,17 @@ async function editSampleName(id){
   if(name===null) return;
   await api('/api/capture-name',{captureId:id, name});
   await loadState(); renderLocalSamples();
+}
+async function editCaptureResult(id){
+  const c=(STATE?.captures||[]).find(x=>x.id===id);
+  const cur=(c&&c.result&&c.result.restaurantName)||'';
+  const gt=c&&c.groundTruth&&c.groundTruth.name;
+  let msg='Nazwa lokalu w WYNIKU skanu (puste = USUŃ wynik):';
+  if(gt) msg+='\nZatwierdzony lokal: '+gt+' (zostaw, by ustawić z niego).';
+  const name=prompt(msg, gt||cur); // domyślnie podpowiada zatwierdzony lokal
+  if(name===null) return;
+  await api('/api/capture-result',{captureId:id, restaurantName:name.trim()||null, clear:!name.trim()});
+  await loadState();
 }
 /* ---- Błędy z apki — filtr buildu (domyślnie najnowszy) + grupy per instancja + zamykanie bugów ---- */
 let ERR_RAW=[], ERR_GROUPS=[], ERR_CLOSED=new Set(), ERR_BUILD='', ERR_SHOW_CLOSED=false;

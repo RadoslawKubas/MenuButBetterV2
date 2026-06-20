@@ -824,6 +824,19 @@ app.post("/api/capture-name", async (c) => {
   return c.json({ ok: true, name: cap.name ?? null });
 });
 
+// Popraw/usuń WYNIK skanu zapisany przy samplu (bywa zły lokal, np. z innego skanu). Puste/clear = usuń wynik.
+app.post("/api/capture-result", async (c) => {
+  const { captureId, restaurantName, clear } = await c.req.json<{ captureId: string; restaurantName?: string | null; clear?: boolean }>();
+  const all = loadMeta();
+  const cap = all.find((x) => x.id === captureId);
+  if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  const name = (restaurantName ?? "").trim();
+  if (clear || !name) cap.result = null;
+  else cap.result = { ...(cap.result ?? { restaurantName: null }), restaurantName: name };
+  saveMeta(all);
+  return c.json({ ok: true, result: cap.result ?? null });
+});
+
 // --- Symulacja aplikacji: TEN SAM kod co w apce (skan → lokal → zdjęcia per pozycja) ------
 // Cel: wziąć sampla, odczytać menu (extractMenu) i dla wybranej pozycji zobaczyć KROK PO KROKU,
 // co zwraca tor zdjęć (runDishPhotos: tier 1 strona lokalu/portale → vision → tier 2 web → tier 3
