@@ -5,6 +5,7 @@
 // różne modele" (lista przebiegów z modelem/kosztem, każdy do otwarcia w historii).
 import { useEffect, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Sharing from "expo-sharing";
 import {
   listCaptures,
@@ -49,6 +50,13 @@ function fmtBytes(n: number): string {
   return `${n} B`;
 }
 
+// Lekki podpis TREŚCI uploadu — zmienia się, gdy zmieni się coś, co poszłoby w paczce na serwer
+// (nowy skan/wynik, nazwa, hint, lokalizacja, liczba przebiegów). Do decyzji „czy jest co aktualizować".
+const UPLOADED_SIGS_KEY = "mbb.uploadedSigs.v1";
+function contentSig(c: ScanCapture): string {
+  return `${c.scanId ?? ""}|${c.name ?? ""}|${c.restaurantHint ?? ""}|${c.locationHint ?? ""}|${c.runs?.length ?? 0}`;
+}
+
 function sourceLabel(c: ScanCapture): string {
   if (!c.location) return "bez pozycji";
   if (c.locationSource === "exif") return "EXIF zdjęcia";
@@ -90,6 +98,8 @@ export function CapturesView({
   const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
   const [uploading, setUploading] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  // Podpis treści ostatniego uploadu per sampel (sig→contentSig) → „Aktualizuj" tylko gdy się zmieniło.
+  const [uploadedSigs, setUploadedSigs] = useState<Record<string, string>>({});
 
   // Import sampli z serwera (wypchniętych z labu, target='app'): zaciąga, scala (dedup po sig →
   // aktualizacja, nie duplikat), po czym KASUJE je z serwera (znikają z kolejki).
@@ -125,6 +135,7 @@ export function CapturesView({
   }
   useEffect(() => {
     void load();
+    AsyncStorage.getItem(UPLOADED_SIGS_KEY).then((s) => { if (s) setUploadedSigs(JSON.parse(s)); }).catch(() => {});
   }, []);
 
   async function uploadOne(c: ScanCapture) {
@@ -140,6 +151,12 @@ export function CapturesView({
       }
       // Po update sampel jest „świeży" (pending) → status onServer, NIE imported (lab go re-importuje).
       setSampleStatus((prev) => ({ ...prev, [c.sig || c.id]: { onServer: true, imported: false } }));
+      // Zapamiętaj podpis treści, którą właśnie wysłaliśmy → „Aktualizuj" pojawi się dopiero po zmianie.
+      setUploadedSigs((prev) => {
+        const next = { ...prev, [c.sig || c.id]: contentSig(c) };
+        AsyncStorage.setItem(UPLOADED_SIGS_KEY, JSON.stringify(next)).catch(() => {});
+        return next;
+      });
       const title = r.status === "updated" ? "Zaktualizowano" : r.status === "exists" ? "Już na serwerze" : "Wysłano";
       const body = r.status === "updated"
         ? "Zmodyfikowany sampel (nowy wynik) zastąpił poprzedni — zaimportuj ponownie w labie, podmieni wynik."
@@ -286,27 +303,31 @@ export function CapturesView({
 
                 {/* Wysyłka na serwer + znacznik stanu (na serwerze / zaimportowany do labu). */}
                 {(() => {
-                  const st = sampleStatus[c.sig || c.id];
+                  const hash = c.sig || c.id;
+                  const st = sampleStatus[hash];
+                  const onSrv = !!(st?.onServer || st?.imported);
+                  // „Aktualizuj" tylko gdy treść sampla różni się od ostatnio wysłanej (nowy skan/nazwa…).
+                  const changed = uploadedSigs[hash] !== contentSig(c);
                   return (
                     <View style={styles.sampleRow}>
                       {st?.imported ? (
-                        <Text style={[styles.sampleBadge, styles.sampleImported]}>✓ zaimportowany do labu</Text>
+                        <Text style={[styles.sampleBadge, styles.sampleImported]}>✓ zaimportowany do labu{!changed ? " · aktualny" : ""}</Text>
                       ) : st?.onServer ? (
-                        <Text style={[styles.sampleBadge, styles.sampleOnServer]}>☁ na serwerze</Text>
+                        <Text style={[styles.sampleBadge, styles.sampleOnServer]}>☁ na serwerze{!changed ? " · aktualny" : ""}</Text>
                       ) : (
                         <Text style={styles.sampleDim}>nie wysłano</Text>
                       )}
-                      {/* Zawsze można wysłać; gdy już na serwerze/zaimportowany → „Aktualizuj"
-                          (re-skan w apce zapisał nowy wynik → nadpisujemy sampel na serwerze). */}
-                      <Pressable
-                        style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
-                        disabled={uploading === c.id}
-                        onPress={() => void uploadOne(c)}
-                      >
-                        <Text style={styles.sampleBtnText}>
-                          {uploading === c.id ? "wysyłam…" : (st?.onServer || st?.imported ? "☁ Aktualizuj na serwerze" : "☁ Wyślij na serwer")}
-                        </Text>
-                      </Pressable>
+                      {(!onSrv || changed) ? (
+                        <Pressable
+                          style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
+                          disabled={uploading === c.id}
+                          onPress={() => void uploadOne(c)}
+                        >
+                          <Text style={styles.sampleBtnText}>
+                            {uploading === c.id ? "wysyłam…" : (onSrv ? "☁ Aktualizuj na serwerze" : "☁ Wyślij na serwer")}
+                          </Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   );
                 })()}

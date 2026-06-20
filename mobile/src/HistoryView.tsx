@@ -13,8 +13,8 @@ import { colors } from "./theme";
 import { CachedImage } from "./CachedImage";
 import { placePhotoUrl } from "./api";
 
-// Promień grupy „W pobliżu" (m) — sąsiedztwo aktualnej pozycji.
-const NEAR_M = 2000;
+// Promień grupy „W pobliżu" (m) — najbliższe sąsiedztwo (nie cała dzielnica); zapas na niedokładność GPS.
+const NEAR_M = 300;
 
 function modelSummary(scan: SavedScan): string {
   const label = (id?: string) => MODEL_OPTIONS.find((o) => o.id === id)?.label ?? id ?? "—";

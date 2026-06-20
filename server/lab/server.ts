@@ -822,10 +822,21 @@ async function buildCaptureZipBase64(cap: MetaCapture): Promise<{ zipBase64: str
     } catch { /* brak pliku — pomiń */ }
   }
   if (!images.length) return null;
-  const { images: _drop, ...rest } = cap;
-  zip.file("metadata.json", JSON.stringify({ format: "menubutbetter.captures", version: 1, count: 1, captures: [{ ...rest, images }] }));
+  // CZYSTY zestaw do obróbki w apce: tylko zdjęcia + GPS + (opcjonalna) nazwa. BEZ wyników skanu,
+  // labScan, ground-truth, hintów — apka ma to przeskanować od zera.
+  const clean = {
+    id: cap.id,
+    createdAt: cap.createdAt,
+    name: cap.name || undefined,
+    location: cap.location ?? null,
+    locationSource: cap.locationSource ?? null,
+    locationHint: cap.locationHint || undefined,
+    sig: cap.sig,
+    images,
+  };
+  zip.file("metadata.json", JSON.stringify({ format: "menubutbetter.captures", version: 1, count: 1, captures: [clean] }));
   const zipBase64 = await zip.generateAsync({ type: "base64", compression: "STORE" });
-  const meta = { name: cap.name ?? null, images: images.length, restaurantHint: cap.restaurantHint ?? null, locationHint: cap.locationHint ?? null, createdAt: cap.createdAt, fromLab: true };
+  const meta = { name: cap.name ?? null, images: images.length, locationHint: cap.locationHint ?? null, createdAt: cap.createdAt, fromLab: true };
   return { zipBase64, meta };
 }
 
