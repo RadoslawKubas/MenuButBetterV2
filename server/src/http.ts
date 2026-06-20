@@ -635,7 +635,7 @@ app.post("/samples", async (c) => {
   const zip = Buffer.from(b.zipBase64.includes(",") ? b.zipBase64.split(",")[1]! : b.zipBase64, "base64");
   if (zip.length === 0 || zip.length > MAX_SAMPLE_BYTES) return c.json({ error: `Zip pusty lub za duży (limit ${Math.round(MAX_SAMPLE_BYTES / 1e6)} MB).` }, 413);
   try {
-    const r = await saveSample(b.hash, b.meta ?? {}, zip);
+    const r = await saveSample(b.hash, b.meta ?? {}, zip, c.req.header("x-install-id") || undefined);
     return c.json(r);
   } catch (e) {
     console.error("samples upload error:", e);

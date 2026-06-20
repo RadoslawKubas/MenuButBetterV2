@@ -187,6 +187,8 @@ interface MetaCapture {
   locationSource?: string | null;
   /** Sygnatura WEJŚCIA migawki — stała dla tej samej treści, przeżywa ponowne eksporty. */
   sig?: string;
+  /** GUID instancji apki, z której pochodzi migawka (eksport/plik) — do rozpoznania źródła w labie. */
+  installId?: string;
   images: MetaImage[];
   result?: { restaurantName?: string | null; cuisine?: string; models?: Record<string, string>; menu?: unknown } | null;
   /** Zapisany skan z LABU (najlepsza wersja menu + lokal) — by testy zdjęć nie skanowały od nowa. */
@@ -548,6 +550,7 @@ app.get("/api/state", (c) => {
     locationHint: cap.locationHint ?? null,
     location: cap.location ?? null,
     locationSource: cap.locationSource ?? null,
+    installId: cap.installId ?? null,
     exifLocations: cap.images.map((im) => im.exifLocation ?? null),
     images: cap.images.length,
     result: cap.result

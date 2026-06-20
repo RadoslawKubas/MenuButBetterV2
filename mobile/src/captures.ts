@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
 import type { PreparedImage } from "./image";
+import { getInstallId } from "./api";
 import { listScans } from "./storage";
 import type { GeoPoint, LocationSource, ModelId, ModelRole } from "./types";
 
@@ -265,6 +266,8 @@ export async function captureImageBase64(im: CaptureImage): Promise<string | nul
 
 /** Wpis w `metadata.json` archiwum — zdjęcia jako osobne pliki w `images/`. */
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
+  /** GUID instancji apki, z której pochodzi eksport — lab rozpoznaje źródło migawki z pliku. */
+  installId?: string;
   images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
   /** WYNIK skanu (z historii): ustawienia użyte do WYNIKU + przetłumaczone menu + lokal + koszt. */
   result?: {
@@ -324,7 +327,7 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
           menu: scan.menu,
         }
       : undefined;
-    entries.push({ ...meta, images, result });
+    entries.push({ ...meta, images, result, installId: getInstallId() });
   }
 
   zip.file(
@@ -373,7 +376,7 @@ export async function buildCaptureUpload(captureId: string): Promise<{ hash: str
   const result: CaptureExportEntry["result"] = scan
     ? { targetLang: scan.targetLang, models: scan.models, model: scan.model, restaurantName: scan.menu.restaurant_name, cuisine: scan.menu.cuisine, restaurant: scan.restaurant ?? undefined, usage: scan.usage, menu: scan.menu }
     : undefined;
-  const entries: CaptureExportEntry[] = [{ ...metaCap, images, result }];
+  const entries: CaptureExportEntry[] = [{ ...metaCap, images, result, installId: getInstallId() }];
   zip.file("metadata.json", JSON.stringify({ format: "menubutbetter.captures", version: 1, exportedAt: Date.now(), count: 1, captures: entries }, null, 2));
   const zipBase64 = await zip.generateAsync({ type: "base64", compression: "STORE" });
 

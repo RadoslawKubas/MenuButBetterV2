@@ -52,10 +52,12 @@ export async function initSamples(): Promise<void> {
         zip BYTEA,
         path TEXT,
         bytes INTEGER NOT NULL DEFAULT 0,
+        install_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         imported_at TIMESTAMPTZ
       );
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS path TEXT;
+      ALTER TABLE samples ADD COLUMN IF NOT EXISTS install_id TEXT;
       CREATE INDEX IF NOT EXISTS samples_imported_idx ON samples (imported_at);
     `);
     storeDir = resolveStoreDir();
@@ -82,13 +84,14 @@ export interface SampleRow {
   hash: string;
   meta: Record<string, unknown>;
   bytes: number;
+  installId: string | null;
   createdAt: string;
   importedAt: string | null;
   hasZip: boolean;
 }
 
-/** Zapisuje sampel (dedup po hashu). Zip → plik (gdy mamy katalog) albo BYTEA. */
-export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer): Promise<{ ok: boolean; status: "created" | "exists" | "disabled"; id?: number }> {
+/** Zapisuje sampel (dedup po hashu). Zip → plik (gdy mamy katalog) albo BYTEA. Tag instancji apki. */
+export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer, installId?: string): Promise<{ ok: boolean; status: "created" | "exists" | "disabled"; id?: number }> {
   const p = getPool();
   if (!p || !ready) return { ok: false, status: "disabled" };
   const existing = await p.query(`SELECT id FROM samples WHERE hash = $1`, [hash]);
@@ -97,10 +100,10 @@ export async function saveSample(hash: string, meta: Record<string, unknown>, zi
   if (storeDir) {
     const fname = safeFileName(hash);
     await writeFile(join(storeDir, fname), zip);
-    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes) VALUES ($1,$2,$3,$4) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length]);
+    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes, install_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length, installId ?? null]);
     return { ok: true, status: "created", id: r.rows[0].id };
   }
-  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes) VALUES ($1,$2,$3,$4) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length]);
+  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes, install_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length, installId ?? null]);
   return { ok: true, status: "created", id: r.rows[0].id };
 }
 
@@ -110,12 +113,12 @@ export async function listSamples(pending = false): Promise<SampleRow[]> {
   if (!p || !ready) return [];
   const where = pending ? "WHERE imported_at IS NULL AND (zip IS NOT NULL OR path IS NOT NULL)" : "";
   const r = await p.query(
-    `SELECT id, hash, meta, bytes, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+    `SELECT id, hash, meta, bytes, install_id, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
             to_char(imported_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS imported_at,
             (zip IS NOT NULL OR path IS NOT NULL) AS has_zip
      FROM samples ${where} ORDER BY created_at DESC LIMIT 500`,
   );
-  return r.rows.map((x) => ({ id: x.id, hash: x.hash, meta: x.meta, bytes: x.bytes, createdAt: x.created_at, importedAt: x.imported_at, hasZip: x.has_zip }));
+  return r.rows.map((x) => ({ id: x.id, hash: x.hash, meta: x.meta, bytes: x.bytes, installId: x.install_id, createdAt: x.created_at, importedAt: x.imported_at, hasZip: x.has_zip }));
 }
 
 /** Pobiera zip sampla (Buffer) — z pliku albo z BYTEA — lub null. */

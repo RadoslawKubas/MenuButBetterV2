@@ -807,7 +807,7 @@ function switchTab(name){
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
-  else if(name==='samples'){ loadServerSamples(); renderLocalSamples(); }
+  else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
   else if(name==='instances'){ loadInstances(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
@@ -977,10 +977,12 @@ async function loadServerSamples(btn){
     + (modeTxt ? ' · '+modeTxt : '')
     + (r.enabled===false ? ' · <span class="badge fail">sample na serwerze wyłączone (brak DB)</span>' : '');
   SRV_SAMPLES=r.samples||[];
+  await ensureInstNames(); // nazwy instancji do etykiety źródła
   box.innerHTML = SRV_SAMPLES.length ? SRV_SAMPLES.map(x=>{
     const m=x.meta||{}; const name=m.name||m.restaurantHint||('sample '+String(x.hash).slice(0,8));
+    const inst = x.installId ? `<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(x.installId)}')">📱 z instancji: ${instLabel(x.installId)}</div>` : '<div class="mut small">📱 instancja nieznana (stary build)</div>';
     return `<div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div><div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
+      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div>${inst}<div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
       <div style="display:flex; gap:6px; white-space:nowrap"><button class="primary" onclick="importServerSample(${x.id},this)" style="padding:3px 8px; font-size:12px">⬇ Importuj</button><button onclick="deleteServerSample(${x.id})" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑</button></div>
     </div>`;
   }).join('') : '<div class="mut small">Brak nieimportowanych sampli na serwerze.</div>';
@@ -1011,6 +1013,7 @@ function sampleCard(c, archived){
     <div style="flex:1; min-width:0">
       <div style="font-weight:700">${archived?'🗄 ':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
       <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
+      ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
       <div class="mut small">wynik: ${esc(res)}</div>
       ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
       <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
