@@ -634,6 +634,7 @@ export default function App() {
       // Spójność klucza cache: ta sama kuchnia (scanCuisine) + locationHint + menu_description (ze strumienia)
       // co finałowy enrich → finał trafia w cache, nic się nie marnuje.
       const enrichJobs: Promise<void>[] = [];
+      const enrichedAcc = new Map<string, MenuItem>(); // original → wzbogacona pozycja (wyniki rollingu)
       // Usage enrichu kumulujemy LOKALNIE — rolling leci w trakcie struktury, gdy scanId jeszcze NIE
       // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
       let enrichUsage: Usage = ZERO_USAGE;
@@ -668,6 +669,9 @@ export default function App() {
               undefined,
               onEnrich,
             );
+            // Zbierz wyniki LOKALNIE — rolling w trakcie struktury nie mógł zapatchować menu (pozycji
+            // jeszcze w nim nie było); po wszystkich partiach złożymy menu z tego, bez redundantnego finału.
+            enriched.sections.forEach((s) => s.items.forEach((it) => enrichedAcc.set(it.original, { ...it, enriched: true })));
             setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
             enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj (scanId może jeszcze nie istnieć)
           } catch {
@@ -841,20 +845,23 @@ export default function App() {
       // których rolling nie ruszał, i dopina pominięte) — dania z rollingu = trafienia cache → szybko. ===
       void (async () => {
         setScanPhase({ label: "Tłumaczę grupy…" });
-        // #2: NAJPIERW przetłumacz NAZWY GRUP + notatki (szkielet bez dań — szybko, mało elementów), żeby
-        // struktura menu była czytelna od razu; dopiero potem dania (rolling/finał).
-        void (async () => {
-          try {
-            const skeleton: Menu = { ...structureMenu, sections: structureMenu.sections.map((s) => ({ ...s, items: [] })) };
-            const { menu: skel } = await enrichMenuOnServer(
-              skeleton,
-              { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-            );
-            setMenu((prev) => (prev ? applyEnrich(prev, skel) : prev)); // patchuje name_translated sekcji + notatki
-          } catch {
-            /* tłumaczenie grup padło — i tak dojdzie przy finałowym enrichu */
-          }
-        })();
+        // #2: NAJPIERW grupy + notatki (szkielet bez dań — szybko). Awaitujemy (mało elementów), żeby
+        // tłumaczenia sekcji weszły do finalMenu/zapisu; sekcje są cache'owane więc to tanie.
+        const sectTrans = new Map<string, string>();
+        const noteTrans = new Map<string, string>();
+        try {
+          const skeleton: Menu = { ...structureMenu, sections: structureMenu.sections.map((s) => ({ ...s, items: [] })) };
+          const { menu: skel, usage: skelUsage } = await enrichMenuOnServer(
+            skeleton,
+            { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+          );
+          skel.sections.forEach((s) => sectTrans.set(s.name, s.name_translated));
+          (skel.notes ?? []).forEach((n) => noteTrans.set(n.text, n.text_translated));
+          enrichUsage = addUsage(enrichUsage, skelUsage);
+          setMenu((prev) => (prev ? applyEnrich(prev, skel) : prev)); // pokaż przetłumaczone grupy od razu
+        } catch {
+          /* tłumaczenie grup padło — zostaną oryginalne nazwy sekcji */
+        }
         setScanPhase({ label: "Tłumaczę i opisuję dania…" });
         flushEnrich(); // domknij ostatnią paczkę (<8 dań)
         try {
@@ -862,25 +869,23 @@ export default function App() {
         } catch {
           /* część paczek mogła paść — finalizujemy z tym, co jest */
         }
-        // Finał na komplecie: sekcje + ewentualne pominięte pozycje (dania z rollingu trafiają w cache).
-        // finalMenu budujemy JAWNIE z wyniku enrichu (applyEnrich na strukturze) — NIE czytamy z nieświeżego
-        // stanu Reacta (updater setState nie liczy się synchronicznie → fillDishPhotos dostawał surowy
-        // photo_query=oryginał i zdjęcia poglądowe nie wychodziły).
-        let finalMenu: Menu = structureMenu;
-        try {
-          const { menu: enriched, usage } = await enrichMenuOnServer(
-            structureMenu,
-            { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-            (p) => setScanPhase(scanPhaseLabel(p)),
-            (stub) => setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev)),
-          );
-          finalMenu = applyEnrich(structureMenu, enriched); // z poprawnym photo_query do fillDishPhotos
-          setMenu((prev) => (prev ? applyEnrich(prev, enriched) : finalMenu));
-          enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj
-        } catch {
-          /* finał padł — rolling i tak dał większość; zostaje struktura (photo_query=oryginał) */
-        }
-        if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich (rolling+finał) raz
+        // Składamy menu z wyników ROLLINGU (enrichedAcc) + tłumaczeń sekcji — BEZ redundantnego finałowego
+        // enrichu (to on powodował „32/32 a wciąż mieli": re-streamował to samo z cache i blokował „done").
+        const compose = (base: Menu): Menu => ({
+          ...base,
+          sections: base.sections.map((s) => ({
+            ...s,
+            name_translated: sectTrans.get(s.name) ?? s.name_translated,
+            items: s.items.map((it) => {
+              const e = enrichedAcc.get(it.original);
+              return e ? { ...e, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos, enriched: true } : it;
+            }),
+          })),
+          notes: (base.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
+        });
+        const finalMenu = compose(structureMenu); // jawnie (poprawny photo_query do fillDishPhotos)
+        setMenu((prev) => (prev ? compose(prev) : finalMenu)); // na żywym menu — zachowaj dociągnięte zdjęcia
+        if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich raz
         if (scanId) void updateScanMenu(scanId, finalMenu);
         setScans(await listScans());
         if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId!, finalMenu.restaurant_name ?? undefined, setMenu);
