@@ -69,7 +69,7 @@
   <h1>🔬 LAB modeli</h1>
   <span class="mut" id="dir"></span>
   <span style="flex:1"></span>
-  <button onclick="loadState()">↻ Odśwież</button>
+  <button onclick="refreshState(this)">↻ Odśwież</button>
 </header>
 
 <div class="wrap">
@@ -228,6 +228,12 @@ async function loadState() {
   renderModels(); renderOps(); renderCaptures(); renderMap(); renderSimSelects();
 }
 function MODELS_HAS(id){ return STATE.models.some(m=>m.id===id); }
+async function refreshState(btn){
+  btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
+  try{ await loadState(); btn.textContent='✓ odświeżono '+new Date().toLocaleTimeString(); }
+  catch(e){ btn.textContent='✗ błąd odświeżania'; }
+  setTimeout(()=>{ btn.textContent=t; btn.disabled=false; }, 1500);
+}
 
 function renderModels() {
   document.getElementById('models').innerHTML = STATE.models.map(m =>
@@ -300,7 +306,7 @@ async function importZip(input){ const f=input.files[0]; if(!f) return; const in
     if(!r.error) await loadState();
   }catch(e){ info.textContent='błąd: '+e.message; } finally { input.value=''; }
 }
-async function importPath(){ const p=document.getElementById('impPath').value.trim(); if(!p) return; const info=document.getElementById('impInfo'); info.textContent='importuję…';
+async function importPath(){ const p=document.getElementById('impPath').value.trim(); const info=document.getElementById('impInfo'); if(!p){ info.textContent='⚠️ Podaj ścieżkę folderu z metadata.json lub pliku .zip (albo użyj „📥 Importuj ZIP").'; return; } info.textContent='importuję…';
   const r=await api('/api/import-path',{path:p});
   info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
   if(!r.error){ document.getElementById('impPath').value=''; await loadState(); }
