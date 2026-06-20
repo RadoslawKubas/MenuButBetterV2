@@ -15,8 +15,8 @@ export const CACHE_VERSION = {
   "repr-photos": 1, // zdjęcia poglądowe „typ dania" (lista zweryfikowanych URL)
   "dish-info": 1, // opis dania (tekst)
   "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
-  "menu-scan": 1, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst
-  "menu-structure": 1, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (bez języka)
+  "menu-scan": 2, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst (v2: source_text)
+  "menu-structure": 2, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (v2: source_text)
   "item-enrich": 1, // przebieg 2: wzbogacenie jednej pozycji (tłumaczenie/opis/photo_query) per kraj/język
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;

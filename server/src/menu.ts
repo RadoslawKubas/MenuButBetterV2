@@ -179,6 +179,8 @@ export const STRUCTURE_SYSTEM = [
   "powtórzonych nagłówków ani pozycji. Dla każdej pozycji podaj `original` (nazwa DOKŁADNIE jak na",
   "menu), cenę i walutę (gdy widać; inaczej null) oraz `menu_description` = opis NADRUKOWANY na menu",
   "pod/obok pozycji (transkrypcja słowo w słowo). Gdy danie nie ma opisu na menu — pusty string.",
+  "Podaj też `source_text` = przepisany FRAGMENT karty dla tej pozycji (pełna linijka/blok jak na",
+  "menu: nazwa + ewentualny opis + cena), słowo w słowo — żeby pokazać użytkownikowi skąd pochodzi.",
   "NIE tłumacz, NIE generuj opisów, NIE zgaduj składników — to zrobi osobny krok.",
   "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz, jeśli widać na okładce/",
   "szyldzie/stopce — `restaurant_name` i `restaurant_address` (inaczej null). Zdjęcie lokalu z",
@@ -453,6 +455,7 @@ function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
   return {
     original: it.original,
     translated: e?.translated || it.original,
+    source_text: it.source_text || it.original,
     photo_query: e?.photo_query || it.original,
     photo_query_local: e?.photo_query_local || e?.photo_query || it.original,
     branded: e?.branded ?? false,

@@ -22,6 +22,8 @@ export type DishCategory = (typeof DISH_CATEGORIES)[number];
 export interface MenuItem {
   original: string;
   translated: string;
+  /** Fragment oryginalnej karty (przepisana linijka/blok), z którego pochodzi danie. */
+  source_text?: string;
   photo_query: string;
   photo_query_local: string;
   /** Markowy/paczkowany produkt (Coca-Cola, butelkowany napój) — lepszy generyczny produktowy shot. */
@@ -58,6 +60,8 @@ export interface StructItem {
   original: string;
   /** Opis WIDOCZNY na menu (transkrypcja), jeśli jest — inaczej "". Generowany opis robi enrich. */
   menu_description: string;
+  /** Fragment ORYGINALNEJ karty (przepisana linijka/blok), z którego pochodzi danie — do podglądu. */
+  source_text: string;
   price: string | null;
   currency: string | null;
 }
@@ -93,10 +97,11 @@ export const STRUCTURE_SCHEMA = {
               properties: {
                 original: { type: "string", description: "Nazwa dania DOKŁADNIE jak na menu (oryginał)." },
                 menu_description: { type: "string", description: "Opis NADRUKOWANY na menu pod/obok dania (transkrypcja). Gdy brak — pusty string." },
+                source_text: { type: "string", description: "Przepisany FRAGMENT karty dla tej pozycji: pełna linijka/blok jak na menu (nazwa + ew. opis + cena), słowo w słowo — do pokazania skąd pochodzi pozycja." },
                 price: { type: ["string", "null"], description: "Cena jako tekst, lub null gdy nie widać." },
                 currency: { type: ["string", "null"], description: "Waluta, np. 'EUR', lub null." },
               },
-              required: ["original", "menu_description", "price", "currency"],
+              required: ["original", "menu_description", "source_text", "price", "currency"],
             },
           },
         },
