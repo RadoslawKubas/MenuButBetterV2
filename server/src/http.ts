@@ -13,10 +13,10 @@ import { findTripAdvisor } from "./tripadvisor.ts";
 import { runDishPhotos, reprPhotoCacheKey } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
-import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
+import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
-import { initCache, cacheDelete } from "./cache.ts";
+import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize } from "./cache.ts";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
@@ -568,6 +568,33 @@ app.get("/events", async (c) => {
     return c.json({ events: await getRecentEvents(limit) });
   } catch (e) {
     return c.json({ events: [], error: (e as Error).message }, 200);
+  }
+});
+
+// Cache treści (repr-photos/dish-info/vision/struktura/enrich) — podgląd dla LAB. To PRODUKCYJNY
+// cache (gdzie realnie żyją wpisy); lokalny lab cache jest pusty, więc lab pyta tutaj. Token chroni globalnie.
+app.get("/cache-stats", async (c) => {
+  try {
+    return c.json({ ...(await cacheStats()), sessionHits: cacheHitsSnapshot() });
+  } catch (e) {
+    return c.json({ enabled: false, l1: 0, rows: [], error: (e as Error).message }, 200);
+  }
+});
+app.get("/cache-browse", async (c) => {
+  try {
+    const kind = c.req.query("kind") || undefined;
+    const q = c.req.query("q") || undefined;
+    const limit = Number(c.req.query("limit")) || 100;
+    return c.json(await cacheBrowse({ kind, q, limit }));
+  } catch (e) {
+    return c.json({ source: "l1", rows: [], error: (e as Error).message }, 200);
+  }
+});
+app.get("/cache-size", async (c) => {
+  try {
+    return c.json(await cacheSize());
+  } catch (e) {
+    return c.json({ enabled: false, bytes: 0, rows: 0, error: (e as Error).message }, 200);
   }
 });
 

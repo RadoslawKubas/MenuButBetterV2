@@ -1010,11 +1010,35 @@ app.post("/api/sim-venue", async (c) => {
 });
 
 // --- KOSZTY: log operacji (z rozbiciem) + statystyki łączne (okres) ------------------------
-app.get("/api/cost-log", (c) => {
+app.get("/api/cost-log", async (c) => {
   const period = c.req.query("period") || "all";
   const now = Date.now();
   const cutoff = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
   const egress = otherRate("egress");
+  // REALNE użycie z PRODUKCJI (skany z apki) — events: op, model, tokeny, koszt, data.cached, install_id
+  // → CostEntry. Łączymy z lokalnymi sim-scanami labu. Token chroni globalnie (prodFetch go dokłada).
+  let prodEntries: CostEntry[] = [];
+  let prodErr: string | null = null;
+  try {
+    const r = await prodFetch("/events?limit=3000");
+    const evs = ((await r.json()) as { events?: Record<string, any>[] }).events ?? [];
+    prodEntries = evs
+      .filter((e) => (e.type === "ai" || e.type === "scan") && (e.model || e.cost_usd != null))
+      .map((e): CostEntry => {
+        const inTok = Number(e.input_tokens) || 0, outTok = Number(e.output_tokens) || 0;
+        const prov = (e.provider as string) || (e.model ? apiTag(e.model) : "claude");
+        const restaurant = (e.data?.restaurant as string) || undefined;
+        return {
+          ts: Date.parse(e.created_at) || 0,
+          ms: 0,
+          op: (e.op as string) || (e.type as string),
+          meta: { lokal: restaurant, installId: (e.install_id as string) || undefined, prod: true, dish: e.data?.dish },
+          delta: [{ provider: prov, calls: 1, inTok, outTok, costUsd: Number(e.cost_usd) || 0, bytesSent: 0, bytesRecv: 0 }],
+          models: e.model ? [{ model: e.model as string, inTok, outTok, calls: 1 }] : [],
+          cacheHits: e.data?.cached ? 1 : 0,
+        };
+      });
+  } catch (e) { prodErr = (e as Error).message; }
   // PRZELICZENIE z AKTUALNEGO cennika (override > MODELS) — zmiana ceny przelicza całą historię.
   const ovAll = loadPriceOverrides();
   const AI_PROV = new Set(["claude", "openai", "google"]);
@@ -1036,7 +1060,7 @@ app.get("/api/cost-log", (c) => {
     const outTok = e.models ? e.models.reduce((n, m) => n + m.outTok, 0) : sumD(e, "outTok");
     return { ...e, tokenCost, apiCost, bytesSent, bytesRecv, inTok, outTok, calls: sumD(e, "calls"), dataCost, totalCost: tokenCost + apiCost + dataCost };
   };
-  const entries = readCostLog().filter((e) => e.ts >= cutoff).map(enrich).reverse();
+  const entries = [...readCostLog(), ...prodEntries].filter((e) => e.ts >= cutoff).map(enrich).sort((a, b) => b.ts - a.ts);
   const agg = entries.reduce(
     (a, e) => ({
       count: a.count + 1, calls: a.calls + e.calls, inTok: a.inTok + e.inTok, outTok: a.outTok + e.outTok,
@@ -1063,18 +1087,20 @@ app.get("/api/cost-log", (c) => {
     const cap = meta.find((x) => x.id === id);
     return (cap?.labScan?.menu?.restaurantName as string) || cap?.result?.restaurantName || ("sample " + (id ?? "").slice(0, 8));
   };
-  const groupOf = (e: (typeof entries)[number]): { key: string; label: string } => {
+  const groupOf = (e: (typeof entries)[number]): { key: string; label: string; installId?: string } => {
     const cid = e.meta?.captureId as string | undefined;
     if (cid) return { key: "c:" + cid, label: capName(cid) };
     const lok = e.meta?.lokal as string | undefined;
-    if (lok) return { key: "r:" + lok.toLowerCase(), label: lok };
+    if (lok) return { key: "r:" + lok.toLowerCase(), label: lok, installId: e.meta?.installId as string | undefined };
+    const inst = e.meta?.installId as string | undefined; // realne ops bez nazwy lokalu → grupuj per instancja
+    if (inst) return { key: "i:" + inst, label: "📱 " + inst.slice(0, 16), installId: inst };
     return { key: "—", label: "Inne (niepowiązane z menu)" };
   };
   type Prov = { provider: string; calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number };
-  const gmap: Record<string, { key: string; label: string; totalCost: number; tokenCost: number; apiCost: number; dataCost: number; count: number; cacheHits: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
+  const gmap: Record<string, { key: string; label: string; installId?: string; totalCost: number; tokenCost: number; apiCost: number; dataCost: number; count: number; cacheHits: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
   for (const e of entries) {
-    const { key, label } = groupOf(e);
-    const g = (gmap[key] = gmap[key] || { key, label, totalCost: 0, tokenCost: 0, apiCost: 0, dataCost: 0, count: 0, cacheHits: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
+    const { key, label, installId } = groupOf(e);
+    const g = (gmap[key] = gmap[key] || { key, label, installId, totalCost: 0, tokenCost: 0, apiCost: 0, dataCost: 0, count: 0, cacheHits: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
     g.totalCost += e.totalCost;
     g.tokenCost += e.tokenCost;
     g.apiCost += e.apiCost;
@@ -1093,7 +1119,7 @@ app.get("/api/cost-log", (c) => {
   const groups = Object.values(gmap)
     .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
     .sort((a, b) => b.ts - a.ts);
-  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups });
+  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodErr, prodUrl: PROD_URL });
 });
 
 app.post("/api/cost-log-clear", (c) => {
@@ -1105,21 +1131,38 @@ app.post("/api/cost-log-clear", (c) => {
   return c.json({ ok: true });
 });
 
-// --- CACHE treści: statystyki (ile wpisów/trafień per rodzaj) + czyszczenie. -----------------
+// --- CACHE treści: statystyki/przegląd/rozmiar. Realny cache jest na PRODUKCJI (tam idą skany z
+// apki) — pytamy produkcję; lokalny cache labu (sim-scany) jest fallbackiem, gdy brak połączenia. ---
 app.get("/api/cache-stats", async (c) => {
-  const stats = await cacheStats();
-  return c.json({ ...stats, sessionHits: cacheHitsSnapshot() });
+  try {
+    const r = await prodFetch("/cache-stats");
+    return c.json({ ...((await r.json()) as object), from: "prod", prodUrl: PROD_URL });
+  } catch (e) {
+    const stats = await cacheStats();
+    return c.json({ ...stats, sessionHits: cacheHitsSnapshot(), from: "local", fromErr: `produkcja niedostępna (${(e as Error).message}) — pokazuję cache lokalny labu` });
+  }
 });
 app.get("/api/cache-browse", async (c) => {
-  const kind = c.req.query("kind") || undefined;
-  const q = c.req.query("q") || undefined;
+  const kind = c.req.query("kind") || "";
+  const q = c.req.query("q") || "";
   const limit = Number(c.req.query("limit")) || 100;
-  return c.json(await cacheBrowse({ kind, q, limit }));
+  try {
+    const r = await prodFetch(`/cache-browse?limit=${limit}${kind ? "&kind=" + encodeURIComponent(kind) : ""}${q ? "&q=" + encodeURIComponent(q) : ""}`);
+    return c.json({ ...((await r.json()) as object), from: "prod" }); // zachowuje wewnętrzne source (pg/l1)
+  } catch {
+    return c.json({ ...(await cacheBrowse({ kind: kind || undefined, q: q || undefined, limit })), from: "local" });
+  }
 });
 app.get("/api/cache-size", async (c) => {
-  const sz = await cacheSize();
-  const rate = otherRate("storage"); // $/GB-mies.
-  return c.json({ ...sz, storageUsdPerGbMonth: rate, storageCostMonthly: (sz.bytes / 1e9) * rate });
+  const rate = otherRate("storage"); // $/GB-mies. z cennika labu
+  try {
+    const r = await prodFetch("/cache-size");
+    const sz = (await r.json()) as { bytes: number };
+    return c.json({ ...sz, storageUsdPerGbMonth: rate, storageCostMonthly: (sz.bytes / 1e9) * rate, from: "prod" });
+  } catch {
+    const sz = await cacheSize();
+    return c.json({ ...sz, storageUsdPerGbMonth: rate, storageCostMonthly: (sz.bytes / 1e9) * rate, from: "local" });
+  }
 });
 app.post("/api/cache-clear", async (c) => {
   const b = await c.req.json<{ kind?: string }>().catch(() => ({}) as { kind?: string });

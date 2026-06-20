@@ -822,9 +822,11 @@ function renderCostPeriod(){
 }
 function setCostPeriod(k){ COST_PERIOD=k; renderCostPeriod(); loadCostLog(); }
 async function loadCostLog(){
+  await ensureInstNames(); // nazwy instancji do grup
   const r=await api('/api/cost-log?period='+COST_PERIOD);
   COST_GROUPS=r.groups||[]; EGRESS_RATE=r.egressUsdPerGB||0.1; const a=r.agg||{};
-  document.getElementById('costInfo').textContent='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')';
+  const srcNote = r.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(r.prodErr)})` : (r.prodCount!=null ? ` · realne z produkcji: ${r.prodCount}` : '');
+  document.getElementById('costInfo').innerHTML='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')'+srcNote;
   const sv=r.savings||{count:0,cost:0,inTok:0,outTok:0};
   document.getElementById('costAgg').innerHTML=`
     <div class="step" style="margin-top:8px">
@@ -834,12 +836,16 @@ async function loadCostLog(){
       <div class="mut small" style="margin-top:3px">💲 wszystko liczone wg <b>aktualnego cennika</b> — zmień cenę w zakładce Cennik, a tu się przeliczy.</div>
       ${sv.count?`<div style="margin-top:6px; padding-top:6px; border-top:1px solid var(--line)"><b style="color:var(--ok)">🗄 Oszczędności z cache (szac.): ${fmtUsd(sv.cost)}</b> <span class="mut small">· ${sv.count} trafień · ~${fmtTokk(Math.round(sv.inTok))} in / ${fmtTokk(Math.round(sv.outTok))} out tok niewysłane</span></div>`:''}
     </div>`;
-  document.getElementById('costLog').innerHTML = COST_GROUPS.length ? COST_GROUPS.map((g,gi)=>`
+  document.getElementById('costLog').innerHTML = COST_GROUPS.length ? COST_GROUPS.map((g,gi)=>{
+    const isInst = g.installId && (g.label||'').startsWith('📱');
+    const head = isInst ? instLabel(g.installId) : '📖 '+esc(g.label);
+    const instChip = (g.installId && !isInst) ? ` · <span style="cursor:pointer; color:var(--acc)" onclick="event.stopPropagation(); openInstance('${esc(g.installId)}')" title="otwórz instancję">📱 ${instLabel(g.installId)}</span>` : '';
+    return `
     <div class="cand" onclick="toggleCostGroup(${gi})">
-      <div style="display:flex; justify-content:space-between; gap:8px"><b>📖 ${esc(g.label)}</b> <b style="color:var(--acc)">${fmtUsd(g.totalCost)}</b></div>
-      <div class="mut small">${g.count} operacji · token ${fmtUsd(g.tokenCost)} · transfer ${fmtUsd(g.dataCost)} · ${new Date(g.ts).toLocaleString()}</div>
+      <div style="display:flex; justify-content:space-between; gap:8px"><b>${head}</b> <b style="color:var(--acc)">${fmtUsd(g.totalCost)}</b></div>
+      <div class="mut small">${g.count} operacji · token ${fmtUsd(g.tokenCost)} · transfer ${fmtUsd(g.dataCost)} · ${new Date(g.ts).toLocaleString()}${instChip}</div>
       <div id="costG-${gi}"></div>
-    </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak operacji w tym okresie</div>';
+    </div>`;}).join('') : '<div class="mut small" style="margin-top:6px">brak operacji w tym okresie</div>';
 }
 function toggleCostGroup(gi){
   const el=document.getElementById('costG-'+gi); if(!el) return;
@@ -876,8 +882,10 @@ async function loadCacheStats(btn){
   const totEntries=rows.reduce((a,x)=>a+x.entries,0), totHits=rows.reduce((a,x)=>a+x.hits,0);
   const body = rows.length ? `<table style="margin-top:6px"><thead><tr><th>rodzaj</th><th>wpisów</th><th>trafień</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(CACHE_LABELS[x.kind]||x.kind)}</b></td><td class="num">${x.entries}</td><td class="num">${x.hits}</td></tr>`).join('')}</tbody></table>`
     : `<div class="mut small" style="margin-top:4px">Brak trwałego cache (Postgres) — działa tylko L1 w pamięci (${r.l1||0} wpisów). Na produkcji (DATABASE_URL) cache jest trwały.</div>`;
+  const fromTag = r.from==='prod' ? '<span class="badge venue">☁ produkcja</span>' : `<span class="badge fail">lokalny labu</span>${r.fromErr?' '+esc(r.fromErr):''}`;
   document.getElementById('cacheStats').innerHTML=`
     <div class="step">
+      <div style="margin-bottom:3px">${fromTag}</div>
       <div><b>${r.enabled?'Postgres + pamięć':'tylko pamięć (L1)'}</b> · trafień w tej sesji: <b style="color:var(--ok)">${sh.total}</b> ${Object.keys(sh.byOp||{}).length?'('+Object.entries(sh.byOp).map(([k,v])=>esc(k)+' '+v).join(', ')+')':''}</div>
       ${rows.length?`<div class="mut small" style="margin-top:2px">Σ ${totEntries} wpisów · ${totHits} trafień (trwałe)</div>`:''}
       ${body}
@@ -899,14 +907,14 @@ function renderCacheKindChips(){
 function setCacheKind(k){ CACHE_KIND=k; renderCacheKindChips(); loadCacheBrowse(); }
 async function loadCacheSize(){
   const r=await api('/api/cache-size');
-  document.getElementById('cacheSize').innerHTML=`Wpisów: <b>${r.rows||0}</b> · rozmiar: <b>${fmtBytes(r.bytes)}</b>${r.enabled?'':' <span class="mut">(L1 w pamięci — bez Postgresa)</span>'} · koszt przechowywania: <b>${fmtUsd(r.storageCostMonthly)}/mies.</b> <span class="mut">(${r.storageUsdPerGbMonth}$/GB-mies., z cennika)</span>`;
+  document.getElementById('cacheSize').innerHTML=`${r.from==='prod'?'☁ ':'🖥 '}Wpisów: <b>${r.rows||0}</b> · rozmiar: <b>${fmtBytes(r.bytes)}</b>${r.enabled?'':' <span class="mut">(L1 w pamięci — bez Postgresa)</span>'} · koszt przechowywania: <b>${fmtUsd(r.storageCostMonthly)}/mies.</b> <span class="mut">(${r.storageUsdPerGbMonth}$/GB-mies., z cennika)</span>`;
 }
 async function loadCacheBrowse(){
   const q=(document.getElementById('cacheQ').value||'').trim();
   const r=await api('/api/cache-browse?limit=200'+(CACHE_KIND?'&kind='+encodeURIComponent(CACHE_KIND):'')+(q?'&q='+encodeURIComponent(q):''));
   CACHE_ROWS=r.rows||[];
   const box=document.getElementById('cacheBrowse');
-  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">${CACHE_ROWS.length} wpisów (źródło: ${r.source==='pg'?'Postgres':'pamięć L1'})</div>`+CACHE_ROWS.map((row,i)=>`
+  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">${CACHE_ROWS.length} wpisów · ${r.from==='prod'?'☁ produkcja':'🖥 lokalny labu'} (${r.source==='pg'?'Postgres':'pamięć L1'})</div>`+CACHE_ROWS.map((row,i)=>`
     <div class="cand" onclick="toggleCacheRow(${i})">
       <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(CACHE_LABELS[row.kind]||row.kind)}</b> <span class="mut small">trafień ${row.hits}</span></div>
       <div class="mut" style="font-size:11px; word-break:break-all">${esc(row.key)}</div>
