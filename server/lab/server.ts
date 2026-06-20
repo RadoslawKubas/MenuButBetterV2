@@ -709,8 +709,8 @@ app.post("/api/annotate", async (c) => {
 
 // 1) Skan menu — jak w apce: najpierw peek (kuchnia→cuisineHint), potem scan; opcjonalnie lokal.
 app.post("/api/sim-scan", async (c) => {
-  const { captureId, scanModel, peekModel, withVenue, withPeek, forceRescan } = await c.req.json<{
-    captureId: string; scanModel?: ModelId; peekModel?: ModelId; withVenue?: boolean; withPeek?: boolean; forceRescan?: boolean;
+  const { captureId, scanModel, enrichModel, peekModel, withVenue, withPeek, forceRescan, useCache } = await c.req.json<{
+    captureId: string; scanModel?: ModelId; enrichModel?: ModelId; peekModel?: ModelId; withVenue?: boolean; withPeek?: boolean; forceRescan?: boolean; useCache?: boolean;
   }>();
   const cap = loadMeta().find((x) => x.id === captureId);
   if (!cap) return c.json({ error: "nie ma migawki" }, 404);
@@ -737,12 +737,14 @@ app.post("/api/sim-scan", async (c) => {
       if (r) peek = { model: pm, isMenu: r.result.isMenu, cuisine: r.result.cuisine, restaurantName: r.result.restaurantName, cost: r.usage.costUsd };
     }
   }
+  const emodel = (enrichModel && enrichModel in MODELS ? enrichModel : model) as ModelId;
   const { menu, usage } = await extractMenu(images, {
     targetLang: "polski",
     locationHint: cap.locationHint,
     cuisineHint: peek?.cuisine || undefined,
     model,
-    noCache: true, // sim-scan w labie zawsze świeży (lab ma własny zapis skanu labScan)
+    enrichModel: emodel,
+    noCache: !useCache, // domyślnie świeży (lab ma własny labScan); „🗄 użyj cache" włącza cache serwera
   });
   const items = (menu.sections ?? []).flatMap((s: any) =>
     (s.items ?? []).map((it: any) => ({
@@ -790,7 +792,7 @@ app.post("/api/sim-scan", async (c) => {
     all[idx]!.labScan = labScan;
     saveMeta(all);
   }
-  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0, cacheBefore, modelBefore);
+  recordCostDelta("sim-scan", { model, enrichModel: emodel, captureId, withVenue: !!withVenue }, costBefore, t0, cacheBefore, modelBefore);
   return c.json({ ms: Date.now() - t0, usage, cached: false, ...labScan });
   } catch (e) {
     console.error("sim-scan error:", e);

@@ -142,7 +142,8 @@
       <div class="mut small" style="margin-bottom:8px">Ten sam kod co w apce (<b>peek → extractMenu → runDishPhotos / describeDish / Tier 0</b>). Używa <b>pierwszej zaznaczonej</b> migawki. Model osobno dla każdej roli — jak w ustawieniach apki.</div>
       <div class="simgrid">
         <label>👁 peek<select id="simPeekModel"></select></label>
-        <label>📖 skan<select id="simScanModel"></select></label>
+        <label>📖 skan: struktura<select id="simScanModel"></select></label>
+        <label>✨ skan: enrich<select id="simEnrichModel"></select></label>
         <label>📝 opis dania<select id="simDescribeModel"></select></label>
         <label>🔍 zdjęcia (weryfikacja)<select id="simVerifyModel"></select></label>
         <label>📍 lokal Tier 0<select id="simVenueModel"></select></label>
@@ -198,15 +199,9 @@
   </div>
   <div class="panel">
     <h3>🗄 Cache treści — obniża koszt powtórek</h3>
-    <div class="mut small" style="margin-bottom:6px">Zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany, niezależny od lokalu). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache są oznaczone „🗄 z cache" w logu wyżej.</div>
+    <div class="mut small" style="margin-bottom:6px">Struktura menu / wzbogacenie pozycji / zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache są oznaczone „🗄 z cache" w logu wyżej.</div>
     <div id="cacheStats"></div>
-    <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap">
-      <button onclick="loadCacheStats(this)" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
-      <button onclick="clearCache('repr-photos')" style="padding:3px 8px; font-size:12px">🗑 zdjęcia</button>
-      <button onclick="clearCache('dish-info')" style="padding:3px 8px; font-size:12px">🗑 opisy</button>
-      <button onclick="clearCache('vision-url')" style="padding:3px 8px; font-size:12px">🗑 werdykty</button>
-      <button onclick="clearCache()" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 wszystko</button>
-    </div>
+    <div id="cacheClearBtns" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap"></div>
   </div>
 </div>
 
@@ -577,7 +572,7 @@ function toggleSimPeek(){ SIM_PEEK=!SIM_PEEK; document.getElementById('simPeekCh
 let SIM_CACHE=false;
 function toggleSimCache(){ SIM_CACHE=!SIM_CACHE; document.getElementById('simCacheChip').className='chip'+(SIM_CACHE?' on':''); }
 // Domyślne modele per rola — jak DEFAULT_MODELS w apce (peek=nano, reszta=Sonnet).
-const SIM_DEFAULTS = { simPeekModel:'gpt-5-nano', simScanModel:'claude-sonnet-4-6', simDescribeModel:'claude-sonnet-4-6', simVerifyModel:'claude-sonnet-4-6', simVenueModel:'claude-sonnet-4-6' };
+const SIM_DEFAULTS = { simPeekModel:'gpt-5-nano', simScanModel:'claude-sonnet-4-6', simEnrichModel:'claude-sonnet-4-6', simDescribeModel:'claude-sonnet-4-6', simVerifyModel:'claude-sonnet-4-6', simVenueModel:'claude-sonnet-4-6' };
 function renderSimSelects(){
   const opts = STATE.models.map(m=>`<option value="${m.id}">${m.label}</option>`).join('');
   Object.entries(SIM_DEFAULTS).forEach(([id,def])=>{
@@ -602,8 +597,9 @@ async function simScan(force){
     const r=await api('/api/sim-scan',{
       captureId:id, forceRescan:!!force,
       scanModel:document.getElementById('simScanModel').value,
+      enrichModel:document.getElementById('simEnrichModel').value,
       peekModel:document.getElementById('simPeekModel').value,
-      withPeek:SIM_PEEK, withVenue:SIM_VENUE,
+      withPeek:SIM_PEEK, withVenue:SIM_VENUE, useCache:SIM_CACHE,
     });
     if(r.error) throw new Error(r.error);
     SIM={ captureId:id, cuisine:r.menu.cuisine, restaurantName:r.menu.restaurantName, venue:r.venue, items:r.items, peek:r.peek };
@@ -793,7 +789,7 @@ function toggleGroupEntry(gi,ei){
     </tbody></table>`;
 }
 async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
-const CACHE_LABELS={'repr-photos':'zdjęcia poglądowe','dish-info':'opisy dań','vision-url':'werdykty vision'};
+const CACHE_LABELS={'repr-photos':'zdjęcia poglądowe','dish-info':'opisy dań','vision-url':'werdykty vision','menu-scan':'pełne menu (skan)','menu-structure':'struktura menu','item-enrich':'wzbogacenie pozycji'};
 async function loadCacheStats(btn){
   if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
   const r=await api('/api/cache-stats');
@@ -808,13 +804,19 @@ async function loadCacheStats(btn){
       ${rows.length?`<div class="mut small" style="margin-top:2px">Σ ${totEntries} wpisów · ${totHits} trafień (trwałe)</div>`:''}
       ${body}
     </div>`;
+  // Przyciski czyszczenia — rozszerzalne (z CACHE_LABELS).
+  const cb=document.getElementById('cacheClearBtns');
+  if(cb) cb.innerHTML=`<button onclick="loadCacheStats(this)" style="padding:3px 8px; font-size:12px">↻ odśwież</button>`
+    + Object.entries(CACHE_LABELS).map(([k,l])=>`<button onclick="clearCache('${k}')" style="padding:3px 8px; font-size:12px">🗑 ${esc(l)}</button>`).join('')
+    + `<button onclick="clearCache()" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 wszystko</button>`;
 }
 async function clearCache(kind){ if(!confirm('Wyczyścić cache '+(kind?CACHE_LABELS[kind]:'WSZYSTKO')+'?')) return; await api('/api/cache-clear',kind?{kind}:{}); loadCacheStats(); if(CURRENT_TAB==='cache'){ loadCacheBrowse(); loadCacheSize(); } }
 /* ---- Podgląd cache (zakładka Cache) ---- */
 let CACHE_KIND='', CACHE_ROWS=[];
 function renderCacheKindChips(){
-  const opts=[['','Wszystko'],['repr-photos','🖼 zdjęcia'],['dish-info','📝 opisy'],['vision-url','✓ werdykty']];
-  document.getElementById('cacheKindChips').innerHTML=opts.map(([k,l])=>`<div class="chip ${CACHE_KIND===k?'on':''}" onclick="setCacheKind('${k}')">${l}</div>`).join('');
+  // Rozszerzalne: filtry z CACHE_LABELS (dodanie rodzaju cache = jeden wpis tam).
+  const opts=[['','Wszystko'], ...Object.entries(CACHE_LABELS)];
+  document.getElementById('cacheKindChips').innerHTML=opts.map(([k,l])=>`<div class="chip ${CACHE_KIND===k?'on':''}" onclick="setCacheKind('${k}')">${esc(l)}</div>`).join('');
 }
 function setCacheKind(k){ CACHE_KIND=k; renderCacheKindChips(); loadCacheBrowse(); }
 async function loadCacheSize(){
