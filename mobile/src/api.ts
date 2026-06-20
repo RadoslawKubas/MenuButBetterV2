@@ -197,6 +197,8 @@ export interface ScanParams {
   model: ModelId;
   /** Model przebiegu WZBOGACANIA (tekst: tłumaczenia/opisy/photo_query). Domyślnie = model. */
   enrichModel?: ModelId;
+  /** Tylko STRUKTURA (Faza A): szybkie, kompletne menu z oryginalnymi nazwami; enrich osobno (/enrich). */
+  structureOnly?: boolean;
 }
 
 /** Postęp skanu: wysyłka zdjęć (%) → serwer odebrał → model czyta (czas) → składanie. */
@@ -230,7 +232,7 @@ export function scanMenu(
   onItem?: (item: ScanItemStub) => void,
   onEnrichItem?: (item: ScanItemStub) => void,
   onMeta?: (m: { restaurantName?: string }) => void,
-): Promise<{ menu: Menu; usage: Usage; cached: boolean; lowQuality: boolean; partialQuality: boolean }> {
+): Promise<{ menu: Menu; usage: Usage; cached: boolean; lowQuality: boolean; partialQuality: boolean; enriched: boolean }> {
   const t0 = Date.now();
   const body = JSON.stringify({
     images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
@@ -240,6 +242,7 @@ export function scanMenu(
     cuisineHint: params.cuisineHint,
     model: params.model,
     enrichModel: params.enrichModel,
+    structureOnly: params.structureOnly === true,
     stream: true,
   });
 
@@ -310,7 +313,7 @@ export function scanMenu(
       onProgress?.({ phase: "finalizing" });
       // Wynik: ostatnia kompletna linia JSON z `menu`/`error`/`done`.
       const text = xhr.responseText || "";
-      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean; lowQuality?: boolean; partialQuality?: boolean } | null = null;
+      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean; lowQuality?: boolean; partialQuality?: boolean; enriched?: boolean } | null = null;
       for (const line of text.split("\n")) {
         const tt = line.trim();
         if (!tt) continue;
@@ -330,7 +333,91 @@ export function scanMenu(
         return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
       }
       if (!result.menu) return fail("Pusta odpowiedź serwera.");
-      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached, lowQuality: !!result.lowQuality, partialQuality: !!result.partialQuality });
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached, lowQuality: !!result.lowQuality, partialQuality: !!result.partialQuality, enriched: result.enriched !== false });
+    };
+    xhr.send(body);
+  });
+}
+
+/**
+ * FAZA B — wzbogacenie gotowej STRUKTURY menu (tłumaczenia/opisy/photo_query), tekstowo, BEZ zdjęć.
+ * Strumień `enrich-item` po `original` → apka patchuje pozycje W MIEJSCU (bez zmiany kolejności/grup).
+ * Zwraca pełne wzbogacone Menu (do finalnego zapisu). Enrich ma cache per pozycja → replay ~darmowy.
+ */
+export function enrichMenuOnServer(
+  structureMenu: Menu,
+  params: { targetLang: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId },
+  onProgress?: (p: ScanPhase) => void,
+  onEnrichItem?: (item: ScanItemStub) => void,
+): Promise<{ menu: Menu; usage: Usage }> {
+  const t0 = Date.now();
+  const body = JSON.stringify({
+    menu: structureMenu,
+    targetLang: params.targetLang,
+    locationHint: params.locationHint,
+    cuisineHint: params.cuisineHint,
+    model: params.model,
+    enrichModel: params.enrichModel,
+    stream: true,
+  });
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/enrich`);
+    Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
+    xhr.timeout = 180000;
+    let scanned = 0;
+    const parseLines = (text: string) => {
+      const nl = text.lastIndexOf("\n");
+      if (nl < scanned) return;
+      const chunk = text.slice(scanned, nl);
+      scanned = nl + 1;
+      for (const line of chunk.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: 0 });
+          else if (ev.phase === "enrich-item")
+            onEnrichItem?.({
+              original: ev.original,
+              translated: ev.translated,
+              photoQuery: ev.photoQuery,
+              photoQueryLocal: ev.photoQueryLocal,
+              branded: !!ev.branded,
+              description: ev.description ?? "",
+              price: ev.price ?? null,
+              currency: ev.currency ?? null,
+            });
+        } catch {
+          /* niepełna linia */
+        }
+      }
+    };
+    xhr.onprogress = () => parseLines(xhr.responseText);
+    const fail = (msg: string) => {
+      appLog.logCall({ ts: Date.now(), label: "enrich", ok: false, ms: Date.now() - t0, detail: msg });
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => fail("Błąd sieci podczas wzbogacania.");
+    xhr.ontimeout = () => fail("Wzbogacanie trwało za długo (timeout).");
+    xhr.onload = () => {
+      appLog.logCall({ ts: Date.now(), label: "enrich", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
+      const text = xhr.responseText || "";
+      let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
+      for (const line of text.split("\n")) {
+        const tt = line.trim();
+        if (!tt) continue;
+        try {
+          const ev = JSON.parse(tt);
+          if (ev.menu || ev.error || ev.done) result = ev;
+        } catch {
+          /* keepalive/niepełne */
+        }
+      }
+      if (!result) return fail("Wzbogacanie przerwane — spróbuj ponownie.");
+      if (xhr.status < 200 || xhr.status >= 300 || result.error) return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
+      if (!result.menu) return fail("Pusta odpowiedź serwera.");
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE });
     };
     xhr.send(body);
   });

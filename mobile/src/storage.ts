@@ -120,6 +120,9 @@ export interface CostPrefs {
   autoVenuePhotos: boolean;
   /** Limit dań objętych auto-dociąganiem (0 = wszystkie). Reszta tylko na dotknięcie. */
   autoLimit: number;
+  /** Ile zdjęć w jednej partii skanu STRUKTURY (1 = per strona). Większy = lepsza ciągłość grup
+   *  między kartkami (model widzi je razem), kosztem granularności postępu/recovery. */
+  batchSize: number;
 }
 
 export const DEFAULT_COST_PREFS: CostPrefs = {
@@ -127,6 +130,7 @@ export const DEFAULT_COST_PREFS: CostPrefs = {
   autoPhotos: true,
   autoVenuePhotos: true,
   autoLimit: 0,
+  batchSize: 1,
 };
 
 export async function loadCostPrefs(): Promise<CostPrefs> {

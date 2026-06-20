@@ -15,6 +15,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import {
   scanMenu,
+  enrichMenuOnServer,
   type ScanPhase,
   type ScanItemStub,
   fetchDishInfo,
@@ -244,6 +245,8 @@ export default function App() {
   const [venueConfirmed, setVenueConfirmed] = useState(true);
   // „Przejdź do menu" w trakcie skanu — user czyta gotowe pozycje, reszta dochodzi w tle.
   const [browseEarly, setBrowseEarly] = useState(false);
+  // Struktura wszystkich stron złożona i ZAMROŻONA (Faza A gotowa) → pokaż „Otwórz menu" + kartę lokalu.
+  const [structureReady, setStructureReady] = useState(false);
   const [venueQuery, setVenueQuery] = useState("");
 
   useEffect(() => {
@@ -427,6 +430,7 @@ export default function App() {
     setError(null);
     setStatus("scanning");
     setBrowseEarly(false);
+    setStructureReady(false);
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
@@ -479,11 +483,17 @@ export default function App() {
         listCaptures().then(setCaptures).catch(() => {});
       }
 
-      // Skan PARTIAMI: dużą liczbę zdjęć dzielimy na partie po SCAN_BATCH i scalamy
-      // wyniki z deduplikacją (mniejsze, bezpieczne wywołania + widoczny postęp).
+      // Strony NAJSTARSZE→NAJNOWSZE (EXIF DateTimeOriginal) — user zwykle fotografuje menu po kolei,
+      // co daje sensowniejszą strukturę i ciągłość grup. Brak czasu → zachowaj kolejność dodania.
+      const ordered = opts.images
+        .map((im, i) => ({ im, i }))
+        .sort((a, b) => (a.im.takenAt ?? Infinity) - (b.im.takenAt ?? Infinity) || a.i - b.i)
+        .map((x) => x.im);
+      // Skan PARTIAMI po `batchSize` zdjęć (domyślnie 1 = per strona). Większy batch = lepsza ciągłość
+      // grup ciągnących się przez kartki (model widzi je razem). Wyniki scalane z deduplikacją.
+      const BATCH = Math.max(1, Math.round(costPrefs.batchSize || 1));
       const batches: PreparedImage[][] = [];
-      for (let i = 0; i < opts.images.length; i += SCAN_BATCH)
-        batches.push(opts.images.slice(i, i + SCAN_BATCH));
+      for (let i = 0; i < ordered.length; i += BATCH) batches.push(ordered.slice(i, i + BATCH));
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
@@ -574,10 +584,10 @@ export default function App() {
         mergeLock = run.then(() => {}, () => {});
         return run;
       };
-      let doneCount = 0;
-      const bumpProgress = () => {
-        doneCount++;
-        if (batches.length > 1) setScanProgress({ done: Math.min(doneCount * SCAN_BATCH, opts.images.length), total: opts.images.length });
+      let doneImages = 0;
+      const bumpProgress = (n: number) => {
+        doneImages += n;
+        if (opts.images.length > 1) setScanProgress({ done: Math.min(doneImages, opts.images.length), total: opts.images.length });
       };
 
       const runBatch = async (bi: number, batchHint: string | undefined) => {
@@ -594,6 +604,7 @@ export default function App() {
               cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
               model: opts.models.scan,
               enrichModel: opts.models.enrich,
+              structureOnly: true, // FAZA A: tylko struktura (szybko); enrich osobno w Fazie B (/enrich)
             },
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
@@ -605,7 +616,7 @@ export default function App() {
           // (tylko tę partię). Cache skanu sprawi, że jeśli serwer policzył a odpowiedź zginęła —
           // ponowienie tej partii jest darmowe.
           failedBatches.push({ idx: bi, images: batch });
-          bumpProgress();
+          bumpProgress(batch.length);
           return;
         }
         if (lowQuality) {
@@ -614,7 +625,7 @@ export default function App() {
             setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "" }), readable: false, bad: true } }));
           }
           lowQualityCount += batch.length;
-          bumpProgress();
+          bumpProgress(batch.length);
           return;
         }
         if (partialQuality) {
@@ -652,7 +663,7 @@ export default function App() {
           setMenu(merged);
           setScans(await listScans());
         });
-        bumpProgress();
+        bumpProgress(batch.length);
       };
 
       // Partia 0 OSOBNO — ustala bazowe menu + nazwę/kuchnię (kontekst dla pozostałych). Potem
@@ -676,12 +687,9 @@ export default function App() {
         throw new Error("Odczyt menu nie powiódł się (żadna partia nie przeszła) — spróbuj ponownie.");
       }
 
+      // === FAZA A GOTOWA: struktura wszystkich stron złożona i ZAMROŻONA (kolejność/grupy się nie zmienią) ===
       setScanProgress(null);
-      setScanPhase(null);
       setScanCurrentImage(null);
-      setStatus("done");
-      setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
-      setVenueQuery("");
       if (lowQualityCount > 0) {
         Alert.alert("Pominięto słabe zdjęcia", `${lowQualityCount} zdjęć było za słabej jakości — model nie odczytał z nich menu, więc je pominąłem (są oznaczone).`);
       } else if (partialCount > 0) {
@@ -689,30 +697,20 @@ export default function App() {
       }
       // merged jest przypisywane w domknięciach (równoległe partie) — CFA tego nie śledzi, więc
       // po guardzie traktuje je jako never. Runtime jest poprawny (guard realnie sprawdza); asercja.
-      const result = merged as Menu;
-
-      // REUŻYCIE prefetchu: dołącz do menu zdjęcia poglądowe dociągnięte już w trakcie skanu —
-      // dzięki temu pokazują się od razu, a fillDishPhotos je pominie (bez ponownego szukania).
-      result.sections.forEach((sec) =>
-        sec.items.forEach((it) => {
-          if (it && !(it.photos && it.photos.length > 0)) {
-            const pf = prefetchedPhotos.current.get(it.original);
-            if (pf && pf.length > 0) it.photos = pf;
-          }
-        }),
-      );
-      setMenu(result);
-      if (scanId) void updateScanMenu(scanId, result);
-      setScanItems([]);
+      const structureMenu = merged as Menu;
+      setMenu(structureMenu);
+      if (scanId) void updateScanMenu(scanId, structureMenu);
+      setStructureReady(true); // struktura kompletna → ekran skanu pokaże „Otwórz menu" + kartę lokalu
 
       // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
       if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
 
-      // Namierzenie lokalu: mamy nazwę → automatycznie po nazwie (pewne). Brak nazwy →
-      // NIE zgadujemy po GPS automatycznie; ustawiamy tylko kontekst, a user kliknie.
+      // Namierzenie lokalu na ZAMROŻONEJ strukturze (karta na ekranie skanu — user potwierdza/zmienia).
+      // upgradeVenuePhotos jest funkcyjny → komponuje się z Fazą B (enrich patchuje inne pola). Brak
+      // nazwy → tylko kontekst, user kliknie „w pobliżu".
       setFreshRestaurant(null);
       setRestaurantCtx({
-        menu: result,
+        menu: structureMenu,
         location,
         scanId: scanId!,
         lang: opts.targetLang,
@@ -721,22 +719,19 @@ export default function App() {
         current: null,
         candidates: [],
       });
-      if (result.restaurant_name) {
-        void lookupRestaurant(result, location, scanId!, opts.targetLang, setFreshRestaurant, {
-          applyMenu: setMenu,
-        });
+      setVenueConfirmed(false);
+      setVenueQuery("");
+      if (structureMenu.restaurant_name) {
+        void lookupRestaurant(structureMenu, location, scanId!, opts.targetLang, setFreshRestaurant, { applyMenu: setMenu });
       }
 
-      // Tło, równolegle z automatu: (a) tanie zdjęcia poglądowe, (b) pełne opisy dań
-      // (gotowe ad-hoc). Sterowane „Kosztami": wyłączniki + limit dań (reszta na dotknięcie).
-      if (costPrefs.autoPhotos) void fillDishPhotos(result, scanId, result.restaurant_name ?? undefined, setMenu);
-      if (costPrefs.autoDescriptions) void fillDescriptions(result, scanId, opts.targetLang, setMenu);
+      // === FAZA B: enrich w TLE (tłumaczenia/opisy/photo_query) — patch W MIEJSCU, struktura niezmienna ===
+      void runEnrichPhase(structureMenu, scanId!, opts, locationHint);
 
-      // ODPORNOŚĆ: część partii padła → wpuszczamy do menu z tym, co mamy, a brakujące partie
-      // doliczamy w TLE (tylko one — nie od początku). Baner informuje o doliczaniu.
+      // ODPORNOŚĆ: część partii (struktury) padła → doliczamy w TLE (tylko one — nie od początku).
       if (failedBatches.length > 0) {
         setScanIncomplete({ pending: failedBatches.length, working: true });
-        void completeFailedBatches(scanId, opts, locationHint, pickPeekCuisine(), failedBatches, result);
+        void completeFailedBatches(scanId, opts, locationHint, pickPeekCuisine(), failedBatches, structureMenu);
       }
     } catch (e) {
       reportError(e instanceof Error ? e.message : String(e), { stack: e instanceof Error ? e.stack : undefined, label: "scan", context: { images: opts.images.length, model: opts.models.scan } });
@@ -746,6 +741,90 @@ export default function App() {
       setScanPhase(null);
       setScanCurrentImage(null);
       setScanItems([]);
+    }
+  }
+
+  // Patch pozycji po ORYGINALNEJ nazwie (Faza B, enrich w miejscu): tłumaczenie + opis + photo_query.
+  // Struktura zamrożona, więc dokładamy tylko pola tekstowe — bez ruszania kolejności/grup.
+  function patchEnrichByName(m: Menu, stub: ScanItemStub): Menu {
+    let changed = false;
+    const sections = m.sections.map((s) => ({
+      ...s,
+      items: s.items.map((it) => {
+        if (it.original !== stub.original) return it;
+        changed = true;
+        return {
+          ...it,
+          translated: stub.translated || it.translated,
+          description: stub.description || it.description,
+          photo_query: stub.photoQuery || it.photo_query,
+          branded: stub.branded ?? it.branded,
+        };
+      }),
+    }));
+    return changed ? { ...m, sections } : m;
+  }
+
+  // Złóż finalne menu: dołóż pełne pola enrich (składniki/alergeny/kategoria/dietetyka/tłum. sekcji) z
+  // /enrich do ŻYWEJ struktury — keyowane po NAZWIE (odporne na pozycje dodane w tle przez padłe partie),
+  // zachowując już dociągnięte zdjęcia. Pozycje spoza enrichu (np. z padłej partii) zostają nietknięte.
+  function applyEnrich(prev: Menu, enriched: Menu): Menu {
+    const enrByName = new Map<string, Menu["sections"][number]["items"][number]>();
+    enriched.sections.forEach((s) => s.items.forEach((it) => enrByName.set(it.original, it)));
+    const sectTrans = new Map<string, string>();
+    enriched.sections.forEach((s) => sectTrans.set(s.name, s.name_translated));
+    const noteTrans = new Map<string, string>();
+    (enriched.notes ?? []).forEach((n) => noteTrans.set(n.text, n.text_translated));
+    return {
+      ...prev,
+      cuisine: enriched.cuisine || prev.cuisine,
+      sections: prev.sections.map((s) => ({
+        ...s,
+        name_translated: sectTrans.get(s.name) ?? s.name_translated,
+        items: s.items.map((it) => {
+          const e = enrByName.get(it.original);
+          if (!e) return it; // pozycja spoza enrichu (np. z padłej partii) — zostaw jak jest
+          return { ...e, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos };
+        }),
+      })),
+      notes: (prev.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
+    };
+  }
+
+  // FAZA B — wzbogacenie gotowej struktury w TLE (/enrich): tłumaczenia/opisy/photo_query patchowane
+  // W MIEJSCU w miarę napływu (bez zmiany struktury), potem zdjęcia + rozszerzone opisy. Na końcu „done".
+  async function runEnrichPhase(
+    structureMenu: Menu,
+    scanId: string,
+    opts: { targetLang: string; models: Record<ModelRole, ModelId> },
+    locationHint: string | undefined,
+  ) {
+    try {
+      setScanPhase({ label: "Tłumaczę i opisuję dania…" });
+      const onEnrich = (stub: ScanItemStub) => {
+        setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev));
+        setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description } : x)));
+      };
+      const { menu: enriched, usage } = await enrichMenuOnServer(
+        structureMenu,
+        { targetLang: opts.targetLang, locationHint, cuisineHint: pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+        (p) => setScanPhase(scanPhaseLabel(p)),
+        onEnrich,
+      );
+      let finalMenu = structureMenu;
+      setMenu((prev) => { finalMenu = applyEnrich(prev ?? structureMenu, enriched); return finalMenu; });
+      void updateScanMenu(scanId, finalMenu);
+      void addScanUsage(scanId, usage);
+      setScans(await listScans());
+      // Tło (jak dotąd, sterowane „Kosztami"): tanie zdjęcia poglądowe + rozszerzone opisy.
+      if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId, finalMenu.restaurant_name ?? undefined, setMenu);
+      if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId, opts.targetLang, setMenu);
+    } catch {
+      // Enrich padł — zostaje STRUKTURA (oryginalne nazwy). Nie wywalamy menu; user ma co czytać.
+    } finally {
+      setScanPhase(null);
+      setScanItems([]);
+      setStatus("done");
     }
   }
 
@@ -856,6 +935,7 @@ export default function App() {
     setRestaurantCtx(null);
     setVenueConfirmed(true);
     setBrowseEarly(false);
+    setStructureReady(false);
     setVenueQuery("");
     setPeekByUri({});
     setPeekInfo(null);
@@ -1029,7 +1109,7 @@ export default function App() {
     // który by je potwierdzał). Zostają jako zwykłe poglądowe; ponowne szukanie ruszy od czysta.
     const demoted = demoteVenuePhotos(menu);
     if (demoted !== menu) {
-      applyMenu(() => demoted);
+      applyMenu((prev) => (prev ? demoteVenuePhotos(prev) : demoted)); // funkcyjnie na ŻYWYM menu — nie gubi enrichu z Fazy B
       if (scanId) await updateScanMenu(scanId, demoted);
     }
     setRestaurantCtx((prev) => (prev ? { ...prev, current: null, menu: demoted, candidates: [] } : prev));
@@ -1425,7 +1505,7 @@ export default function App() {
     if (!prevVenue?.placeId || prevVenue.placeId === nextVenue.placeId) return m;
     const demoted = demoteVenuePhotos(m);
     if (demoted === m) return m;
-    applyMenu(() => demoted);
+    applyMenu((prev) => (prev ? demoteVenuePhotos(prev) : demoted)); // funkcyjnie na ŻYWYM menu — nie gubi enrichu z Fazy B
     if (scanId) await updateScanMenu(scanId, demoted);
     return demoted;
   }
@@ -2113,10 +2193,20 @@ export default function App() {
                       </ScrollView>
                     </>
                   ) : null}
-                  {menu ? (
-                    <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
-                      <Text style={styles.enterMenuText}>📖 Otwórz menu — przeglądaj, resztę doczytuję w tle →</Text>
-                    </Pressable>
+                  {structureReady ? (
+                    // Struktura gotowa (zamrożona) → potwierdź lokal i/lub wejdź do menu; enrich leci w tle.
+                    <View style={styles.scanReadyBox}>
+                      {freshRestaurant || restaurantLoading ? (
+                        <>
+                          <Text style={styles.scanReadyVenueHdr}>📍 Lokal — potwierdź lub zmień</Text>
+                          {renderRestaurant(freshRestaurant)}
+                        </>
+                      ) : null}
+                      <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
+                        <Text style={styles.enterMenuText}>📖 Otwórz menu →</Text>
+                      </Pressable>
+                      <Text style={styles.scanReadySub}>Struktura gotowa. Tłumaczenia i zdjęcia dochodzą w tle.</Text>
+                    </View>
                   ) : null}
                 </View>
               ) : null}
@@ -2139,7 +2229,7 @@ export default function App() {
                       <ActivityIndicator size="small" color={colors.accent} />
                       <View style={{ flex: 1, marginLeft: 10 }}>
                         <Text style={styles.scanBannerTitle}>
-                          {scanProgress ? `⏳ Skanuję ${scanProgress.done}/${scanProgress.total} stron…` : "⏳ Skanuję dalej…"}
+                          {scanProgress ? `⏳ Skanuję ${scanProgress.done}/${scanProgress.total} stron…` : scanPhase?.label ? `⏳ ${scanPhase.label}` : "⏳ Doczytuję w tle…"}
                         </Text>
                         <Text style={styles.scanBannerSub} numberOfLines={2}>
                           📖 {menu.sections.reduce((n, s) => n + s.items.length, 0)} pozycji — czytaj, reszta dojdzie sama{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
@@ -2474,6 +2564,9 @@ const styles = StyleSheet.create({
   savedNote: { color: colors.accent, fontWeight: "700", fontSize: 15 },
   enterMenuBtn: { marginTop: 18, marginHorizontal: 16, alignSelf: "stretch", backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16 },
   enterMenuText: { color: "#fff", fontWeight: "800", fontSize: 15, textAlign: "center" },
+  scanReadyBox: { alignSelf: "stretch", marginTop: 16 },
+  scanReadyVenueHdr: { fontSize: 13, fontWeight: "800", color: colors.muted, marginHorizontal: 16, marginBottom: 8 },
+  scanReadySub: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: 8, marginHorizontal: 16 },
   scanBanner: { flexDirection: "row", alignItems: "center", backgroundColor: colors.badgeBg, borderRadius: 12, padding: 12, marginBottom: 16 },
   scanBannerTitle: { fontSize: 14, fontWeight: "800", color: colors.accent },
   scanBannerSub: { fontSize: 12, color: colors.muted, marginTop: 2 },

@@ -11,6 +11,19 @@ export interface PreparedImage {
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF zdjęcia, jeśli były zaszyte. */
   exifLocation?: GeoPoint;
+  /** Czas wykonania zdjęcia (EXIF DateTimeOriginal, epoch ms) — do sortowania stron najstarsze→najnowsze. */
+  takenAt?: number;
+}
+
+// EXIF DateTimeOriginal („YYYY:MM:DD HH:MM:SS") → epoch ms. Brak/niepoprawne → undefined.
+function exifToTime(exif: Record<string, unknown> | undefined | null): number | undefined {
+  if (!exif) return undefined;
+  const raw = exif.DateTimeOriginal ?? exif.DateTime ?? exif.DateTimeDigitized;
+  if (typeof raw !== "string") return undefined;
+  const m = raw.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return undefined;
+  const t = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`);
+  return Number.isFinite(t) ? t : undefined;
 }
 
 // Wyższa rozdzielczość/jakość = lepszy OCR gęstych/małych czcionek i cen w menu.
@@ -48,6 +61,7 @@ async function compress(uri: string, exif?: Record<string, unknown> | null): Pro
     base64: result.base64,
     mediaType: "image/jpeg",
     exifLocation: exifToGeo(exif),
+    takenAt: exifToTime(exif),
   };
 }
 

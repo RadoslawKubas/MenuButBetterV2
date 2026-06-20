@@ -221,6 +221,25 @@ export function SettingsView({
             );
           })}
         </View>
+        <Text style={styles.costLimitLabel}>Zdjęć na partię skanu struktury</Text>
+        <Text style={styles.sub}>
+          1 = każda strona osobno (granularny postęp). Więcej = model widzi kartki RAZEM → lepsza ciągłość grup
+          ciągnących się przez strony. Enrich i tak leci osobno po całości.
+        </Text>
+        <View style={styles.chips}>
+          {[1, 2, 3, 5, 10].map((n) => {
+            const active = (costPrefs.batchSize || 1) === n;
+            return (
+              <Pressable
+                key={n}
+                onPress={() => onChangeCostPrefs({ ...costPrefs, batchSize: n })}
+                style={[styles.chip, active && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{n === 10 ? "maks" : n}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </View>
 
       <Text style={styles.section}>Narzędzia</Text>
