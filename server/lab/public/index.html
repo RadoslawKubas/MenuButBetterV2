@@ -76,6 +76,7 @@
     <button class="tab on" id="tabBtn-lab" onclick="switchTab('lab')">🧪 Laboratorium</button>
     <button class="tab" id="tabBtn-logs" onclick="switchTab('logs')">📊 Logi</button>
     <button class="tab" id="tabBtn-cache" onclick="switchTab('cache')">🗄 Cache</button>
+    <button class="tab" id="tabBtn-samples" onclick="switchTab('samples')">📦 Sample</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
   </nav>
   <span class="mut small" id="dir"></span>
@@ -202,6 +203,24 @@
     <div class="mut small" style="margin-bottom:6px">Struktura menu / wzbogacenie pozycji / zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache są oznaczone „🗄 z cache" w logu wyżej.</div>
     <div id="cacheStats"></div>
     <div id="cacheClearBtns" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap"></div>
+  </div>
+</div>
+
+<div id="tab-samples" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>📦 Sample z serwera (online)</h3>
+    <div class="mut small" style="margin-bottom:6px">Migawki wysłane z apki na serwer produkcyjny. Import dociąga je do lokalnej biblioteki (dedup) i kasuje zip z serwera (znacznik „zaimportowany" zostaje — apka go widzi).</div>
+    <div id="srvSampleInfo" class="mut small" style="margin-bottom:6px"></div>
+    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap">
+      <button onclick="loadServerSamples(this)" style="padding:4px 10px">↻ odśwież</button>
+      <button class="primary" onclick="importAllServerSamples(this)" style="padding:4px 10px">⬇ Importuj wszystkie</button>
+    </div>
+    <div id="serverSamples"></div>
+  </div>
+  <div class="panel">
+    <h3>🗄 Archiwum lokalne</h3>
+    <div class="mut small" style="margin-bottom:6px">Zarchiwizowane migawki — przywróć do listy testów albo usuń na stałe.</div>
+    <div id="archiveList"></div>
   </div>
 </div>
 
@@ -726,13 +745,14 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','prices'].forEach(t=>{
+  ['lab','logs','cache','samples','prices'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
+  else if(name==='samples'){ loadServerSamples(); renderArchive(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
@@ -884,6 +904,56 @@ async function savePrice(key,kind,inV,outV){
   await api('/api/prices',body); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog();
 }
 async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog(); }
+
+/* ---- Sample online + archiwum (zakładka 📦 Sample) ---- */
+let SRV_SAMPLES=[];
+async function loadServerSamples(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
+  const info=document.getElementById('srvSampleInfo'), box=document.getElementById('serverSamples');
+  if(!info||!box) return;
+  info.textContent='łączę z serwerem…';
+  let r; try{ r=await api('/api/server-samples'); }catch(e){ info.textContent='błąd połączenia'; return; }
+  if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
+  info.innerHTML = (!r.configured ? '⚠️ Brak tokenu (ustaw LAB_PROD_TOKEN/APP_TOKEN w server/.env). ' : '')
+    + `serwer: <span class="mut">${esc(r.prodUrl||'')}</span>`
+    + (r.enabled===false ? ' · <span class="badge fail">sample na serwerze wyłączone (brak DB)</span>' : '');
+  SRV_SAMPLES=r.samples||[];
+  box.innerHTML = SRV_SAMPLES.length ? SRV_SAMPLES.map(x=>{
+    const m=x.meta||{}; const name=m.name||m.restaurantHint||('sample '+String(x.hash).slice(0,8));
+    return `<div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div><div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
+      <div style="display:flex; gap:6px; white-space:nowrap"><button class="primary" onclick="importServerSample(${x.id},this)" style="padding:3px 8px; font-size:12px">⬇ Importuj</button><button onclick="deleteServerSample(${x.id})" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑</button></div>
+    </div>`;
+  }).join('') : '<div class="mut small">Brak nieimportowanych sampli na serwerze.</div>';
+}
+async function importServerSample(id, btn){
+  if(btn){ btn.disabled=true; btn.textContent='importuję…'; }
+  const r=await api('/api/server-samples/import',{id});
+  if(r&&r.error){ alert('Import: '+r.error); if(btn){btn.disabled=false;btn.textContent='⬇ Importuj';} return; }
+  await loadState(); await loadServerSamples();
+}
+async function deleteServerSample(id){
+  if(!confirm('Usunąć sampel z serwera (cofnięcie wysyłki)?')) return;
+  await api('/api/server-samples/delete',{id}); loadServerSamples();
+}
+async function importAllServerSamples(btn){
+  if(!SRV_SAMPLES.length) return alert('Brak sampli do importu.');
+  if(!confirm(`Zaimportować ${SRV_SAMPLES.length} sampli?`)) return;
+  if(btn) btn.disabled=true;
+  for(const x of [...SRV_SAMPLES]){ await api('/api/server-samples/import',{id:x.id}).catch(()=>{}); }
+  if(btn) btn.disabled=false;
+  await loadState(); await loadServerSamples();
+}
+function renderArchive(){
+  const box=document.getElementById('archiveList'); if(!box) return;
+  const arch=(STATE?.captures||[]).filter(c=>c.archived);
+  box.innerHTML = arch.length ? arch.map(c=>`
+    <div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+      <div><b>🗄 ${esc(c.name||new Date(c.createdAt).toLocaleString())}</b><div class="mut small">${c.images||''} zdj${c.locationHint?' · '+esc(c.locationHint):''}</div></div>
+      <div style="display:flex; gap:6px; white-space:nowrap"><button onclick="archiveFromTab('${c.id}')" style="padding:3px 8px; font-size:12px">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 Usuń</button></div>
+    </div>`).join('') : '<div class="mut small">Archiwum puste.</div>';
+}
+async function archiveFromTab(id){ await api('/api/archive',{captureId:id, archived:false}); await loadState(); renderArchive(); }
 
 loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu
 </script>

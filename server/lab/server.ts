@@ -688,6 +688,51 @@ app.post("/api/import-zip", async (c) => {
   }
 });
 
+// ===== SAMPLE ONLINE: lab pobiera/importuje migawki z PRODUKCYJNEGO serwera =====================
+// Lab (lokalny) sięga po sample do serwera produkcyjnego (tam apka je wysyła). Konfiguracja z env:
+// LAB_PROD_URL (domyślnie Railway) + LAB_PROD_TOKEN/APP_TOKEN (x-app-token).
+const PROD_URL = (process.env.LAB_PROD_URL || "https://menubutbetter-production.up.railway.app").replace(/\/+$/, "");
+const PROD_TOKEN = process.env.LAB_PROD_TOKEN || process.env.APP_TOKEN || "";
+async function prodFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${PROD_URL}${path}`, { ...init, headers: { ...(init?.headers ?? {}), "x-app-token": PROD_TOKEN } });
+}
+
+app.get("/api/server-samples", async (c) => {
+  try {
+    const r = await prodFetch("/samples?pending=1");
+    const d = (await r.json()) as { enabled?: boolean; samples?: unknown[] };
+    return c.json({ prodUrl: PROD_URL, configured: !!PROD_TOKEN, ...d });
+  } catch (e) {
+    return c.json({ error: `Nie połączono z serwerem (${PROD_URL}): ${(e as Error).message}`, prodUrl: PROD_URL }, 502);
+  }
+});
+
+app.post("/api/server-samples/import", async (c) => {
+  const { id } = await c.req.json<{ id: number }>();
+  if (!id) return c.json({ error: "brak id" }, 400);
+  try {
+    const zr = await prodFetch(`/samples/${id}/zip`);
+    if (!zr.ok) return c.json({ error: `pobranie zip: HTTP ${zr.status}` }, 502);
+    const buf = Buffer.from(await zr.arrayBuffer());
+    const res = await ingestZip(buf); // import do lokalnej biblioteki (dedup)
+    await prodFetch(`/samples/${id}/imported`, { method: "POST" }).catch(() => {}); // oznacz + skasuj zip na serwerze
+    return c.json({ ok: true, ...res });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+app.post("/api/server-samples/delete", async (c) => {
+  const { id } = await c.req.json<{ id: number }>();
+  if (!id) return c.json({ error: "brak id" }, 400);
+  try {
+    await prodFetch(`/samples/${id}`, { method: "DELETE" });
+    return c.json({ ok: true });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
 app.post("/api/annotate", async (c) => {
   const { captureId, groundTruth } = await c.req.json<{ captureId: string; groundTruth: GroundTruth | null }>();
   const cap = loadMeta().find((x) => x.id === captureId);
