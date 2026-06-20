@@ -228,7 +228,9 @@ export default function App() {
   const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
-  const venueFinalizedRef = useRef(false); // czy podmiana ★ zdjęć z lokalu już ruszyła (raz na skan)
+  const venueFinalizedRef = useRef(false); // czy lokal zapisany do skanu (raz na skan)
+  const previewStartedRef = useRef(false); // czy ruszyło dociąganie TANICH poglądowych (★ z lokalu czeka na to)
+  const venueUpgradedRef = useRef(false); // czy ★ z lokalu już podmieniane (raz na skan)
   useEffect(() => { freshVenueRef.current = freshRestaurant; }, [freshRestaurant]);
   // Kontekst aktywnej karty lokalu: pozwala wybrać kandydata, wyszukać inny lokal
   // w pobliżu i usunąć dopasowanie — niezależnie od tego, czy to świeży czy zapisany skan.
@@ -447,6 +449,8 @@ export default function App() {
     structureMenuRef.current = null;
     freshVenueRef.current = null;
     venueFinalizedRef.current = false;
+    previewStartedRef.current = false;
+    venueUpgradedRef.current = false;
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
@@ -830,13 +834,12 @@ export default function App() {
       setVenueConfirmed(false);
       setVenueQuery("");
       if (freshVenueRef.current) {
-        // wczesny lookup już znalazł lokal → domknij (zapis + ★ zdjęcia) na zamrożonej strukturze
+        // wczesny lookup już znalazł lokal → domknij (zapis; ★ przez maybeUpgradeVenue gdy ruszą poglądowe)
         void finalizeVenue(structureMenu, scanId!, freshVenueRef.current);
       } else if (!earlyVenueRef.current && structureMenu.restaurant_name) {
-        // onMeta nie zgłosił nazwy w trakcie, ale jest w strukturze → PEŁNY lookup (robi upgrade sam,
-        // więc blokujemy finalizeVenue, żeby nie dublować ★).
-        venueFinalizedRef.current = true;
-        void lookupRestaurant(structureMenu, location, scanId!, opts.targetLang, setFreshRestaurant, { applyMenu: setMenu });
+        // onMeta nie zgłosił nazwy w trakcie, ale jest w strukturze → read-only lookup (skipUpgrade),
+        // a ★ z lokalu pójdzie przez applyEarlyVenue→finalizeVenue→maybeUpgradeVenue (po poglądowych).
+        void lookupRestaurant(structureMenu, location, scanId!, opts.targetLang, applyEarlyVenue, { applyMenu: setMenu, skipUpgrade: true });
       }
       // (jeśli earlyVenueRef ustawiony, ale wynik jeszcze nie doszedł → applyEarlyVenue domknie sam, gdy wróci)
 
@@ -890,6 +893,10 @@ export default function App() {
         setScans(await listScans());
         if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId!, finalMenu.restaurant_name ?? undefined, setMenu);
         if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
+        // Poglądowe ruszyły → teraz wolno podmieniać ★ z lokalu (jeśli lokal już znaleziony; inaczej
+        // zrobi to finalizeVenue gdy lookup wróci). Dzięki temu tanie poglądowe pojawiają się PIERWSZE.
+        previewStartedRef.current = true;
+        maybeUpgradeVenue();
         setScanPhase(null);
         setScanItems([]);
         setStatus("done");
@@ -1136,18 +1143,38 @@ export default function App() {
   // (upgradeVenuePhotos jest funkcyjny → komponuje się z enrichem). Wołane gdy mamy lokal + scanId +
   // zamrożoną strukturę, niezależnie od kolejności (wczesny lookup vs koniec Fazy A). Raz na skan.
   async function finalizeVenue(menu: Menu, scanId: string, venue: RestaurantInfo) {
-    if (venueFinalizedRef.current) return;
-    venueFinalizedRef.current = true;
-    try {
-      await updateScanRestaurant(scanId, venue);
-      setScans(await listScans());
-      if (costPrefs.autoVenuePhotos) {
-        const base = await rebaseVenue(menu, scanId, setMenu, null, venue); // prevVenue null → bez demote
-        void upgradeVenuePhotos(base, scanId, venue, setMenu);
+    if (!venueFinalizedRef.current) {
+      venueFinalizedRef.current = true;
+      try {
+        await updateScanRestaurant(scanId, venue);
+        setScans(await listScans());
+      } catch {
+        /* ciche — karta lokalu i tak jest pokazana */
       }
-    } catch {
-      /* ciche — karta lokalu i tak jest pokazana */
     }
+    // Podmiana ★ z lokalu (wolny krok wizji) DOPIERO gdy ruszyły tanie poglądowe — żeby lista najpierw
+    // dostała szybkie zdjęcia, a ★ z lokalu doszły potem (a nie odwrotnie).
+    maybeUpgradeVenue();
+  }
+
+  // ★ z lokalu — uruchamiane gdy spełnione OBA: ruszyły poglądowe (previewStartedRef) i mamy lokal.
+  // Kto ostatni (preview vs lookup) ten triggeruje. Raz na skan. Działa funkcyjnie na żywym menu.
+  function maybeUpgradeVenue() {
+    if (venueUpgradedRef.current) return;
+    if (!previewStartedRef.current) return;
+    const venue = freshVenueRef.current;
+    const base = structureMenuRef.current;
+    const sid = scanIdRef.current;
+    if (!venue || !base || !costPrefs.autoVenuePhotos) return;
+    venueUpgradedRef.current = true;
+    void (async () => {
+      try {
+        const rebased = await rebaseVenue(base, sid, setMenu, null, venue); // prevVenue null → bez demote
+        void upgradeVenuePhotos(rebased, sid, venue, setMenu);
+      } catch {
+        /* ciche */
+      }
+    })();
   }
 
   // Wczesny (read-only) lookup w trakcie struktury: pokaż kartę, a gdy struktura zamrożona + jest scanId
