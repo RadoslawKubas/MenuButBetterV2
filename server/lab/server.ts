@@ -28,7 +28,7 @@ import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
-import { snapshot, cacheHitsSnapshot } from "../src/apiLog.ts";
+import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
 import { cacheStats, cacheClear, initCache, type CacheKind } from "../src/cache.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -83,12 +83,16 @@ interface CostDelta {
   bytesSent: number;
   bytesRecv: number;
 }
+// Zużycie tokenów PER MODEL (surowe liczby) — $ liczone osobno z AKTUALNEGO cennika, by zmiana
+// ceny przeliczała statystyki. Provider „claude" może być Opus/Sonnet o różnych cenach.
+interface ModelDelta { model: string; inTok: number; outTok: number; calls: number }
 interface CostEntry {
   ts: number;
   ms: number;
   op: string; // np. "sim-scan", "sim-dish"
   meta: Record<string, unknown>; // model, danie, lokal itp.
-  delta: CostDelta[];
+  delta: CostDelta[]; // per provider: calls + bajty (do API/transferu); inTok/outTok/costUsd legacy
+  models?: ModelDelta[]; // per model: tokeny do PRZELICZENIA z cennika (nowe wpisy)
   cacheHits?: number; // ile operacji obsłużono z CACHE (zero płatnego wywołania, tylko koszt bazy)
 }
 function providerTotals(): Record<string, Omit<CostDelta, "provider">> {
@@ -98,8 +102,13 @@ function providerTotals(): Record<string, Omit<CostDelta, "provider">> {
   }
   return m;
 }
+function modelTotals(): Record<string, { inTok: number; outTok: number; calls: number; costUsd: number }> {
+  const m: Record<string, { inTok: number; outTok: number; calls: number; costUsd: number }> = {};
+  for (const r of modelSnapshot()) m[r.model] = { inTok: r.inTok, outTok: r.outTok, calls: r.calls, costUsd: r.costUsd };
+  return m;
+}
 /** Liczy deltę zużycia (apiLog: snapshot `before` vs teraz) i dopisuje wpis do logu kosztów. */
-function recordCostDelta(op: string, meta: Record<string, unknown>, before: Record<string, Omit<CostDelta, "provider">>, t0: number, cacheBefore = 0): void {
+function recordCostDelta(op: string, meta: Record<string, unknown>, before: Record<string, Omit<CostDelta, "provider">>, t0: number, cacheBefore = 0, modelBefore: Record<string, { inTok: number; outTok: number; calls: number; costUsd: number }> = {}): void {
   const after = providerTotals();
   const cacheHits = cacheHitsSnapshot().total - cacheBefore;
   const delta: CostDelta[] = [];
@@ -116,9 +125,17 @@ function recordCostDelta(op: string, meta: Record<string, unknown>, before: Reco
     };
     if (d.calls || d.inTok || d.outTok || d.bytesSent || d.bytesRecv) delta.push(d);
   }
+  // Per-model delta (do przeliczania $ z cennika).
+  const modelAfter = modelTotals();
+  const models: ModelDelta[] = [];
+  for (const [model, a] of Object.entries(modelAfter)) {
+    const b = modelBefore[model] ?? { inTok: 0, outTok: 0, calls: 0, costUsd: 0 };
+    const md: ModelDelta = { model, inTok: a.inTok - b.inTok, outTok: a.outTok - b.outTok, calls: a.calls - b.calls };
+    if (md.inTok || md.outTok || md.calls) models.push(md);
+  }
   try {
     if (!existsSync(RESULTS_DIR)) mkdirSync(RESULTS_DIR, { recursive: true });
-    appendFileSync(COSTLOG_FILE, JSON.stringify({ ts: Date.now(), ms: Date.now() - t0, op, meta, delta, cacheHits } satisfies CostEntry) + "\n");
+    appendFileSync(COSTLOG_FILE, JSON.stringify({ ts: Date.now(), ms: Date.now() - t0, op, meta, delta, models, cacheHits } satisfies CostEntry) + "\n");
   } catch {
     /* log kosztów to dodatek — nie blokuj operacji */
   }
@@ -126,10 +143,11 @@ function recordCostDelta(op: string, meta: Record<string, unknown>, before: Reco
 /** Owija operację: liczy DELTĘ zużycia (apiLog przed/po) i dopisuje do logu kosztów. */
 async function withCostLog<T>(op: string, meta: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
   const before = providerTotals();
+  const modelBefore = modelTotals();
   const cacheBefore = cacheHitsSnapshot().total;
   const t0 = Date.now();
   const res = await fn();
-  recordCostDelta(op, meta, before, t0, cacheBefore);
+  recordCostDelta(op, meta, before, t0, cacheBefore, modelBefore);
   return res;
 }
 function readCostLog(): CostEntry[] {
@@ -705,6 +723,7 @@ app.post("/api/sim-scan", async (c) => {
   const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
   const t0 = Date.now();
   const costBefore = providerTotals(); // do logu kosztów (peek + scan + namierzenie lokalu)
+  const modelBefore = modelTotals();
   const cacheBefore = cacheHitsSnapshot().total;
   // Peek (jak w apce) — z pierwszego zdjęcia; jego kuchnia trafia jako cuisineHint do skanu.
   let peek: any = null;
@@ -768,7 +787,7 @@ app.post("/api/sim-scan", async (c) => {
     all[idx]!.labScan = labScan;
     saveMeta(all);
   }
-  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0, cacheBefore);
+  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0, cacheBefore, modelBefore);
   return c.json({ ms: Date.now() - t0, usage, cached: false, ...labScan });
   } catch (e) {
     console.error("sim-scan error:", e);
@@ -881,23 +900,47 @@ app.get("/api/cost-log", (c) => {
   const now = Date.now();
   const cutoff = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
   const egress = otherRate("egress");
+  // PRZELICZENIE z AKTUALNEGO cennika (override > MODELS) — zmiana ceny przelicza całą historię.
+  const ovAll = loadPriceOverrides();
+  const AI_PROV = new Set(["claude", "openai", "google"]);
+  const PER_CALL = new Set(["google_places", "serper", "serpapi"]);
+  const rate = (model: string) => { const ov = ovAll[model]; const def = (MODELS as Record<string, { price: { in: number; out: number } }>)[model]; return { in: ov?.in ?? def?.price.in ?? 0, out: ov?.out ?? def?.price.out ?? 0 }; };
+  const tokCostOf = (models?: ModelDelta[]) => (models ?? []).reduce((n, m) => { const r = rate(m.model); return n + (m.inTok / 1e6) * r.in + (m.outTok / 1e6) * r.out; }, 0);
+  const apiCostOf = (delta: CostDelta[]) => delta.reduce((n, d) => n + (PER_CALL.has(d.provider) ? (d.calls / 1000) * otherRate(d.provider) : 0), 0);
+  const provCost = (e: CostEntry, d: CostDelta) => AI_PROV.has(d.provider)
+    ? (e.models ?? []).filter((m) => apiTag(m.model) === d.provider).reduce((n, m) => { const r = rate(m.model); return n + (m.inTok / 1e6) * r.in + (m.outTok / 1e6) * r.out; }, 0)
+    : (PER_CALL.has(d.provider) ? (d.calls / 1000) * otherRate(d.provider) : 0);
   const sumD = (e: CostEntry, f: keyof CostDelta) => e.delta.reduce((n, d) => n + (d[f] as number), 0);
   const enrich = (e: CostEntry) => {
-    const tokenCost = sumD(e, "costUsd");
     const bytesSent = sumD(e, "bytesSent");
     const bytesRecv = sumD(e, "bytesRecv");
+    const tokenCost = e.models ? tokCostOf(e.models) : sumD(e, "costUsd"); // stare wpisy: fallback
+    const apiCost = apiCostOf(e.delta);
     const dataCost = (bytesSent / 1e9) * egress;
-    return { ...e, tokenCost, bytesSent, bytesRecv, inTok: sumD(e, "inTok"), outTok: sumD(e, "outTok"), calls: sumD(e, "calls"), dataCost, totalCost: tokenCost + dataCost };
+    const inTok = e.models ? e.models.reduce((n, m) => n + m.inTok, 0) : sumD(e, "inTok");
+    const outTok = e.models ? e.models.reduce((n, m) => n + m.outTok, 0) : sumD(e, "outTok");
+    return { ...e, tokenCost, apiCost, bytesSent, bytesRecv, inTok, outTok, calls: sumD(e, "calls"), dataCost, totalCost: tokenCost + apiCost + dataCost };
   };
   const entries = readCostLog().filter((e) => e.ts >= cutoff).map(enrich).reverse();
   const agg = entries.reduce(
     (a, e) => ({
       count: a.count + 1, calls: a.calls + e.calls, inTok: a.inTok + e.inTok, outTok: a.outTok + e.outTok,
-      tokenCost: a.tokenCost + e.tokenCost, bytesSent: a.bytesSent + e.bytesSent, bytesRecv: a.bytesRecv + e.bytesRecv,
+      tokenCost: a.tokenCost + e.tokenCost, apiCost: a.apiCost + e.apiCost, bytesSent: a.bytesSent + e.bytesSent, bytesRecv: a.bytesRecv + e.bytesRecv,
       dataCost: a.dataCost + e.dataCost, totalCost: a.totalCost + e.totalCost,
     }),
-    { count: 0, calls: 0, inTok: 0, outTok: 0, tokenCost: 0, bytesSent: 0, bytesRecv: 0, dataCost: 0, totalCost: 0 },
+    { count: 0, calls: 0, inTok: 0, outTok: 0, tokenCost: 0, apiCost: 0, bytesSent: 0, bytesRecv: 0, dataCost: 0, totalCost: 0 },
   );
+  // OSZCZĘDNOŚCI z cache: dla operacji z trafieniem szacujemy zaoszczędzone $ jako (średni koszt
+  // MISS tej operacji − jej obecny koszt) i tokeny jako średnie z miss. Wszystko z aktualnego cennika.
+  const missByOp: Record<string, { n: number; cost: number; inTok: number; outTok: number }> = {};
+  for (const e of entries) if (!e.cacheHits) { const m = (missByOp[e.op] = missByOp[e.op] || { n: 0, cost: 0, inTok: 0, outTok: 0 }); m.n++; m.cost += e.totalCost; m.inTok += e.inTok; m.outTok += e.outTok; }
+  const savings = { count: 0, cost: 0, inTok: 0, outTok: 0 };
+  for (const e of entries) if (e.cacheHits) {
+    const m = missByOp[e.op]; if (!m || !m.n) continue;
+    savings.count += e.cacheHits;
+    savings.cost += Math.max(0, m.cost / m.n - e.totalCost);
+    savings.inTok += m.inTok / m.n; savings.outTok += m.outTok / m.n;
+  }
   // GRUPOWANIE per menu: skan + wszystkie dalsze operacje na tym samym samplu (captureId),
   // a gdy brak captureId — po nazwie lokalu. Każda grupa: suma + rozbicie per provider + operacje.
   const meta = loadMeta();
@@ -913,27 +956,29 @@ app.get("/api/cost-log", (c) => {
     return { key: "—", label: "Inne (niepowiązane z menu)" };
   };
   type Prov = { provider: string; calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number };
-  const gmap: Record<string, { key: string; label: string; totalCost: number; tokenCost: number; dataCost: number; count: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
+  const gmap: Record<string, { key: string; label: string; totalCost: number; tokenCost: number; apiCost: number; dataCost: number; count: number; cacheHits: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
   for (const e of entries) {
     const { key, label } = groupOf(e);
-    const g = (gmap[key] = gmap[key] || { key, label, totalCost: 0, tokenCost: 0, dataCost: 0, count: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
+    const g = (gmap[key] = gmap[key] || { key, label, totalCost: 0, tokenCost: 0, apiCost: 0, dataCost: 0, count: 0, cacheHits: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
     g.totalCost += e.totalCost;
     g.tokenCost += e.tokenCost;
+    g.apiCost += e.apiCost;
     g.dataCost += e.dataCost;
     g.bytesSent += e.bytesSent;
     g.bytesRecv += e.bytesRecv;
+    g.cacheHits += e.cacheHits || 0;
     g.count++;
     g.ts = Math.max(g.ts, e.ts);
     for (const d of e.delta) {
       const p = (g.byProvider[d.provider] = g.byProvider[d.provider] || { provider: d.provider, calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 });
-      p.calls += d.calls; p.inTok += d.inTok; p.outTok += d.outTok; p.costUsd += d.costUsd; p.bytesSent += d.bytesSent; p.bytesRecv += d.bytesRecv;
+      p.calls += d.calls; p.inTok += d.inTok; p.outTok += d.outTok; p.costUsd += provCost(e, d); p.bytesSent += d.bytesSent; p.bytesRecv += d.bytesRecv;
     }
     g.entries.push(e);
   }
   const groups = Object.values(gmap)
     .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
     .sort((a, b) => b.ts - a.ts);
-  return c.json({ period, egressUsdPerGB: egress, agg, groups });
+  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups });
 });
 
 app.post("/api/cost-log-clear", (c) => {

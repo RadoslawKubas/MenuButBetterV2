@@ -238,7 +238,7 @@ async function extractMenuOpenAI(
   });
 
   const usage = usageFromOpenAI(model, usageRaw);
-  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   // Relay do API: wysłane ≈ base64 obrazów (dominują), odebrane ≈ długość odpowiedzi.
   recordBytes(tag, images.reduce((n, i) => n + i.base64.length, 0), text.length);
   logUsage(`menu obrazów=${images.length} (${tag})`, model, usage);
@@ -306,7 +306,7 @@ export async function extractMenu(
 
   // Zużycie tokenów + koszt (do licznika w apce + diagnostyki).
   const usage = usageFrom(model, response.usage);
-  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   const claudeText = response.content.find((b) => b.type === "text");
   recordBytes("claude", images.reduce((n, i) => n + i.base64.length, 0), claudeText?.type === "text" ? claudeText.text.length : 0);
   logUsage(`menu obrazów=${images.length} stop=${response.stop_reason}`, model, usage);

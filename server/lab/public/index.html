@@ -262,10 +262,12 @@ async function refreshState(btn){
   setTimeout(()=>{ btn.textContent=t; btn.disabled=false; }, 1500);
 }
 
+let PRICE_MAP={}; // id modelu → {in,out,overridden} z AKTUALNEGO cennika (override > bazowa)
+function modelPrice(m){ return PRICE_MAP[m.id] || m.price; }
 function renderModels() {
-  document.getElementById('models').innerHTML = STATE.models.map(m =>
-    `<div class="chip ${PICKED_MODELS.has(m.id)?'on':''}" onclick="toggleModel('${m.id}')">${m.label} <span class="mut small">$${m.price.in}/${m.price.out}</span></div>`
-  ).join('');
+  document.getElementById('models').innerHTML = STATE.models.map(m => { const pr=modelPrice(m);
+    return `<div class="chip ${PICKED_MODELS.has(m.id)?'on':''}" onclick="toggleModel('${m.id}')">${m.label} <span class="mut small" title="${pr.overridden?'cena z Twojej podmiany (Cennik)':'cena bazowa'}">$${pr.in}/${pr.out}${pr.overridden?' ✎':''}</span></div>`;
+  }).join('');
   document.getElementById('judgeModels').innerHTML = STATE.models.map(m =>
     `<div class="chip ${JUDGE_MODEL===m.id?'on':''}" onclick="setJudge('${m.id}')">${m.label}</div>`
   ).join('');
@@ -734,11 +736,14 @@ async function loadCostLog(){
   const r=await api('/api/cost-log?period='+COST_PERIOD);
   COST_GROUPS=r.groups||[]; EGRESS_RATE=r.egressUsdPerGB||0.1; const a=r.agg||{};
   document.getElementById('costInfo').textContent='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')';
+  const sv=r.savings||{count:0,cost:0,inTok:0,outTok:0};
   document.getElementById('costAgg').innerHTML=`
     <div class="step" style="margin-top:8px">
       <div style="font-size:18px; font-weight:800; color:var(--acc)">Σ ${fmtUsd(a.totalCost)} <span class="mut small">(${a.count||0} operacji, ${COST_GROUPS.length} menu)</span></div>
-      <div class="mut small" style="margin-top:4px">tokeny: ${fmtUsd(a.tokenCost)} · transfer: ${fmtUsd(a.dataCost)} (egress $${EGRESS_RATE}/GB)</div>
+      <div class="mut small" style="margin-top:4px">tokeny: ${fmtUsd(a.tokenCost)} · API: ${fmtUsd(a.apiCost)} · transfer: ${fmtUsd(a.dataCost)} (egress $${EGRESS_RATE}/GB)</div>
       <div class="mut small">tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out · wywołań API ${a.calls||0} · ⬆️ ${fmtBytes(a.bytesSent)} ⬇️ ${fmtBytes(a.bytesRecv)}</div>
+      <div class="mut small" style="margin-top:3px">💲 wszystko liczone wg <b>aktualnego cennika</b> — zmień cenę w zakładce Cennik, a tu się przeliczy.</div>
+      ${sv.count?`<div style="margin-top:6px; padding-top:6px; border-top:1px solid var(--line)"><b style="color:var(--ok)">🗄 Oszczędności z cache (szac.): ${fmtUsd(sv.cost)}</b> <span class="mut small">· ${sv.count} trafień · ~${fmtTokk(Math.round(sv.inTok))} in / ${fmtTokk(Math.round(sv.outTok))} out tok niewysłane</span></div>`:''}
     </div>`;
   document.getElementById('costLog').innerHTML = COST_GROUPS.length ? COST_GROUPS.map((g,gi)=>`
     <div class="cand" onclick="toggleCostGroup(${gi})">
@@ -798,6 +803,8 @@ async function refreshPrices(btn){
 }
 async function loadPrices(){
   const r=await api('/api/prices');
+  PRICE_MAP={}; (r.models||[]).forEach(m=>PRICE_MAP[m.id]={in:m.in,out:m.out,overridden:m.overridden});
+  if(STATE) renderModels(); // chipy modeli wg aktualnego cennika (STATE, nie window.STATE — to `let`)
   const src=(u)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener">źródło ↗</a>`:'';
   const mrows=(r.models||[]).map(m=>`<tr>
     <td><b>${esc(m.label)}</b>${m.overridden?' <span class="badge venue">edyt.</span>':''}<br><span class="mut" style="font-size:10px">${src(m.source)}</span></td>
@@ -822,5 +829,5 @@ async function savePrice(key,kind,inV,outV){
 }
 async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog(); }
 
-loadState();
+loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu
 </script>

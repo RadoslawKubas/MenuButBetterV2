@@ -91,12 +91,24 @@ export function record(provider: Provider, op: string, ok: boolean, ms: number, 
   if (!ok) logEvent({ type: "error", provider, op, data: { ms: Math.round(ms), detail: detail?.slice(0, 300) ?? null } });
 }
 
-/** Dokłada zużycie tokenów + koszt do providera (dla AI). Wołane po policzeniu usage. */
-export function recordUsage(provider: Provider, inputTokens: number, outputTokens: number, costUsd: number): void {
+// Zużycie tokenów PER MODEL — żeby koszt dało się PRZELICZYĆ wg aktualnego cennika (provider
+// „claude" może być Opus albo Sonnet o różnych cenach). Liczby surowe; $ liczone z cennika.
+const modelStore = new Map<string, { inTok: number; outTok: number; costUsd: number; calls: number }>();
+export function modelSnapshot(): { model: string; inTok: number; outTok: number; costUsd: number; calls: number }[] {
+  return [...modelStore.entries()].map(([model, s]) => ({ model, ...s }));
+}
+
+/** Dokłada zużycie tokenów + koszt do providera (dla AI) i — gdy znany — per MODEL. */
+export function recordUsage(provider: Provider, inputTokens: number, outputTokens: number, costUsd: number, model?: string): void {
   const s = getState(provider);
   s.inputTokens += inputTokens;
   s.outputTokens += outputTokens;
   s.costUsd += costUsd;
+  if (model) {
+    const m = modelStore.get(model) ?? { inTok: 0, outTok: 0, costUsd: 0, calls: 0 };
+    m.inTok += inputTokens; m.outTok += outputTokens; m.costUsd += costUsd; m.calls += 1;
+    modelStore.set(model, m);
+  }
 }
 
 /** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude). Re-rzuca błąd. */

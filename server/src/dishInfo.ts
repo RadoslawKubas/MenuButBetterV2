@@ -82,7 +82,7 @@ export async function describeDish(
     const out = resp.choices[0]?.message?.content;
     if (!out) throw new Error(`Brak odpowiedzi modelu (${tag}, finish=${resp.choices[0]?.finish_reason ?? "?"}).`);
     const usage = usageFromOpenAI(model, resp.usage);
-    recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+    recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
     logUsage(`dish-info (${tag})`, model, usage);
     if (useCache) void cacheSet("dish-info", ck, out, { lang: input.targetLang });
     return { text: out, usage };
@@ -104,7 +104,7 @@ export async function describeDish(
     throw new Error(`Brak odpowiedzi (stop_reason=${response.stop_reason}).`);
   }
   const usage = usageFrom(model, response.usage);
-  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   logUsage("dish-info", model, usage);
   if (useCache) void cacheSet("dish-info", ck, text.text, { lang: input.targetLang });
   return { text: text.text, usage };

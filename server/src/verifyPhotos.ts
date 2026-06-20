@@ -197,7 +197,7 @@ export async function scoreDishPhotos(
       }),
     );
     const usage = usageFrom(model, resp.usage);
-    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
     const text = resp.content.find((b) => b.type === "text");
     if (text && text.type === "text") applyScores(text.text, scores, textOverlay);
     persist();

@@ -94,7 +94,7 @@ export async function quickPeek(
       }),
     );
     const usage = usageFrom(model, resp.usage);
-    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
+    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
     const text = resp.content.find((b) => b.type === "text");
     return { result: parse(text && text.type === "text" ? text.text : null), usage };
   } catch {

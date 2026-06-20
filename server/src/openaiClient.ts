@@ -78,7 +78,7 @@ export async function openaiVisionJson(opts: {
   if (reasoning) params.reasoning_effort = opts.reasoningEffort ?? "minimal";
   const resp = await track(tag, opts.op, () => openai.chat.completions.create(params));
   const usage = usageFromOpenAI(opts.model, resp.usage);
-  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
+  recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, opts.model);
   const choice = resp.choices[0];
   return { json: choice?.message?.content ?? null, usage };
 }
