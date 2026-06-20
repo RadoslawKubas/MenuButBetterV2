@@ -487,6 +487,7 @@ export default function App() {
       const failedBatches: { idx: number; images: PreparedImage[] }[] = [];
       let anyCached = false;
       let lowQualityCount = 0; // ile fotek model odrzucił jako za słabej jakości (do ostrzeżenia)
+      let partialCount = 0; // ile fotek odczytano, ale słaba jakość → wynik może być niepełny
       setScanIncomplete(null);
       setScanFromCache(false);
 
@@ -565,9 +566,9 @@ export default function App() {
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
           : opts.hint.trim() || undefined;
-        let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean;
+        let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean, partialQuality: boolean;
         try {
-          ({ menu: incoming, usage, cached, lowQuality } = await scanMenu(
+          ({ menu: incoming, usage, cached, lowQuality, partialQuality } = await scanMenu(
             {
               images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
               targetLang: opts.targetLang,
@@ -597,6 +598,14 @@ export default function App() {
           lowQualityCount += batch.length;
           if (batches.length > 1) setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, opts.images.length), total: opts.images.length });
           continue;
+        }
+        if (partialQuality) {
+          // Odczytano, ale SŁABA jakość (np. działy ok, pozycje za małe) → wynik może być niepełny.
+          // Zostawiamy treść (scalamy niżej), tylko oznaczamy fotkę MIĘKKO i ostrzeżemy usera.
+          for (const img of batch) {
+            setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "", readable: true, bad: false }), partial: true } }));
+          }
+          partialCount += batch.length;
         }
         if (cached) anyCached = true;
 
@@ -646,6 +655,8 @@ export default function App() {
       setVenueQuery("");
       if (lowQualityCount > 0) {
         Alert.alert("Pominięto słabe zdjęcia", `${lowQualityCount} zdjęć było za słabej jakości — model nie odczytał z nich menu, więc je pominąłem (są oznaczone).`);
+      } else if (partialCount > 0) {
+        Alert.alert("Słaba jakość zdjęcia", `${partialCount > 1 ? `${partialCount} zdjęć było` : "Zdjęcie było"} słabej jakości — odczytałem co się dało, ale część pozycji mogła się nie zmieścić. Dla pełnego menu zrób ostrzejsze/bliższe zdjęcie.`);
       }
       const result = merged;
 
@@ -1892,6 +1903,10 @@ export default function App() {
                               <View style={styles.thumbBad}>
                                 <Text style={styles.thumbBadText}>⚠️ słaba jakość</Text>
                               </View>
+                            ) : peekByUri[img.uri]?.partial ? (
+                              <View style={styles.thumbPartial}>
+                                <Text style={styles.thumbBadText}>⚠️ niepełne</Text>
+                              </View>
                             ) : null}
                           </View>
                         ))}
@@ -2296,6 +2311,7 @@ const styles = StyleSheet.create({
   thumb: { width: 80, height: 100, borderRadius: 8, backgroundColor: colors.badgeBg },
   thumbBadDim: { opacity: 0.45 },
   thumbBad: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "rgba(160,30,30,0.92)", paddingVertical: 2, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
+  thumbPartial: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "rgba(190,120,20,0.92)", paddingVertical: 2, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
   thumbBadText: { color: "#fff", fontSize: 9, fontWeight: "800", textAlign: "center" },
   thumbRemove: {
     position: "absolute",

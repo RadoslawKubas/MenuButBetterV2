@@ -403,7 +403,7 @@ function renderCaptures() {
           <div class="nm">${c.archived?'🗄 ':''}${c.name || new Date(c.createdAt).toLocaleString()}</div>
           <div class="sub">${c.images} zdj · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
           <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
-          ${c.labScan?`<div class="sub" style="color:var(--acc)">💾 zapisany skan: ${c.labScan.scanModel} · ${c.labScan.itemCount} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
+          ${c.labScan?`<div class="sub" style="color:var(--acc)">💾 zapisany skan: ${c.labScan.scanModel} · ${c.labScan.itemCount} poz.${c.labScan.hasVenue?' · +lokal':''}${c.labScan.unreadable?' · ✗ nieczytelne':c.labScan.poorQuality?' · ⚠ słaba jakość':''}</div>`:''}
           <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
         </div>
       </div>
@@ -732,7 +732,8 @@ async function simScan(force){
     const tag = r.cached ? `💾 zapisany skan (${esc(r.scanModel||'?')})` : `✓ świeży skan zapisany (${esc(r.scanModel||'?')}) · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms`;
     const NOTE_ICO={wait:'⏱',fee:'➕',tax:'🧾',tip:'💶',hours:'🕒',info:'ℹ️'};
     const notesHtml = SIM.notes.length ? `<div class="step" style="margin-top:6px"><div class="mut small" style="font-weight:700">ℹ️ Adnotacje (${SIM.notes.length}) — wydzielone, NIE dania:</div>${SIM.notes.map(n=>`<div class="mut small">${NOTE_ICO[n.kind]||'ℹ️'} ${esc(n.text_translated||n.text)} <span style="opacity:.6">[${esc(n.scope)}${n.section_index!=null?' §'+n.section_index:''}]</span></div>`).join('')}</div>` : '';
-    document.getElementById('simInfo').innerHTML=`${tag} · ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji<span class="mut small">${esc(pk)}</span>`+notesHtml;
+    const qBadge = r.menu.unreadable ? ' <span class="badge fail">✗ nieczytelne</span>' : r.menu.poorQuality ? ' <span class="badge fail" title="działy odczytane, ale pozycje za małe — wynik może być niepełny">⚠ słaba jakość</span>' : '';
+    document.getElementById('simInfo').innerHTML=`${tag} · ${esc(r.menu.restaurantName||'—')} · ${esc(r.menu.cuisine||'—')} · ${r.items.length} pozycji${qBadge}<span class="mut small">${esc(pk)}</span>`+notesHtml;
     renderSimVenue(); renderSimItems();
     if(!r.cached) loadState(); // odśwież wskaźnik „zapisany skan" na liście
   }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
@@ -1080,7 +1081,7 @@ function sampleCard(c, archived){
       ${c.groundTruth
         ? `<div class="small" style="color:var(--ok); cursor:pointer" title="otwórz w Mapach Google (potwierdź lokal)" onclick="openGtMaps('${c.id}')">✓ lokal: ${esc(c.groundTruth.name)}${c.groundTruth.address?` · ${esc(c.groundTruth.address)}`:''} 🗺</div>`
         : `<div class="mut small" style="opacity:.7">✗ brak przypisanego lokalu</div>`}
-      ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
+      ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}${c.labScan.unreadable?' · <span class="badge fail">✗ nieczytelne</span>':c.labScan.poorQuality?' · <span class="badge fail" title="działy odczytane, ale pozycje za małe — wynik może być niepełny">⚠ słaba jakość</span>':''}</div>`:''}
       <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
         <button onclick="editSampleName('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ nazwa</button>
         <button onclick="editCaptureResult('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ wynik</button>

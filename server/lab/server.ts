@@ -200,7 +200,7 @@ interface LabScan {
   scanModel: string;
   at: number;
   peek: unknown;
-  menu: { restaurantName: string | null; cuisine: string; itemCount: number; notes?: unknown[] };
+  menu: { restaurantName: string | null; cuisine: string; itemCount: number; notes?: unknown[]; poorQuality?: boolean; unreadable?: boolean };
   items: unknown[];
   venue: unknown;
 }
@@ -570,7 +570,7 @@ app.get("/api/state", (c) => {
       ? { restaurantName: cap.result.restaurantName ?? null, cuisine: cap.result.cuisine ?? null }
       : null,
     labScan: cap.labScan
-      ? { scanModel: cap.labScan.scanModel, at: cap.labScan.at, itemCount: cap.labScan.menu.itemCount, hasVenue: !!cap.labScan.venue }
+      ? { scanModel: cap.labScan.scanModel, at: cap.labScan.at, itemCount: cap.labScan.menu.itemCount, hasVenue: !!cap.labScan.venue, poorQuality: !!cap.labScan.menu.poorQuality, unreadable: !!cap.labScan.menu.unreadable }
       : null,
     groundTruth: gtFor(cap),
     archived: isArchived(cap),
@@ -883,7 +883,7 @@ app.post("/api/sim-scan", async (c) => {
     }
   }
   const emodel = (enrichModel && enrichModel in MODELS ? enrichModel : model) as ModelId;
-  const { menu, usage } = await extractMenu(images, {
+  const { menu, usage, readable, poorQuality } = await extractMenu(images, {
     targetLang: "polski",
     locationHint: cap.locationHint,
     cuisineHint: peek?.cuisine || undefined,
@@ -927,7 +927,7 @@ app.post("/api/sim-scan", async (c) => {
     scanModel: model,
     at: Date.now(),
     peek,
-    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, itemCount: items.length, notes: menu.notes ?? [] },
+    menu: { restaurantName: menu.restaurant_name, cuisine: menu.cuisine, itemCount: items.length, notes: menu.notes ?? [], poorQuality: poorQuality === true, unreadable: readable === false },
     items,
     venue,
   };

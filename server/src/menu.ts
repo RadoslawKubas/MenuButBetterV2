@@ -195,6 +195,9 @@ export const STRUCTURE_SYSTEM = [
   "scope='section', inaczej null) i `kind` (wait/fee/tax/tip/hours/info). Gdy brak adnotacji — `notes` puste.",
   "Ustaw `readable=false`, gdy zdjęcia są ZA SŁABEJ JAKOŚCI, by cokolwiek odczytać (mocno rozmazane, za ciemne,",
   "prześwietlone, ucięte, albo to nie menu) — wtedy zostaw `sections` puste. W zwykłym przypadku `readable=true`.",
+  "Ustaw `low_quality=true`, gdy jakość jest SŁABA, ale częściowo dało się odczytać (np. widać nazwy działów,",
+  "lecz pozycje są za małe/rozmyte/ucięte i odczyt może być NIEPEŁNY lub niepewny) — mimo to wypisz wszystko,",
+  "co dało się odczytać. Przy wyraźnym, pełnym odczycie `low_quality=false`.",
   "Nie wymyślaj pozycji, których nie ma na zdjęciach.",
 ].join(" ");
 
@@ -345,7 +348,7 @@ function contextTextStructure(opts: ExtractOptions, n: number): string {
 export async function extractMenu(
   images: InputImage[],
   opts: ExtractOptions,
-): Promise<{ menu: Menu; usage: Usage; cached?: boolean; readable?: boolean }> {
+): Promise<{ menu: Menu; usage: Usage; cached?: boolean; readable?: boolean; poorQuality?: boolean }> {
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
   const enrichModel: ModelId = opts.enrichModel && isModelId(opts.enrichModel) ? opts.enrichModel : model;
@@ -376,8 +379,9 @@ export async function extractMenu(
   total = addUsage(total, enriched.usage);
 
   const readable = structure.readable !== false; // brak pola → traktuj jako czytelne
+  const poorQuality = structure.low_quality === true; // czytelne, ale słaba jakość → wynik może być niepełny
   if (!opts.noCache) void cacheSet("menu-scan", ck, enriched.menu, { lang: opts.targetLang });
-  return { menu: enriched.menu, usage: total, readable };
+  return { menu: enriched.menu, usage: total, readable, poorQuality };
 }
 
 /** Przebieg 1 (Claude): vision → STRUKTURA menu (streaming nazw). */

@@ -195,7 +195,7 @@ app.post("/scan", async (c) => {
     }, wantSteps ? 2000 : 5000);
     try {
       const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
-      const { menu, usage, cached, readable } = await extractMenu(images, {
+      const { menu, usage, cached, readable, poorQuality } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
@@ -244,11 +244,14 @@ app.post("/scan", async (c) => {
       });
       // Model skanujący stwierdził „za słaba jakość" (np. mimo że peek przepuścił) → zapamiętaj złe
       // kadry (nie marnuj modelu ponownie) i daj apce sygnał, by ostrzec usera i nie wysyłać tego znów.
-      const lowQuality = readable === false;
+      const lowQuality = readable === false; // nic nie odczytano → odrzuć + zapamiętaj jako zły kadr
       if (lowQuality) {
         for (const img of images) void cacheSet("bad-photo", cacheKey("bad-photo", photoHash(img.base64)), { reason: "skan: model nie odczytał menu (za słaba jakość)", at: Date.now() });
       }
-      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached, lowQuality }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached, lowQuality }));
+      // Czytelne, ale SŁABA jakość (np. działy ok, pozycje za małe) → wynik może być NIEPEŁNY. NIE
+      // rejestrujemy jako zły kadr (jest częściowo użyteczny), tylko ostrzegamy usera.
+      const partialQuality = !lowQuality && poorQuality === true;
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached, lowQuality, partialQuality }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached, lowQuality, partialQuality }));
     } catch (e) {
       console.error("scan error:", e);
       const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;

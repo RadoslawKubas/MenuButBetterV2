@@ -229,7 +229,7 @@ export function scanMenu(
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
   onEnrichItem?: (item: ScanItemStub) => void,
-): Promise<{ menu: Menu; usage: Usage; cached: boolean; lowQuality: boolean }> {
+): Promise<{ menu: Menu; usage: Usage; cached: boolean; lowQuality: boolean; partialQuality: boolean }> {
   const t0 = Date.now();
   const body = JSON.stringify({
     images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
@@ -308,7 +308,7 @@ export function scanMenu(
       onProgress?.({ phase: "finalizing" });
       // Wynik: ostatnia kompletna linia JSON z `menu`/`error`/`done`.
       const text = xhr.responseText || "";
-      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean; lowQuality?: boolean } | null = null;
+      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean; lowQuality?: boolean; partialQuality?: boolean } | null = null;
       for (const line of text.split("\n")) {
         const tt = line.trim();
         if (!tt) continue;
@@ -328,7 +328,7 @@ export function scanMenu(
         return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
       }
       if (!result.menu) return fail("Pusta odpowiedź serwera.");
-      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached, lowQuality: !!result.lowQuality });
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached, lowQuality: !!result.lowQuality, partialQuality: !!result.partialQuality });
     };
     xhr.send(body);
   });
@@ -352,6 +352,8 @@ export interface PeekResult {
   readable: boolean;
   /** Serwer uznał kadr za zły (za słaba jakość) — nie warto skanować/wysyłać. */
   bad: boolean;
+  /** Miękki znacznik: odczytano, ale jakość słaba (wynik może być niepełny) — ostrzeż, nie wyklucz. */
+  partial?: boolean;
   /** Hash zdjęcia (z serwera) — identyfikacja „złego kadru". */
   imageHash?: string;
 }
