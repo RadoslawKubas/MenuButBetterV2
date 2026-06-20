@@ -11,8 +11,8 @@ import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
 import type { PreparedImage } from "./image";
 import { getInstallId } from "./api";
-import { listScans } from "./storage";
-import type { GeoPoint, LocationSource, ModelId, ModelRole } from "./types";
+import { listScans, saveScan } from "./storage";
+import { DEFAULT_MODELS, type GeoPoint, type LocationSource, type Menu, type ModelId, type ModelRole, type Usage } from "./types";
 
 const DIR = new Directory(Paths.document, "captures");
 const KEY = "mbb.captures.v1";
@@ -382,4 +382,88 @@ export async function buildCaptureUpload(captureId: string): Promise<{ hash: str
 
   const meta = { name: c.name ?? null, images: images.length, restaurantHint: c.restaurantHint ?? null, locationHint: c.locationHint ?? null, createdAt: c.createdAt };
   return { hash: c.sig || c.id, meta, zipBase64 };
+}
+
+/**
+ * Import migawek z ZIP-a (z serwera / labu) do lokalnej biblioteki. Format = eksportowy
+ * (metadata.json + images/). Dedup po `sig`: gdy migawka o tym sig już jest → AKTUALIZUJ
+ * (podmień wynik/przebieg, nie twórz nowej). Gdy entry ma `result.menu` → odtwórz skan w historii,
+ * żeby migawka pokazała menu. Zwraca ile dodano/zaktualizowano.
+ */
+export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: number; updated: number }> {
+  const zip = await JSZip.loadAsync(data);
+  const metaFile = zip.file("metadata.json");
+  if (!metaFile) throw new Error("ZIP bez metadata.json");
+  const caps = (JSON.parse(await metaFile.async("string")).captures ?? []) as CaptureExportEntry[];
+  const all = await listCaptures();
+  let added = 0, updated = 0;
+  for (const entry of caps) {
+    const sig = entry.sig;
+    const existing = sig ? all.find((c) => c.sig === sig) : undefined;
+    // Odtwórz skan z zapisanego wyniku (gdy jest) → migawka od razu pokaże menu.
+    let scanId: string | null = existing?.scanId ?? null;
+    if (entry.result?.menu) {
+      const saved = await saveScan({
+        menu: entry.result.menu as Menu,
+        targetLang: entry.result.targetLang ?? "polski",
+        model: (entry.result.model ?? DEFAULT_MODELS.scan) as ModelId,
+        models: entry.result.models,
+        location: entry.location ?? null,
+        locationSource: entry.locationSource ?? null,
+        useExifLocation: entry.useExifLocation,
+        useDeviceLocation: entry.useDeviceLocation,
+        usage: entry.result.usage as Usage | undefined,
+      }).catch(() => null);
+      if (saved) scanId = saved.id;
+    }
+    if (existing) {
+      if (scanId && scanId !== existing.scanId) {
+        existing.runs = existing.runs ?? (existing.scanId ? [{ scanId: existing.scanId, at: existing.createdAt }] : []);
+        existing.runs.push({ scanId, at: Date.now() });
+        existing.scanId = scanId;
+      }
+      if (entry.name) existing.name = entry.name;
+      if (entry.restaurantHint) existing.restaurantHint = entry.restaurantHint;
+      if (entry.locationHint) existing.locationHint = entry.locationHint;
+      updated++;
+      continue;
+    }
+    // Nowa migawka: wypakuj zdjęcia z zipa na dysk.
+    const id = newId();
+    const images: CaptureImage[] = [];
+    const list = entry.images ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const im = list[i]!;
+      const base = im.file.split("/").pop()!;
+      const f = zip.file(`images/${base}`) ?? zip.file(im.file);
+      if (!f) continue;
+      const b64 = await f.async("base64");
+      ensureDir();
+      const name = `${id}-${i}.jpg`;
+      const dest = new File(DIR, name);
+      if (dest.exists) dest.delete();
+      dest.create();
+      dest.write(b64, { encoding: "base64" });
+      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation });
+    }
+    if (!images.length) continue;
+    all.unshift({
+      id,
+      createdAt: entry.createdAt ?? Date.now(),
+      name: entry.name,
+      restaurantHint: entry.restaurantHint,
+      locationHint: entry.locationHint,
+      location: entry.location ?? null,
+      locationSource: entry.locationSource ?? null,
+      useExifLocation: entry.useExifLocation ?? true,
+      useDeviceLocation: entry.useDeviceLocation ?? true,
+      images,
+      sig,
+      scanId: scanId ?? undefined,
+      runs: scanId ? [{ scanId, at: Date.now() }] : undefined,
+    });
+    added++;
+  }
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  return { added, updated };
 }

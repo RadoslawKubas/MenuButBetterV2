@@ -222,6 +222,12 @@
     <input type="text" id="sampleQuery" placeholder="🔍 szukaj sampla (nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderLocalSamples()" />
     <div id="localSamplesList"></div>
   </div>
+  <div class="panel">
+    <h3>📲 Kolejka dla apki (lab → apka)</h3>
+    <div class="mut small" style="margin-bottom:6px">Sample wypchnięte z labu przyciskiem „☁→apka" — czekają na serwerze, aż apka je zaciągnie („Importuj sample z serwera"). Po imporcie do apki znikają z serwera. Tu możesz je też usunąć.</div>
+    <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center"><button onclick="loadAppSamples(this)" style="padding:4px 10px">↻ odśwież</button><span class="mut small" id="appQueueInfo"></span></div>
+    <div id="appQueueList"></div>
+  </div>
 </div>
 
 <div id="tab-errors" class="tabpane scrollpane" style="display:none">
@@ -861,7 +867,7 @@ function switchTab(name){
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
-  else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); }); }
+  else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); loadAppSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
   else if(name==='instances'){ loadInstances(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
@@ -1087,6 +1093,7 @@ function sampleCard(c, archived){
         <button onclick="editCaptureResult('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ wynik</button>
         <button onclick="openAnnotate('${c.id}')" style="padding:3px 8px; font-size:12px">📍 ${c.groundTruth?'zmień lokal':'przypisz lokal'}</button>
         ${captureHasGeo(c)?`<button onclick="openSampleMap('${c.id}')" style="padding:3px 8px; font-size:12px">🗺 mapa</button>`:''}
+        <button onclick="pushToApp('${c.id}',this)" title="wyślij ten sampel na serwer do importu w aplikacji" style="padding:3px 8px; font-size:12px">☁→apka</button>
         ${archived
           ? `<button onclick="archiveFromTab('${c.id}',false)" style="padding:3px 8px; font-size:12px">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 Usuń na stałe</button>`
           : `<button onclick="archiveFromTab('${c.id}',true)" style="padding:3px 8px; font-size:12px">🗄 Archiwizuj</button>`}
@@ -1123,6 +1130,35 @@ async function editCaptureResult(id){
   if(name===null) return;
   await api('/api/capture-result',{captureId:id, restaurantName:name.trim()||null, clear:!name.trim()});
   await loadState();
+}
+/* ---- Kolejka lab → apka: push sampla na serwer dla apki + podgląd/kasowanie ---- */
+async function pushToApp(id, btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='☁…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},1500); }
+  const r=await api('/api/push-to-app',{captureId:id});
+  if(r&&r.error){ alert('Push do apki: '+r.error); return; }
+  const st = r.status==='updated'?'zaktualizowano' : r.status==='exists'?'już było (bez zmian)' : 'wysłano';
+  alert('☁→apka: '+st+'. Apka zaciągnie to przez „Importuj sample z serwera".');
+  loadAppSamples();
+}
+async function loadAppSamples(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
+  const info=document.getElementById('appQueueInfo'), box=document.getElementById('appQueueList'); if(!info||!box) return;
+  info.textContent='pobieram…';
+  let r; try{ r=await api('/api/app-samples'); }catch(e){ info.textContent='błąd połączenia'; return; }
+  if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
+  const list=r.samples||[];
+  info.textContent=`${list.length} w kolejce dla apki`;
+  box.innerHTML = list.length ? list.map(x=>{
+    const m=x.meta||{}; const name=m.name||m.restaurantHint||('sample '+String(x.hash).slice(0,8));
+    return `<div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div><div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
+      <button onclick="deleteAppSample(${x.id})" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 usuń</button>
+    </div>`;
+  }).join('') : '<div class="mut small">Pusto — nic nie czeka na import w apce.</div>';
+}
+async function deleteAppSample(id){
+  if(!confirm('Usunąć sampel z kolejki dla apki (z serwera)?')) return;
+  await api('/api/server-samples/delete',{id}); loadAppSamples();
 }
 /* ---- Błędy z apki — filtr buildu (domyślnie najnowszy) + grupy per instancja + zamykanie bugów ---- */
 let ERR_RAW=[], ERR_GROUPS=[], ERR_CLOSED=new Set(), ERR_BUILD='', ERR_SHOW_CLOSED=false;

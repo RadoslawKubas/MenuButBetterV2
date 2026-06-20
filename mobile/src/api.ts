@@ -612,6 +612,30 @@ export async function fetchSampleStatus(hashes: string[]): Promise<Record<string
   return json.status ?? {};
 }
 
+export interface ServerSampleInfo { id: number; hash: string; meta: Record<string, unknown>; bytes: number; createdAt: string }
+
+/** Sample czekające NA IMPORT W APCE (wypchnięte z labu, target='app'). */
+export async function fetchAppServerSamples(): Promise<ServerSampleInfo[]> {
+  const res = await loggedFetch("app-samples", `${API_BASE}/samples?pending=1&target=app`, { headers: jsonHeaders() }).catch(() => null);
+  if (!res || !res.ok) return [];
+  const json = (await res.json().catch(() => ({}))) as { samples?: ServerSampleInfo[] };
+  return json.samples ?? [];
+}
+
+/** Pobiera zip sampla (surowe bajty) do importu w apce — JSZip ładuje Uint8Array wprost. */
+export async function downloadServerSampleZip(id: number): Promise<Uint8Array | null> {
+  const res = await loggedFetch("app-sample-zip", `${API_BASE}/samples/${id}/zip`, { headers: jsonHeaders() }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const buf = await res.arrayBuffer().catch(() => null);
+  return buf ? new Uint8Array(buf) : null;
+}
+
+/** Usuwa sampel z serwera (po imporcie do apki — żeby zniknął z kolejki). */
+export async function deleteServerSample(id: number): Promise<boolean> {
+  const res = await loggedFetch("app-sample-del", `${API_BASE}/samples/${id}`, { method: "DELETE", headers: jsonHeaders() }).catch(() => null);
+  return !!res && res.ok;
+}
+
 /** Surowe ostatnie zdarzenia z trwałego logu (feed aktywności + eksport debug). */
 export async function fetchEvents(limit = 500): Promise<DiagEvent[]> {
   const res = await loggedFetch("events", `${API_BASE}/events?limit=${limit}`, { headers: jsonHeaders() });

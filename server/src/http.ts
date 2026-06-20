@@ -695,13 +695,15 @@ const MAX_SAMPLE_BYTES = 15_000_000; // ~15 MB zip / sampel (zabezpieczenie rozm
 // Apka: wyślij migawkę. Body: { hash, meta, zipBase64 }. Dedup po hashu.
 app.post("/samples", async (c) => {
   if (!samplesEnabled()) return c.json({ error: "Sample online wyłączone (brak bazy)." }, 503);
-  let b: { hash?: string; meta?: Record<string, unknown>; zipBase64?: string };
+  let b: { hash?: string; meta?: Record<string, unknown>; zipBase64?: string; target?: string };
   try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
   if (!b.hash || !b.zipBase64) return c.json({ error: "Brak hash/zipBase64." }, 400);
   const zip = Buffer.from(b.zipBase64.includes(",") ? b.zipBase64.split(",")[1]! : b.zipBase64, "base64");
   if (zip.length === 0 || zip.length > MAX_SAMPLE_BYTES) return c.json({ error: `Zip pusty lub za duży (limit ${Math.round(MAX_SAMPLE_BYTES / 1e6)} MB).` }, 413);
+  // target: 'lab' (apka→lab, domyślnie) albo 'app' (lab→apka, kolejka do importu w apce).
+  const target = b.target === "app" ? "app" : "lab";
   try {
-    const r = await saveSample(b.hash, b.meta ?? {}, zip, c.req.header("x-install-id") || undefined);
+    const r = await saveSample(b.hash, b.meta ?? {}, zip, c.req.header("x-install-id") || undefined, target);
     return c.json(r);
   } catch (e) {
     console.error("samples upload error:", e);
@@ -709,10 +711,11 @@ app.post("/samples", async (c) => {
   }
 });
 
-// Lab: lista sampli. ?pending=1 → tylko nieimportowane (z zipem do pobrania).
+// Lista sampli. ?pending=1 → tylko nieimportowane. ?target=app → kolejka lab→apka (domyślnie 'lab').
 app.get("/samples", async (c) => {
   const pending = c.req.query("pending") === "1";
-  return c.json({ enabled: samplesEnabled(), store: storeMode(), samples: await listSamples(pending) });
+  const target = c.req.query("target") === "app" ? "app" : "lab";
+  return c.json({ enabled: samplesEnabled(), store: storeMode(), samples: await listSamples(pending, target) });
 });
 
 // Lab: pobierz zip sampla do importu.

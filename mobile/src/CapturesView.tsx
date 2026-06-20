@@ -16,9 +16,10 @@ import {
   captureRuns,
   capturesDiskBytes,
   buildCaptureUpload,
+  importCapturesFromZip,
   type ScanCapture,
 } from "./captures";
-import { uploadSample, fetchSampleStatus, reportError } from "./api";
+import { uploadSample, fetchSampleStatus, reportError, fetchAppServerSamples, downloadServerSampleZip, deleteServerSample } from "./api";
 import type { SavedScan } from "./storage";
 import { MODEL_OPTIONS, distinctModels } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
@@ -88,6 +89,32 @@ export function CapturesView({
   // Stan migawek na serwerze (po hashu/sygnaturze): na serwerze? zaimportowane do labu?
   const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
   const [uploading, setUploading] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  // Import sampli z serwera (wypchniętych z labu, target='app'): zaciąga, scala (dedup po sig →
+  // aktualizacja, nie duplikat), po czym KASUJE je z serwera (znikają z kolejki).
+  async function importFromServer() {
+    setImporting(true);
+    try {
+      const list = await fetchAppServerSamples();
+      if (list.length === 0) { Alert.alert("Brak sampli", "Na serwerze nie ma żadnych sampli do zaimportowania."); return; }
+      let added = 0, updated = 0, failed = 0;
+      for (const s of list) {
+        const bytes = await downloadServerSampleZip(s.id).catch(() => null);
+        if (!bytes) { failed++; continue; }
+        try {
+          const r = await importCapturesFromZip(bytes);
+          added += r.added; updated += r.updated;
+          await deleteServerSample(s.id); // po imporcie znika z serwera
+        } catch (e) {
+          failed++;
+          reportError(`import sampla z serwera: ${(e as Error)?.message ?? "?"}`, { label: "sample-import", context: { id: s.id } });
+        }
+      }
+      await load();
+      Alert.alert("Import z serwera", `Dodano ${added}, zaktualizowano ${updated}${failed ? `, błędów ${failed}` : ""}.`);
+    } finally { setImporting(false); }
+  }
 
   async function load() {
     const caps = await listCaptures().catch(() => []);
@@ -204,6 +231,14 @@ export function CapturesView({
           skanu — zmień modele/język i kliknij „Przetłumacz menu". Każdy przebieg dopisuje się niżej
           jako uruchomienie, więc porównasz to samo menu różnymi modelami.
         </Text>
+
+        <Pressable
+          style={[styles.importBtn, importing && styles.disabled]}
+          disabled={importing}
+          onPress={() => void importFromServer()}
+        >
+          <Text style={styles.importBtnText}>{importing ? "⏳ Importuję z serwera…" : "⬇️ Importuj sample z serwera"}</Text>
+        </Pressable>
 
         {captures.length > 0 ? (
           <>
@@ -379,6 +414,8 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
   exportText: { color: colors.accent, fontWeight: "800", fontSize: 14 },
+  importBtn: { backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center", marginBottom: 14 },
+  importBtnText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   toolbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   toolbarInfo: { fontSize: 12, color: colors.muted },
   deleteAll: { fontSize: 12, color: colors.error, fontWeight: "700" },

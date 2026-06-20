@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { getPool } from "./db.ts";
 
-/** Bezpieczna nazwa pliku z hasza (sygnatura migawki ma slashe/znaki specjalne → nie jako ścieżka!). */
-function safeFileName(hash: string): string {
-  return createHash("sha256").update(hash).digest("hex") + ".zip";
+/** Bezpieczna nazwa pliku z (target,hash) — hash ma slashe/znaki specjalne, a (hash,target) to tożsamość. */
+function safeFileName(hash: string, target = "lab"): string {
+  return createHash("sha256").update(target + "|" + hash).digest("hex") + ".zip";
 }
 
 let ready = false;
@@ -47,19 +47,24 @@ export async function initSamples(): Promise<void> {
     await p.query(`
       CREATE TABLE IF NOT EXISTS samples (
         id BIGSERIAL PRIMARY KEY,
-        hash TEXT UNIQUE NOT NULL,
+        hash TEXT NOT NULL,
         meta JSONB NOT NULL DEFAULT '{}'::jsonb,
         zip BYTEA,
         path TEXT,
         bytes INTEGER NOT NULL DEFAULT 0,
         install_id TEXT,
         content_hash TEXT,
+        target TEXT NOT NULL DEFAULT 'lab',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         imported_at TIMESTAMPTZ
       );
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS path TEXT;
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS install_id TEXT;
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS content_hash TEXT;
+      ALTER TABLE samples ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'lab';
+      -- Tożsamość po (hash, target): ten sam sig może iść osobno do labu i do apki.
+      ALTER TABLE samples DROP CONSTRAINT IF EXISTS samples_hash_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS samples_hash_target_idx ON samples (hash, target);
       CREATE INDEX IF NOT EXISTS samples_imported_idx ON samples (imported_at);
     `);
     storeDir = resolveStoreDir();
@@ -99,17 +104,17 @@ export interface SampleRow {
  *    (imported_at=NULL), żeby lab re-importował i podmienił wynik → "updated".
  * Zip → plik (gdy mamy katalog) albo BYTEA. Tag instancji apki.
  */
-export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer, installId?: string): Promise<{ ok: boolean; status: "created" | "updated" | "exists" | "disabled"; id?: number }> {
+export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer, installId?: string, target = "lab"): Promise<{ ok: boolean; status: "created" | "updated" | "exists" | "disabled"; id?: number }> {
   const p = getPool();
   if (!p || !ready) return { ok: false, status: "disabled" };
   const contentHash = createHash("sha256").update(zip).digest("hex");
-  const existing = await p.query(`SELECT id, content_hash FROM samples WHERE hash = $1`, [hash]);
+  const existing = await p.query(`SELECT id, content_hash FROM samples WHERE hash = $1 AND target = $2`, [hash, target]);
   if (existing.rows.length) {
     const row = existing.rows[0];
     if (row.content_hash === contentHash) return { ok: true, status: "exists", id: row.id };
     // Zmodyfikowany sampel (nowa treść) → nadpisz i oznacz jako świeży do (ponownego) importu.
     if (storeDir) {
-      const fname = safeFileName(hash);
+      const fname = safeFileName(hash, target);
       await writeFile(join(storeDir, fname), zip);
       await p.query(`UPDATE samples SET meta=$2, path=$3, zip=NULL, bytes=$4, install_id=COALESCE($5,install_id), content_hash=$6, imported_at=NULL WHERE id=$1`, [row.id, JSON.stringify(meta), fname, zip.length, installId ?? null, contentHash]);
     } else {
@@ -119,25 +124,28 @@ export async function saveSample(hash: string, meta: Record<string, unknown>, zi
   }
 
   if (storeDir) {
-    const fname = safeFileName(hash);
+    const fname = safeFileName(hash, target);
     await writeFile(join(storeDir, fname), zip);
-    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes, install_id, content_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length, installId ?? null, contentHash]);
+    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes, install_id, content_hash, target) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length, installId ?? null, contentHash, target]);
     return { ok: true, status: "created", id: r.rows[0].id };
   }
-  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes, install_id, content_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length, installId ?? null, contentHash]);
+  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes, install_id, content_hash, target) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length, installId ?? null, contentHash, target]);
   return { ok: true, status: "created", id: r.rows[0].id };
 }
 
-/** Lista sampli (bez danych zip). `pending=true` → tylko NIEzaimportowane (z zipem do pobrania). */
-export async function listSamples(pending = false): Promise<SampleRow[]> {
+/** Lista sampli (bez danych zip) dla kierunku `target` ('lab'=apka→lab, 'app'=lab→apka). `pending`
+ *  → tylko NIEzaimportowane (z zipem do pobrania). */
+export async function listSamples(pending = false, target = "lab"): Promise<SampleRow[]> {
   const p = getPool();
   if (!p || !ready) return [];
-  const where = pending ? "WHERE imported_at IS NULL AND (zip IS NOT NULL OR path IS NOT NULL)" : "";
+  const cond = ["target = $1"];
+  if (pending) cond.push("imported_at IS NULL AND (zip IS NOT NULL OR path IS NOT NULL)");
   const r = await p.query(
     `SELECT id, hash, meta, bytes, install_id, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
             to_char(imported_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS imported_at,
             (zip IS NOT NULL OR path IS NOT NULL) AS has_zip
-     FROM samples ${where} ORDER BY created_at DESC LIMIT 500`,
+     FROM samples WHERE ${cond.join(" AND ")} ORDER BY created_at DESC LIMIT 500`,
+    [target],
   );
   return r.rows.map((x) => ({ id: x.id, hash: x.hash, meta: x.meta, bytes: x.bytes, installId: x.install_id, createdAt: x.created_at, importedAt: x.imported_at, hasZip: x.has_zip }));
 }
@@ -180,7 +188,8 @@ export async function statusByHashes(hashes: string[]): Promise<Record<string, {
   const p = getPool();
   const out: Record<string, { onServer: boolean; imported: boolean }> = {};
   if (!p || !ready || !hashes.length) return out;
-  const r = await p.query(`SELECT hash, imported_at IS NOT NULL AS imported FROM samples WHERE hash = ANY($1)`, [hashes]);
+  // Status dotyczy uploadów apki (kierunek 'lab'); kolejka 'app' to osobna sprawa.
+  const r = await p.query(`SELECT hash, imported_at IS NOT NULL AS imported FROM samples WHERE target = 'lab' AND hash = ANY($1)`, [hashes]);
   for (const row of r.rows) out[row.hash] = { onServer: true, imported: row.imported };
   return out;
 }

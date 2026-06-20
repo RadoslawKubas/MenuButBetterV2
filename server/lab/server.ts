@@ -808,6 +808,53 @@ app.post("/api/server-samples/delete", async (c) => {
   }
 });
 
+// Buduje zip migawki labu (metadata.json + zdjęcia z library/images) — format eksportu apki,
+// żeby apka mogła go zaimportować. Zwraca base64 + meta do listy. null gdy brak zdjęć.
+async function buildCaptureZipBase64(cap: MetaCapture): Promise<{ zipBase64: string; meta: Record<string, unknown> } | null> {
+  const zip = new JSZip();
+  const imagesDir = zip.folder("images")!;
+  const images: { file: string; mediaType: string; exifLocation?: { lat: number; lng: number } }[] = [];
+  for (const im of cap.images ?? []) {
+    const base = im.file.split("/").pop()!;
+    try {
+      imagesDir.file(base, readFileSync(join(LIB_IMAGES, base)));
+      images.push({ file: `images/${base}`, mediaType: im.mediaType || "image/jpeg", exifLocation: im.exifLocation });
+    } catch { /* brak pliku — pomiń */ }
+  }
+  if (!images.length) return null;
+  const { images: _drop, ...rest } = cap;
+  zip.file("metadata.json", JSON.stringify({ format: "menubutbetter.captures", version: 1, count: 1, captures: [{ ...rest, images }] }));
+  const zipBase64 = await zip.generateAsync({ type: "base64", compression: "STORE" });
+  const meta = { name: cap.name ?? null, images: images.length, restaurantHint: cap.restaurantHint ?? null, locationHint: cap.locationHint ?? null, createdAt: cap.createdAt, fromLab: true };
+  return { zipBase64, meta };
+}
+
+// Lab → serwer (kolejka DLA APKI): pcha migawkę z biblioteki labu na serwer z target='app'.
+app.post("/api/push-to-app", async (c) => {
+  const { captureId } = await c.req.json<{ captureId: string }>();
+  const cap = loadMeta().find((x) => x.id === captureId);
+  if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  const built = await buildCaptureZipBase64(cap);
+  if (!built) return c.json({ error: "brak zdjęć migawki w bibliotece" }, 400);
+  try {
+    const r = await prodFetch("/samples", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hash: cap.sig || cap.id, meta: built.meta, zipBase64: built.zipBase64, target: "app" }) });
+    return c.json({ ok: true, ...((await r.json()) as object) });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
+// Lab: podgląd kolejki sampli czekających na import w APCE (target='app', jeszcze niezaimportowane).
+app.get("/api/app-samples", async (c) => {
+  try {
+    const r = await prodFetch("/samples?pending=1&target=app");
+    const d = (await r.json()) as { samples?: unknown[] };
+    return c.json({ prodUrl: PROD_URL, configured: !!PROD_TOKEN, samples: d.samples ?? [] });
+  } catch (e) {
+    return c.json({ error: `Nie połączono z serwerem (${PROD_URL}): ${(e as Error).message}`, prodUrl: PROD_URL }, 502);
+  }
+});
+
 app.post("/api/annotate", async (c) => {
   const { captureId, groundTruth } = await c.req.json<{ captureId: string; groundTruth: GroundTruth | null }>();
   const cap = loadMeta().find((x) => x.id === captureId);
