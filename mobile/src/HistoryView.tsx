@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { SavedScan } from "./storage";
 import { loadHistoryGrouping, saveHistoryGrouping, type HistoryGrouping } from "./storage";
-import { MODEL_OPTIONS, type GeoPoint } from "./types";
+import { MODEL_OPTIONS, distinctModels, type GeoPoint } from "./types";
 import { getCurrentLocation, distanceMeters } from "./location";
 import { colors } from "./theme";
 import { CachedImage } from "./CachedImage";
@@ -20,8 +20,8 @@ function modelSummary(scan: SavedScan): string {
   const label = (id?: string) => MODEL_OPTIONS.find((o) => o.id === id)?.label ?? id ?? "—";
   const m = scan.models;
   if (!m) return label(scan.model);
-  const uniq = new Set([m.scan, m.describe, m.verify, m.venue]);
-  return uniq.size === 1 ? label(m.scan) : `${label(m.scan)} +${uniq.size - 1}`;
+  const uniq = distinctModels(m); // rozszerzalne: z MODEL_ROLES
+  return uniq.length <= 1 ? label(m.scan) : `${label(m.scan)} +${uniq.length - 1}`;
 }
 
 function thumbForScan(scan: SavedScan): { uri?: string; remoteUrl?: string } | null {

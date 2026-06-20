@@ -69,7 +69,10 @@ export interface ScanParams {
   locationHint?: string;
   /** Wstępnie rozpoznana kuchnia (z „szybkiego podglądu") — mocna wskazówka kontekstu. */
   cuisineHint?: string;
+  /** Model przebiegu STRUKTURY (vision). */
   model: ModelId;
+  /** Model przebiegu WZBOGACANIA (tekst: tłumaczenia/opisy/photo_query). Domyślnie = model. */
+  enrichModel?: ModelId;
 }
 
 /** Postęp skanu: wysyłka zdjęć (%) → serwer odebrał → model czyta (czas) → składanie. */
@@ -110,6 +113,7 @@ export function scanMenu(
     locationHint: params.locationHint,
     cuisineHint: params.cuisineHint,
     model: params.model,
+    enrichModel: params.enrichModel,
     stream: true,
   });
 

@@ -85,6 +85,8 @@ interface ScanBody {
   locationHint?: string;
   cuisineHint?: string;
   model?: string;
+  /** Model przebiegu WZBOGACANIA (tekst). Używany przy skanie dwuprzebiegowym; gdy brak = model. */
+  enrichModel?: string;
   /** Apka prosi o KROKI postępu (NDJSON: received → extracting… → done/error).
    *  Bez tego — stare zachowanie (spacje keepalive + finalny JSON), zgodne ze starym buildem. */
   stream?: boolean;

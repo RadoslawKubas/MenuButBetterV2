@@ -18,7 +18,7 @@ import {
   type ScanCapture,
 } from "./captures";
 import type { SavedScan } from "./storage";
-import { MODEL_OPTIONS } from "./types";
+import { MODEL_OPTIONS, distinctModels } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
 import { colors } from "./theme";
 
@@ -58,8 +58,8 @@ function modelSummary(scan: SavedScan): string {
   const label = (id?: string | null) => MODEL_OPTIONS.find((o) => o.id === id)?.label ?? id ?? "—";
   const m = scan.models;
   if (!m) return label(scan.model);
-  const uniq = new Set([m.scan, m.describe, m.verify, m.venue]);
-  return uniq.size === 1 ? label(m.scan) : `${label(m.scan)} +${uniq.size - 1}`;
+  const uniq = distinctModels(m); // rozszerzalne: z MODEL_ROLES (uwzględnia enrich i przyszłe role)
+  return uniq.length <= 1 ? label(m.scan) : `${label(m.scan)} +${uniq.length - 1}`;
 }
 function itemCount(scan: SavedScan): number {
   return scan.menu.sections.reduce((n, s) => n + s.items.length, 0);

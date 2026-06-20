@@ -12,6 +12,7 @@ import {
   PROVIDER_LABELS,
   PROVIDER_DIAG_KEY,
   DEFAULT_MODELS,
+  allRolesToModel,
   type ModelId,
   type ModelRole,
   type ModelProvider,
@@ -26,10 +27,8 @@ function priceOf(id: ModelId): string {
   return o ? `$${o.price.in}/$${o.price.out}` : "";
 }
 
-// Pełna mapa ról ustawiona na jeden model (presety / „ustaw wszędzie").
-function allRoles(model: ModelId): Record<ModelRole, ModelId> {
-  return { scan: model, describe: model, verify: model, venue: model, peek: model };
-}
+// Pełna mapa ról ustawiona na jeden model (presety / „ustaw wszędzie") — rozszerzalne (MODEL_ROLES).
+const allRoles = allRolesToModel;
 
 function CostSwitch({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (

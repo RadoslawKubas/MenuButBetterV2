@@ -223,11 +223,14 @@ export const MODEL_PRESETS: { id: string; label: string; desc: string; model: Mo
 export const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
 
 // Miejsca, w których używamy modelu — każde można skonfigurować osobno (ekran Ustawienia).
-export type ModelRole = "scan" | "describe" | "verify" | "venue" | "peek";
+// JEDNO źródło prawdy: dodanie kroku = dopisanie wpisu w MODEL_ROLES + DEFAULT_MODELS; UI ról,
+// scalanie modeli i statystyki czerpią z tej listy (bez hardkodowania ról gdziekolwiek).
+export type ModelRole = "scan" | "enrich" | "describe" | "verify" | "venue" | "peek";
 
 export const MODEL_ROLES: { role: ModelRole; label: string; hint: string }[] = [
-  { role: "scan", label: "Skan menu", hint: "Odczyt zdjęć menu → pozycje" },
-  { role: "describe", label: "Opisy dań", hint: "Rozszerzone „więcej info”" },
+  { role: "scan", label: "Skan menu (struktura)", hint: "Odczyt zdjęć → sekcje, nazwy, ceny (vision)" },
+  { role: "enrich", label: "Wzbogacanie pozycji", hint: "Tłumaczenia, opisy, hasła do zdjęć (tekstowo — tanio)" },
+  { role: "describe", label: "Opisy dań (więcej info)", hint: "Rozszerzone „więcej info” na dotknięcie" },
   { role: "verify", label: "Weryfikacja zdjęć", hint: "Czy zdjęcie pasuje do dania" },
   { role: "venue", label: "Zdjęcia z lokalu", hint: "Dopasowanie foto z Google / TripAdvisor" },
   { role: "peek", label: "Szybki podgląd (aparat)", hint: "Kuchnia/nazwa na żywo — tani, szybki model" },
@@ -235,8 +238,19 @@ export const MODEL_ROLES: { role: ModelRole; label: string; hint: string }[] = [
 
 export const DEFAULT_MODELS: Record<ModelRole, ModelId> = {
   scan: "claude-sonnet-4-6",
+  enrich: "claude-sonnet-4-6",
   describe: "claude-sonnet-4-6",
   verify: "claude-sonnet-4-6",
   venue: "claude-sonnet-4-6",
   peek: "gpt-5-nano", // szybki podgląd: grosze, działa na kluczu OpenAI (bez billingu Gemini)
 };
+
+/** Wszystkie role → jeden model (do „ustaw wszędzie ten sam"). Rozszerzalne: czerpie z MODEL_ROLES. */
+export function allRolesToModel(model: ModelId): Record<ModelRole, ModelId> {
+  return Object.fromEntries(MODEL_ROLES.map((r) => [r.role, model])) as Record<ModelRole, ModelId>;
+}
+
+/** Zbiór RÓŻNYCH modeli użytych w danym zestawie ról (do podsumowań). Pomija braki (stare zapisy). */
+export function distinctModels(models: Partial<Record<ModelRole, ModelId>>): ModelId[] {
+  return [...new Set(MODEL_ROLES.map((r) => models[r.role]).filter((m): m is ModelId => !!m))];
+}

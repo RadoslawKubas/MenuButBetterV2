@@ -511,6 +511,7 @@ export default function App() {
               locationHint,
               cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
               model: opts.models.scan,
+              enrichModel: opts.models.enrich,
             },
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
@@ -647,6 +648,7 @@ export default function App() {
             locationHint,
             cuisineHint,
             model: opts.models.scan,
+            enrichModel: opts.models.enrich,
           });
           acc = mergeMenus(acc, incoming).menu;
           await updateScanMenu(scanId, acc);
@@ -1048,11 +1050,12 @@ export default function App() {
   // stanu — wtedy zamrożone == bieżące, więc bezpiecznie). Dzięki temu opisy/zdjęcia w zapisanym
   // menu lecą tym samym modelem co pierwotnie, nawet jeśli zmieniłeś ustawienia globalne.
   function modelsForScan(scanId: string | null): Record<ModelRole, ModelId> {
+    // Merge z DEFAULT_MODELS: stare zapisy mogą nie mieć nowych ról (np. enrich) — fallback do domyślnych.
     if (scanId) {
       const s = openScan?.id === scanId ? openScan : scans.find((x) => x.id === scanId);
-      if (s?.models) return s.models;
+      if (s?.models) return { ...DEFAULT_MODELS, ...s.models };
     }
-    return models;
+    return { ...DEFAULT_MODELS, ...models };
   }
 
   // Panel „czym zrobiono to menu": data, język i modele per rola (lub starszy zapis bez pełnych).
@@ -1455,6 +1458,7 @@ export default function App() {
           targetLang: scanLang,
           restaurantHint: hint,
           model: modelsForScan(scanId).scan, // dokładanie do zapisanego menu — model zamrożony
+          enrichModel: modelsForScan(scanId).enrich,
         },
         (p) => setScanPhase(scanPhaseLabel(p)),
       );
