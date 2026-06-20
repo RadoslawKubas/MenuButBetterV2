@@ -17,7 +17,7 @@ import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
-import { initSamples, samplesEnabled, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
+import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
 const app = new Hono();
@@ -633,7 +633,7 @@ app.post("/samples", async (c) => {
 // Lab: lista sampli. ?pending=1 → tylko nieimportowane (z zipem do pobrania).
 app.get("/samples", async (c) => {
   const pending = c.req.query("pending") === "1";
-  return c.json({ enabled: samplesEnabled(), samples: await listSamples(pending) });
+  return c.json({ enabled: samplesEnabled(), store: storeMode(), samples: await listSamples(pending) });
 });
 
 // Lab: pobierz zip sampla do importu.

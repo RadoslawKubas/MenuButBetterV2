@@ -914,8 +914,10 @@ async function loadServerSamples(btn){
   info.textContent='łączę z serwerem…';
   let r; try{ r=await api('/api/server-samples'); }catch(e){ info.textContent='błąd połączenia'; return; }
   if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
+  const st=r.store||{}; const modeTxt = st.mode==='files' ? `📁 pliki (${esc(st.dir||'')})` : st.mode==='db' ? '🗃 bytea w bazie (podepnij Volume /data)' : '';
   info.innerHTML = (!r.configured ? '⚠️ Brak tokenu (ustaw LAB_PROD_TOKEN/APP_TOKEN w server/.env). ' : '')
     + `serwer: <span class="mut">${esc(r.prodUrl||'')}</span>`
+    + (modeTxt ? ' · '+modeTxt : '')
     + (r.enabled===false ? ' · <span class="badge fail">sample na serwerze wyłączone (brak DB)</span>' : '');
   SRV_SAMPLES=r.samples||[];
   box.innerHTML = SRV_SAMPLES.length ? SRV_SAMPLES.map(x=>{

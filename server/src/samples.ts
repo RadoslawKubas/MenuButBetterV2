@@ -65,6 +65,12 @@ export function samplesEnabled(): boolean {
   return ready && !!getPool();
 }
 
+/** Tryb magazynu zipów do diagnostyki: "files" (Volume/katalog) / "db" (BYTEA) / "off". */
+export function storeMode(): { mode: "files" | "db" | "off"; dir: string | null } {
+  if (!samplesEnabled()) return { mode: "off", dir: null };
+  return storeDir ? { mode: "files", dir: storeDir } : { mode: "db", dir: null };
+}
+
 export interface SampleRow {
   id: number;
   hash: string;
