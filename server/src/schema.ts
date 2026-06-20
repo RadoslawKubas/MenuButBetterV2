@@ -50,6 +50,110 @@ export interface Menu {
   sections: MenuSection[];
 }
 
+// ===== DWUPRZEBIEGOWY SKAN ==================================================================
+// Przebieg 1 (VISION, per zdjęcie): TYLKO to, co wymaga zobaczenia kartki — struktura, oryginalne
+// nazwy, ceny i ewentualny opis NADRUKOWANY na menu (transkrypcja, nie generowanie). Mały output
+// = taniej/szybciej/mniej ucięć, świetne recovery i cache per zdjęcie.
+export interface StructItem {
+  original: string;
+  /** Opis WIDOCZNY na menu (transkrypcja), jeśli jest — inaczej "". Generowany opis robi enrich. */
+  menu_description: string;
+  price: string | null;
+  currency: string | null;
+}
+export interface StructSection { name: string; items: StructItem[] }
+export interface MenuStructure {
+  restaurant_name: string | null;
+  restaurant_address: string | null;
+  restaurant_language: string;
+  cuisine: string;
+  sections: StructSection[];
+}
+
+export const STRUCTURE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    restaurant_name: { type: ["string", "null"], description: "Nazwa lokalu, jeśli widoczna (okładka/nagłówek/stopka/szyld). Inaczej null." },
+    restaurant_address: { type: ["string", "null"], description: "Adres lokalu, jeśli widoczny. Inaczej null." },
+    restaurant_language: { type: "string", description: "Język menu jako kod ISO 639-1, np. 'it', 'es', 'pl'." },
+    cuisine: { type: "string", description: "Rodzaj kuchni z menu (np. 'kuchnia indyjska'). Gdy nieoczywiste — 'nieokreślona'." },
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string", description: "Oryginalna nazwa sekcji (jak na menu)." },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                original: { type: "string", description: "Nazwa dania DOKŁADNIE jak na menu (oryginał)." },
+                menu_description: { type: "string", description: "Opis NADRUKOWANY na menu pod/obok dania (transkrypcja). Gdy brak — pusty string." },
+                price: { type: ["string", "null"], description: "Cena jako tekst, lub null gdy nie widać." },
+                currency: { type: ["string", "null"], description: "Waluta, np. 'EUR', lub null." },
+              },
+              required: ["original", "menu_description", "price", "currency"],
+            },
+          },
+        },
+        required: ["name", "items"],
+      },
+    },
+  },
+  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections"],
+} as const;
+
+// Przebieg 2 (TEKST, wsadowo po nazwach): wzbogaca pozycje o pola, które NIE wymagają obrazu —
+// tłumaczenie, photo_query/_local, branded, generowany opis, składniki, alergeny, kategoria, dieta,
+// ostrość — z kontekstu (kuchnia/kraj/język). Tanie, cache'owalne per pozycja. `index` = globalny
+// numer pozycji (po spłaszczeniu sekcji), `sections[].index` = pozycja sekcji w tablicy.
+export const ENRICH_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { index: { type: "integer" }, name_translated: { type: "string" } },
+        required: ["index", "name_translated"],
+      },
+    },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          index: { type: "integer", description: "Globalny numer pozycji z wejścia (po spłaszczeniu)." },
+          translated: { type: "string" },
+          photo_query: { type: "string", description: "KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności; opisz CZYM danie jest, nie markową/lokalną nazwą. Np. 'Mango'→'mango chicken curry indian'." },
+          photo_query_local: { type: "string", description: "Nazwa do zdjęć W JĘZYKU KRAJU lokalu (z lokalizacji). Gdy język menu = język kraju, zwykle = original; gdy się nie da — powtórz photo_query." },
+          branded: { type: "boolean", description: "true = markowy/paczkowany produkt o stałym wyglądzie (Coca-Cola, butelkowana woda) → lepszy generyczny shot; false = potrawa z kuchni." },
+          description: { type: "string", description: "Zwięzłe wyjaśnienie czym jest danie: składniki, podanie, kontekst kulinarny — pasujące do TEJ kuchni i regionu." },
+          ingredients: { type: "array", items: { type: "string" } },
+          allergens: { type: "array", items: { type: "string" } },
+          category: { type: "string", enum: [...DISH_CATEGORIES] },
+          dietary: {
+            type: "object",
+            additionalProperties: false,
+            properties: { vegetarian: { type: "boolean" }, vegan: { type: "boolean" }, gluten_free: { type: "boolean" } },
+            required: ["vegetarian", "vegan", "gluten_free"],
+          },
+          spice_level: { type: "integer", enum: [0, 1, 2, 3] },
+        },
+        required: ["index", "translated", "photo_query", "photo_query_local", "branded", "description", "ingredients", "allergens", "category", "dietary", "spice_level"],
+      },
+    },
+  },
+  required: ["sections", "items"],
+} as const;
+
 export const MENU_SCHEMA = {
   type: "object",
   additionalProperties: false,

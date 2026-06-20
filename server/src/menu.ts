@@ -167,6 +167,43 @@ export const SYSTEM = [
   "Nie wymyślaj pozycji, których nie ma na zdjęciach. Jeśli ceny nie widać, ustaw null.",
 ].join(" ");
 
+// PRZEBIEG 1 — VISION, TYLKO STRUKTURA (transkrypcja tego, co widać; bez tłumaczeń i bez
+// generowania opisów — to robi przebieg 2). Mały output = taniej/szybciej/mniej ucięć.
+export const STRUCTURE_SYSTEM = [
+  "Jesteś precyzyjnym transkryptorem menu restauracji.",
+  "Otrzymasz jedno lub WIELE zdjęć — kolejne strony/fragmenty TEGO SAMEGO menu (czasem okładkę",
+  "albo zdjęcie lokalu). Odczytaj TYLKO to, co realnie widać.",
+  "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje, w kolejności jak na stronach; nie duplikuj",
+  "powtórzonych nagłówków ani pozycji. Dla każdej pozycji podaj `original` (nazwa DOKŁADNIE jak na",
+  "menu), cenę i walutę (gdy widać; inaczej null) oraz `menu_description` = opis NADRUKOWANY na menu",
+  "pod/obok pozycji (transkrypcja słowo w słowo). Gdy danie nie ma opisu na menu — pusty string.",
+  "NIE tłumacz, NIE generuj opisów, NIE zgaduj składników — to zrobi osobny krok.",
+  "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz, jeśli widać na okładce/",
+  "szyldzie/stopce — `restaurant_name` i `restaurant_address` (inaczej null). Zdjęcie lokalu z",
+  "zewnątrz służy tylko do nazwy/adresu — nie twórz z niego pozycji menu.",
+  "Nie wymyślaj pozycji, których nie ma na zdjęciach.",
+].join(" ");
+
+// PRZEBIEG 2 — TEKST, WSADOWO PO NAZWACH: tłumaczenie + photo_query/_local + branded + opis +
+// składniki/alergeny/kategoria/dieta/ostrość. Bez obrazu — z nazwy i kontekstu (kuchnia/kraj).
+export const ENRICH_SYSTEM = [
+  "Jesteś ekspertem kulinarnym i tłumaczem. Dostajesz LISTĘ pozycji menu (sama nazwa + ewentualny",
+  "opis z karty + numer `index`), kontekst kuchni i kraju/miasta lokalu oraz język docelowy.",
+  "Dla KAŻDEJ pozycji zwróć wzbogacenie po jej `index` (i tłumaczenia nazw sekcji po `index`).",
+  "Wszystko MUSI pasować do podanej kuchni i regionu.",
+  "Tłumacz nazwy (pozycji i sekcji) na język docelowy.",
+  "OPIS pisz ZWIĘŹLE i RZECZOWO, wyłącznie z tego, co wynika z nazwy i typowego przyrządzania dania",
+  "w TEJ kuchni/regionie. NIE upiększaj i NIE dodawaj nietypowych składników (np. NIE dodawaj awokado",
+  "do zwykłej zielonej sałatki w kuchni indyjskiej). Lepiej ogólnie i PRAWDZIWIE niż barwnie i zmyślnie.",
+  "W `ingredients` tylko składniki pewne/typowe; alergeny i flagi dietetyczne szacuj zachowawczo.",
+  "`photo_query`: KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności",
+  "(np. 'mango chicken curry indian', 'patatas bravas'). Opisz CZYM danie jest, nie markową nazwą z menu.",
+  "`photo_query_local`: nazwa do zdjęć W JĘZYKU KRAJU lokalu (z kontekstu). Gdy język menu = język kraju,",
+  "zwykle = original; gdy się nie da — powtórz photo_query.",
+  "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda),",
+  "false dla potraw z kuchni.",
+].join(" ");
+
 // Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
 export function contextText(opts: ExtractOptions, n: number): string {
   return (
