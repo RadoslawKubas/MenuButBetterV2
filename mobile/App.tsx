@@ -24,7 +24,7 @@ import {
   quickPeek,
   placePhotoUrl,
   reportError,
-  initInstallId,
+  registerInstall,
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
@@ -236,7 +236,7 @@ export default function App() {
   const [venueQuery, setVenueQuery] = useState("");
 
   useEffect(() => {
-    void initInstallId(); // GUID instalacji + opróżnienie kolejki błędów offline
+    void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
     // Przywróć zapamiętane modele per miejsce (brakujące pola uzupełniamy domyślnymi).

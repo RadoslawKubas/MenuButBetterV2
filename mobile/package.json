@@ -7,6 +7,7 @@
     "expo": "^54.0.35",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.13",
+    "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.23",
     "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.11",

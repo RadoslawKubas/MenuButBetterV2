@@ -53,6 +53,17 @@ export async function initDb(): Promise<void> {
       CREATE INDEX IF NOT EXISTS events_created_at_idx ON events (created_at);
       CREATE INDEX IF NOT EXISTS events_type_idx ON events (type);
       CREATE INDEX IF NOT EXISTS events_install_idx ON events (install_id);
+      CREATE TABLE IF NOT EXISTS installs (
+        install_id TEXT PRIMARY KEY,
+        name TEXT,
+        device_model TEXT,
+        brand TEXT,
+        os_name TEXT,
+        os_version TEXT,
+        app_version TEXT,
+        first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
     `);
     ready = true;
     console.log("[db] trwałe logi GOTOWE (Postgres).");
@@ -239,6 +250,70 @@ export async function getInstallActivity(installId: string, limit = 200): Promis
     [installId, Math.min(Math.max(limit, 1), 500)],
   );
   return r.rows.map((x) => ({ at: x.at, type: x.type, op: x.op, model: x.model, costUsd: x.cost_usd != null ? Number(x.cost_usd) : null, data: x.data }));
+}
+
+/** Rejestruje/aktualizuje instalację apki (urządzenie + wersja). Wołane na starcie apki. */
+export async function upsertInstall(p: { installId: string; deviceModel?: string; brand?: string; osName?: string; osVersion?: string; appVersion?: string }): Promise<void> {
+  const pool = getPool();
+  if (!pool || !ready || !p.installId) return;
+  pool.query(
+    `INSERT INTO installs (install_id, device_model, brand, os_name, os_version, app_version)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (install_id) DO UPDATE SET last_seen = now(), app_version = EXCLUDED.app_version,
+       device_model = COALESCE(EXCLUDED.device_model, installs.device_model),
+       brand = COALESCE(EXCLUDED.brand, installs.brand),
+       os_name = COALESCE(EXCLUDED.os_name, installs.os_name),
+       os_version = COALESCE(EXCLUDED.os_version, installs.os_version)`,
+    [p.installId, p.deviceModel ?? null, p.brand ?? null, p.osName ?? null, p.osVersion ?? null, p.appVersion ?? null],
+  ).catch((e) => console.error("[db] upsertInstall:", (e as Error).message));
+}
+
+/** Nadaje/zmienia nazwę instalacji (do łatwego rozpoznania). Tworzy wpis, jeśli nie istnieje. */
+export async function setInstallName(installId: string, name: string | null): Promise<void> {
+  const pool = getPool();
+  if (!pool || !ready || !installId) return;
+  await pool.query(
+    `INSERT INTO installs (install_id, name) VALUES ($1,$2)
+     ON CONFLICT (install_id) DO UPDATE SET name = EXCLUDED.name`,
+    [installId, name],
+  ).catch((e) => console.error("[db] setInstallName:", (e as Error).message));
+}
+
+export interface InstallRow {
+  installId: string; name: string | null; deviceModel: string | null; brand: string | null; osName: string | null; osVersion: string | null;
+  appVersion: string | null; firstSeen: string | null; lastSeen: string | null; lastActivity: string | null;
+  scans: number; errors: number; events: number; costUsd: number;
+}
+
+/** Lista WSZYSTKICH instalacji (z tabeli installs + te, które tylko logowały zdarzenia) ze statystyką. */
+export async function getInstalls(): Promise<InstallRow[]> {
+  const pool = getPool();
+  if (!pool || !ready) return [];
+  const r = await pool.query(`
+    WITH ids AS (
+      SELECT install_id FROM installs
+      UNION SELECT DISTINCT install_id FROM events WHERE install_id IS NOT NULL
+    )
+    SELECT ids.install_id,
+      i.name, i.device_model, i.brand, i.os_name, i.os_version,
+      COALESCE(i.app_version, max(e.data->>'appVersion')) AS app_version,
+      to_char(COALESCE(i.first_seen, min(e.created_at)),'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_seen,
+      to_char(GREATEST(i.last_seen, max(e.created_at)),'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_seen,
+      to_char(max(e.created_at),'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_activity,
+      count(*) FILTER (WHERE e.type='scan')::int AS scans,
+      count(*) FILTER (WHERE e.type='client-error')::int AS errors,
+      count(e.id)::int AS events,
+      coalesce(sum(e.cost_usd),0) AS cost
+    FROM ids
+    LEFT JOIN installs i ON i.install_id = ids.install_id
+    LEFT JOIN events e ON e.install_id = ids.install_id
+    GROUP BY ids.install_id, i.name, i.device_model, i.brand, i.os_name, i.os_version, i.app_version, i.first_seen, i.last_seen
+    ORDER BY GREATEST(i.last_seen, max(e.created_at)) DESC NULLS LAST LIMIT 500`);
+  return r.rows.map((x) => ({
+    installId: x.install_id, name: x.name, deviceModel: x.device_model, brand: x.brand, osName: x.os_name, osVersion: x.os_version,
+    appVersion: x.app_version, firstSeen: x.first_seen, lastSeen: x.last_seen, lastActivity: x.last_activity,
+    scans: x.scans, errors: x.errors, events: x.events, costUsd: Number(x.cost),
+  }));
 }
 
 /** Ostatnie surowe zdarzenia (do eksportu/debug). */

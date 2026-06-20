@@ -3,6 +3,7 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Device from "expo-device";
 import * as appLog from "./appLog";
 import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type PhotoDebug, type RestaurantInfo, type Usage } from "./types";
 
@@ -55,6 +56,25 @@ export async function initInstallId(): Promise<string> {
   return INSTALL_ID;
 }
 export function getInstallId(): string { return INSTALL_ID; }
+
+/** Rejestruje instalację na serwerze: urządzenie (model/brand/OS) + wersja apki → zakładka „Instancje". */
+export async function registerInstall(): Promise<void> {
+  try {
+    await initInstallId();
+    void fetch(`${API_BASE}/install/register`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        installId: INSTALL_ID,
+        deviceModel: Device.modelName ?? undefined,
+        brand: Device.brand ?? undefined,
+        osName: Device.osName ?? Platform.OS,
+        osVersion: Device.osVersion ?? undefined,
+        appVersion: APP_VERSION,
+      }),
+    }).catch(() => {});
+  } catch { /* ignoruj — rejestracja nie może wywalić apki */ }
+}
 
 function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };

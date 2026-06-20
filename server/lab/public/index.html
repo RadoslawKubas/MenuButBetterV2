@@ -78,6 +78,7 @@
     <button class="tab" id="tabBtn-cache" onclick="switchTab('cache')">🗄 Cache</button>
     <button class="tab" id="tabBtn-samples" onclick="switchTab('samples')">📦 Sample</button>
     <button class="tab" id="tabBtn-errors" onclick="switchTab('errors')">🐞 Błędy</button>
+    <button class="tab" id="tabBtn-instances" onclick="switchTab('instances')">📱 Instancje</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
   </nav>
   <span class="mut small" id="dir"></span>
@@ -240,6 +241,15 @@
     <div class="mut small" style="margin-bottom:2px">Wersja apki (build):</div>
     <div class="chips" id="errBuilds" style="margin-bottom:8px"></div>
     <div id="errList"></div>
+  </div>
+</div>
+
+<div id="tab-instances" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>📱 Instancje apki</h3>
+    <div class="mut small" style="margin-bottom:6px">Każda instalacja apki (GUID) — urządzenie, wersja, od kiedy są dane, ostatnia aktywność, skany/koszt/błędy. Nadaj nazwę, by łatwo rozpoznać; klik → szczegóły + aktywność.</div>
+    <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center"><button onclick="loadInstances(this)" style="padding:4px 10px">↻ odśwież</button><span class="mut small" id="instInfo"></span></div>
+    <div id="instList"></div>
   </div>
 </div>
 
@@ -790,7 +800,7 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','prices'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','instances','prices'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
@@ -799,6 +809,7 @@ function switchTab(name){
   else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ loadServerSamples(); renderLocalSamples(); }
   else if(name==='errors'){ loadClientErrors(); }
+  else if(name==='instances'){ loadInstances(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
@@ -1034,6 +1045,7 @@ async function loadClientErrors(btn){
   if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
   ERR_RAW=r.errors||[];
   const cr=await api('/api/error-closed').catch(()=>({closed:[]})); ERR_CLOSED=new Set(cr.closed||[]);
+  await ensureInstNames(); // nazwy instancji do nagłówków grup
   const builds=errBuildsList();
   if(!builds.includes(ERR_BUILD)) ERR_BUILD = builds[0]||''; // domyślnie NAJNOWSZY build
   document.getElementById('errClosedChip').className='chip'+(ERR_SHOW_CLOSED?' on':'');
@@ -1057,7 +1069,7 @@ function renderErrList(){
   box.innerHTML = ERR_GROUPS.length ? ERR_GROUPS.map((g,gi)=>`
     <div class="cand">
       <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-        <b>📱 ${esc(g.id.slice(0,20))}${g.build?' · '+esc(g.build):''}${g.platform?' · '+esc(g.platform):''}</b>
+        <b style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(g.id)}')">${instLabel(g.id)}${g.build?' · '+esc(g.build):''}${g.platform?' · '+esc(g.platform):''}</b>
         <span style="display:flex; gap:6px; white-space:nowrap"><span class="badge fail">${g.errors.length}</span><button onclick="loadInstallActivity('${esc(g.id)}',${gi})" style="padding:2px 7px; font-size:11px">📋 aktywność</button></span>
       </div>
       <div class="mut small">ostatni: ${new Date(g.last).toLocaleString()}</div>
@@ -1090,6 +1102,46 @@ async function loadInstallActivity(id,gi){
   const a=r.activity||[];
   el.innerHTML=`<div class="step" style="margin-top:6px"><div class="mut small" style="font-weight:700">Aktywność tej instancji (${a.length}):</div>${a.map(x=>`<div class="mut small">${new Date(x.at).toLocaleTimeString()} · <b>${esc(x.type)}</b> ${esc(x.op||'')}${x.model?' · '+esc(x.model):''}${x.costUsd?' · $'+x.costUsd.toFixed(4):''}</div>`).join('')||'<div class="mut small">brak</div>'}</div>`;
 }
+
+/* ---- Instancje apki (zakładka 📱 Instancje) ---- */
+let INSTANCES=[], INST_NAMES={};
+async function ensureInstNames(){ try{ const r=await api('/api/installs'); INST_NAMES={}; (r.installs||[]).forEach(i=>{ if(i.name) INST_NAMES[i.installId]=i.name; }); }catch(e){} }
+function instLabel(id){ return INST_NAMES[id] ? '🏷 '+esc(INST_NAMES[id]) : '📱 '+esc((id||'').slice(0,18)); }
+async function loadInstances(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
+  const info=document.getElementById('instInfo'), box=document.getElementById('instList'); if(!info||!box) return; info.textContent='pobieram…';
+  let r; try{ r=await api('/api/installs'); }catch(e){ info.textContent='błąd połączenia'; return; }
+  if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
+  INSTANCES=r.installs||[];
+  INST_NAMES={}; INSTANCES.forEach(i=>{ if(i.name) INST_NAMES[i.installId]=i.name; });
+  info.textContent=`${INSTANCES.length} instancji · serwer ${r.prodUrl||''}`;
+  box.innerHTML = INSTANCES.length ? INSTANCES.map((i,ix)=>instCard(i,ix)).join('') : '<div class="mut small">Brak instancji (jeszcze żadna apka nie zarejestrowała się).</div>';
+}
+function instCard(i,ix){
+  const dev=[i.brand,i.deviceModel].filter(Boolean).join(' ')||'(nieznane urządzenie)';
+  const os=[i.osName,i.osVersion].filter(Boolean).join(' ');
+  return `<div class="cand" id="inst-${esc(i.installId)}">
+    <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+      <b>${i.name?'🏷 '+esc(i.name):'📱 '+esc(i.installId.slice(0,20))}</b>
+      <button onclick="renameInstance('${esc(i.installId)}')" style="padding:2px 7px; font-size:11px; white-space:nowrap">✏️ nazwa</button>
+    </div>
+    <div class="mut small">📱 ${esc(dev)}${os?' · '+esc(os):''}${i.appVersion?' · '+esc(i.appVersion):''}</div>
+    <div class="mut small">od ${i.firstSeen?new Date(i.firstSeen).toLocaleString():'?'} · ostatnio ${i.lastActivity?new Date(i.lastActivity).toLocaleString():(i.lastSeen?new Date(i.lastSeen).toLocaleString():'?')}</div>
+    <div class="mut small">📖 ${i.scans} skanów · 💲 ${fmtUsd(i.costUsd)} · 🐞 ${i.errors} błędów · ${i.events} zdarzeń</div>
+    <div style="margin-top:6px"><button onclick="toggleInstActivity('${esc(i.installId)}',${ix})" style="padding:2px 7px; font-size:11px">📋 aktywność / szczegóły</button></div>
+    <div id="instact-${ix}"></div>
+  </div>`;
+}
+async function renameInstance(id){ const cur=INST_NAMES[id]||''; const name=prompt('Nazwa instancji (puste = usuń):', cur); if(name===null) return; await api('/api/install-name',{installId:id, name:name.trim()}); loadInstances(); }
+async function toggleInstActivity(id,ix){
+  const el=document.getElementById('instact-'+ix); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="mut small" style="margin-top:6px">ładuję…</div>';
+  const r=await api('/api/install-activity?installId='+encodeURIComponent(id)); const a=r.activity||[];
+  el.innerHTML=`<div class="step" style="margin-top:6px"><div class="mut small" style="font-weight:700">Aktywność (${a.length}):</div>${a.map(x=>`<div class="mut small">${new Date(x.at).toLocaleString()} · <b>${esc(x.type)}</b> ${esc(x.op||'')}${x.model?' · '+esc(x.model):''}${x.costUsd?' · $'+x.costUsd.toFixed(4):''}</div>`).join('')||'<div class="mut small">brak</div>'}</div>`;
+}
+// Nawigacja z innych zakładek (np. Błędy) → zakładka Instancje + szczegóły danej instancji.
+function openInstance(id){ switchTab('instances'); setTimeout(async ()=>{ await loadInstances(); const ix=INSTANCES.findIndex(x=>x.installId===id); if(ix>=0){ toggleInstActivity(id,ix); const el=document.getElementById('inst-'+id); if(el) el.scrollIntoView({block:'center'}); } }, 120); }
 
 loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu
 </script>

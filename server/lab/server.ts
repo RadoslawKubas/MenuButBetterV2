@@ -762,6 +762,25 @@ app.get("/api/install-activity", async (c) => {
   }
 });
 
+app.get("/api/installs", async (c) => {
+  try {
+    const r = await prodFetch("/installs");
+    const d = (await r.json()) as { installs?: unknown[] };
+    return c.json({ prodUrl: PROD_URL, configured: !!PROD_TOKEN, installs: d.installs ?? [] });
+  } catch (e) {
+    return c.json({ error: `Nie połączono z serwerem (${PROD_URL}): ${(e as Error).message}`, prodUrl: PROD_URL }, 502);
+  }
+});
+app.post("/api/install-name", async (c) => {
+  const b = await c.req.json<{ installId: string; name: string }>();
+  try {
+    await prodFetch("/install/name", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+    return c.json({ ok: true });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
 app.post("/api/server-samples/delete", async (c) => {
   const { id } = await c.req.json<{ id: number }>();
   if (!id) return c.json({ error: "brak id" }, 400);

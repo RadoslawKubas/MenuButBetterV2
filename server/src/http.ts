@@ -15,7 +15,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
@@ -693,6 +693,27 @@ app.post("/client-error", async (c) => {
 app.get("/client-errors", async (c) => {
   const limit = Number(c.req.query("limit")) || 300;
   return c.json({ errors: await getClientErrors(limit) });
+});
+
+// Apka: rejestruje/odświeża instalację (urządzenie + wersja) — wołane na starcie.
+app.post("/install/register", async (c) => {
+  let b: { installId?: string; deviceModel?: string; brand?: string; osName?: string; osVersion?: string; appVersion?: string };
+  try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  const installId = b.installId || c.req.header("x-install-id") || "";
+  if (!installId) return c.json({ error: "Brak installId." }, 400);
+  await upsertInstall({ installId, deviceModel: b.deviceModel, brand: b.brand, osName: b.osName, osVersion: b.osVersion, appVersion: b.appVersion });
+  return c.json({ ok: true });
+});
+
+// Lab: lista instalacji ze statystyką (urządzenie, wersja, od kiedy/ostatnia aktywność, skany, koszt, błędy).
+app.get("/installs", async (c) => c.json({ installs: await getInstalls() }));
+
+// Lab: nadaj nazwę instalacji.
+app.post("/install/name", async (c) => {
+  const b = await c.req.json<{ installId?: string; name?: string }>().catch(() => ({}) as { installId?: string; name?: string });
+  if (!b.installId) return c.json({ error: "Brak installId." }, 400);
+  await setInstallName(b.installId, b.name?.trim() || null);
+  return c.json({ ok: true });
 });
 
 // Lab: wszystkie zdarzenia jednej INSTALACJI (skany, ai, sample, błędy) — wgląd „co robiła ta apka".
