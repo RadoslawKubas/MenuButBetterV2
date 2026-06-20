@@ -840,6 +840,21 @@ export default function App() {
       // paczkę, czekamy na rolling, robimy FINAŁOWY enrich na KOMPLETNEJ strukturze (tłumaczy SEKCJE,
       // których rolling nie ruszał, i dopina pominięte) — dania z rollingu = trafienia cache → szybko. ===
       void (async () => {
+        setScanPhase({ label: "Tłumaczę grupy…" });
+        // #2: NAJPIERW przetłumacz NAZWY GRUP + notatki (szkielet bez dań — szybko, mało elementów), żeby
+        // struktura menu była czytelna od razu; dopiero potem dania (rolling/finał).
+        void (async () => {
+          try {
+            const skeleton: Menu = { ...structureMenu, sections: structureMenu.sections.map((s) => ({ ...s, items: [] })) };
+            const { menu: skel } = await enrichMenuOnServer(
+              skeleton,
+              { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+            );
+            setMenu((prev) => (prev ? applyEnrich(prev, skel) : prev)); // patchuje name_translated sekcji + notatki
+          } catch {
+            /* tłumaczenie grup padło — i tak dojdzie przy finałowym enrichu */
+          }
+        })();
         setScanPhase({ label: "Tłumaczę i opisuję dania…" });
         flushEnrich(); // domknij ostatnią paczkę (<8 dań)
         try {
@@ -848,6 +863,10 @@ export default function App() {
           /* część paczek mogła paść — finalizujemy z tym, co jest */
         }
         // Finał na komplecie: sekcje + ewentualne pominięte pozycje (dania z rollingu trafiają w cache).
+        // finalMenu budujemy JAWNIE z wyniku enrichu (applyEnrich na strukturze) — NIE czytamy z nieświeżego
+        // stanu Reacta (updater setState nie liczy się synchronicznie → fillDishPhotos dostawał surowy
+        // photo_query=oryginał i zdjęcia poglądowe nie wychodziły).
+        let finalMenu: Menu = structureMenu;
         try {
           const { menu: enriched, usage } = await enrichMenuOnServer(
             structureMenu,
@@ -855,18 +874,13 @@ export default function App() {
             (p) => setScanPhase(scanPhaseLabel(p)),
             (stub) => setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev)),
           );
-          setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
+          finalMenu = applyEnrich(structureMenu, enriched); // z poprawnym photo_query do fillDishPhotos
+          setMenu((prev) => (prev ? applyEnrich(prev, enriched) : finalMenu));
           enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj
         } catch {
-          /* finał padł — rolling i tak dał większość; zostaje co jest */
+          /* finał padł — rolling i tak dał większość; zostaje struktura (photo_query=oryginał) */
         }
         if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich (rolling+finał) raz
-        // Odczyt aktualnego (wzbogaconego w miejscu) menu — updater setState liczy się synchronicznie.
-        let finalMenu: Menu = structureMenu;
-        setMenu((prev) => {
-          if (prev) finalMenu = prev;
-          return prev;
-        });
         if (scanId) void updateScanMenu(scanId, finalMenu);
         setScans(await listScans());
         if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId!, finalMenu.restaurant_name ?? undefined, setMenu);
@@ -2017,15 +2031,34 @@ export default function App() {
           {!(showDiag || showCaptures || showPricing || showSettings || showingDetail) ? (
             <View style={styles.tabs}>
               <Pressable onPress={() => setTab("scan")}>
-                <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skanuj</Text>
+                <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skan</Text>
               </Pressable>
               <Pressable onPress={() => setTab("history")}>
                 <Text style={[styles.tab, tab === "history" && styles.tabActive]}>
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
+              {/* „Nowy skan" PRZYKLEJONY w pasku zakładek (nie na scrollu) — gdy patrzysz na wynik skanu. */}
+              {tab === "scan" && status === "done" && menu ? (
+                <Pressable onPress={resetScan} style={styles.tabsNewScan}>
+                  <Text style={styles.navText}>＋ Nowy skan</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
+          {/* #3: cienka linia postępu w STAŁYM nagłówku — zawsze widoczna gdy enrich trwa, treść scrolluje
+              pod nią. Znika gdy skan gotowy. */}
+          {status === "scanning" && menu && !(showDiag || showCaptures || showPricing || showSettings) ? (() => {
+            const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
+            const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
+            const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
+            const pct = total > 0 ? Math.min(1, enriched / total) : 0;
+            return (
+              <View style={styles.topProgress}>
+                <View style={[styles.topProgressFill, { width: `${Math.round(pct * 100)}%` }]} />
+              </View>
+            );
+          })() : null}
         </View>
 
         {showDiag ? (
@@ -2424,11 +2457,9 @@ export default function App() {
                       );
                     })()
                   ) : (
+                    // „Nowy skan" przeniesiony do paska zakładek (na stałej wysokości); tu zostaje tylko status.
                     <View style={styles.savedRow}>
                       <Text style={styles.savedNote}>✓ Zapisano w historii</Text>
-                      <Pressable onPress={resetScan} style={styles.navBtn}>
-                        <Text style={styles.navText}>＋ Nowy skan</Text>
-                      </Pressable>
                     </View>
                   )}
                   {scanIncomplete ? (
@@ -2560,7 +2591,10 @@ const styles = StyleSheet.create({
   iconBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
   icon: { fontSize: 20 },
   iconBadge: { fontSize: 13, fontWeight: "800", color: colors.accent },
-  tabs: { flexDirection: "row", gap: 20, marginTop: 12 },
+  tabs: { flexDirection: "row", alignItems: "center", gap: 20, marginTop: 12 },
+  tabsNewScan: { marginLeft: "auto", paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.badgeBg, borderRadius: 999 },
+  topProgress: { height: 3, backgroundColor: colors.badgeBg, borderRadius: 999, marginTop: 10, overflow: "hidden" },
+  topProgressFill: { height: "100%", backgroundColor: colors.accent, borderRadius: 999 },
   tab: { fontSize: 15, fontWeight: "700", color: colors.muted },
   tabActive: { color: colors.accent, textDecorationLine: "underline" },
   navBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: colors.badgeBg, borderRadius: 999 },
