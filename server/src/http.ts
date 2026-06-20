@@ -106,6 +106,8 @@ interface ScanBody {
   stream?: boolean;
   /** TYLKO struktura (Faza A apki) — bez enrichu; enrich osobno przez /enrich. */
   structureOnly?: boolean;
+  /** Sekcje z wcześniejszych partii (ciągłość grup między stronami przy menu dzielonym na partie). */
+  knownSections?: string[];
 }
 
 /** Normalizuje wejście (tablica lub pojedyncze) do InputImage[]. Rzuca przy błędzie. */
@@ -206,6 +208,7 @@ app.post("/scan", async (c) => {
         model,
         enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
         structureOnly: body.structureOnly === true,
+        knownSections: Array.isArray(body.knownSections) ? body.knownSections.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 40) : undefined,
         // Postęp odczytu na żywo: krok z licznikiem pozycji (gdy wzrośnie).
         onProgress: wantSteps
           ? (p) => {

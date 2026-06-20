@@ -220,6 +220,15 @@ export default function App() {
   const [photoLoading, setPhotoLoading] = useState<Set<string>>(new Set()); // doszukiwanie lepszych zdjęć
   const [freshRestaurant, setFreshRestaurant] = useState<RestaurantInfo | null>(null);
   const [restaurantLoading, setRestaurantLoading] = useState(false);
+  // #2a: lokal namierzany JUŻ w trakcie struktury (read-only), a podmiana ★ zdjęć (mutacja menu) odkładana
+  // na zamrożoną strukturę. Refy łączą wczesny lookup (bez scanId) z finalizacją po Fazie A.
+  const earlyVenueRef = useRef(false); // czy wczesny lookup już ruszył (raz na skan)
+  const scanIdRef = useRef<string | null>(null); // scanId dostępny dla wczesnych callbacków
+  const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
+  const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
+  const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
+  const venueFinalizedRef = useRef(false); // czy podmiana ★ zdjęć z lokalu już ruszyła (raz na skan)
+  useEffect(() => { freshVenueRef.current = freshRestaurant; }, [freshRestaurant]);
   // Kontekst aktywnej karty lokalu: pozwala wybrać kandydata, wyszukać inny lokal
   // w pobliżu i usunąć dopasowanie — niezależnie od tego, czy to świeży czy zapisany skan.
   const [restaurantCtx, setRestaurantCtx] = useState<{
@@ -431,6 +440,12 @@ export default function App() {
     setStatus("scanning");
     setBrowseEarly(false);
     setStructureReady(false);
+    earlyVenueRef.current = false; // #2a: reset cyklu życia lokalu
+    scanIdRef.current = null;
+    structureFrozenRef.current = false;
+    structureMenuRef.current = null;
+    freshVenueRef.current = null;
+    venueFinalizedRef.current = false;
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
@@ -609,7 +624,31 @@ export default function App() {
         if (opts.images.length > 1) setScanProgress({ done: Math.min(doneImages, opts.images.length), total: opts.images.length });
       };
 
-      const runBatch = async (bi: number, batchHint: string | undefined) => {
+      // ENRICH PER‑PARTIA (#2b): gdy partia skończy STRUKTURĘ, od razu ją enrichujemy — nakłada się na
+      // strukturę kolejnych partii (nie czekamy aż cała struktura przejdzie). Patch W MIEJSCU po nazwie.
+      const enrichJobs: Promise<void>[] = [];
+      const enrichBatch = (batchMenu: Menu) => {
+        enrichJobs.push((async () => {
+          try {
+            const onEnrich = (stub: ScanItemStub) => {
+              setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev));
+              setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description } : x)));
+            };
+            const { menu: enriched, usage } = await enrichMenuOnServer(
+              batchMenu,
+              { targetLang: opts.targetLang, locationHint, cuisineHint: pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+              (p) => setScanPhase(scanPhaseLabel(p)),
+              onEnrich,
+            );
+            setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
+            if (scanId) void addScanUsage(scanId, usage);
+          } catch {
+            // enrich tej partii padł — pozycje zostają z oryginalnymi nazwami (reszta i tak działa)
+          }
+        })());
+      };
+
+      const runBatch = async (bi: number, batchHint: string | undefined, knownSections?: string[]) => {
         const batch = batches[bi]!;
         setScanCurrentImage(batch[0]?.uri ?? null); // pokaż którąś z aktualnie analizowanych fotek
         let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean, partialQuality: boolean;
@@ -624,11 +663,20 @@ export default function App() {
               model: opts.models.scan,
               enrichModel: opts.models.enrich,
               structureOnly: true, // FAZA A: tylko struktura (szybko); enrich osobno w Fazie B (/enrich)
+              knownSections, // #1: ciągłość grup — sekcje z wcześniejszych partii
             },
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
             onEnrichItem,
-            (m) => { if (m.restaurantName) setScanFoundName(m.restaurantName); }, // nazwa lokalu na żywo
+            (m) => { // nazwa lokalu na żywo + #2a: read-only lookup JUŻ w trakcie struktury
+              if (!m.restaurantName) return;
+              setScanFoundName(m.restaurantName);
+              if (!earlyVenueRef.current) {
+                earlyVenueRef.current = true;
+                const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: pickPeekCuisine() || "", sections: [], notes: [] };
+                void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
+              }
+            },
           ));
         } catch {
           // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
@@ -673,6 +721,7 @@ export default function App() {
               usage,
             });
             scanId = saved.id;
+            scanIdRef.current = saved.id; // udostępnij wczesnym callbackom (#2a)
             setFreshScanId(saved.id);
           } else {
             merged = mergeMenus(merged, incoming).menu;
@@ -683,6 +732,7 @@ export default function App() {
           setScans(await listScans());
         });
         bumpProgress(batch.length);
+        enrichBatch(incoming); // #2b: enrich tej partii od razu (nakłada się na strukturę kolejnych)
       };
 
       // Partia 0 OSOBNO — ustala bazowe menu + nazwę/kuchnię (kontekst dla pozostałych). Potem
@@ -692,8 +742,13 @@ export default function App() {
         const restHint = merged
           ? [(merged as Menu).restaurant_name, (merged as Menu).cuisine].filter(Boolean).join(" ") || undefined
           : opts.hint.trim() || undefined;
+        // #1: sekcje z partii 0 → kontekst ciągłości grup dla kolejnych partii (strona bez nagłówka
+        // kontynuuje znaną sekcję, nie tworzy „(bez tytułu)"). Trafia też do klucza cache struktury.
+        const knownSections = merged
+          ? (merged as Menu).sections.map((s) => s.name).filter((nm) => nm && nm.trim() && !/sin t[ií]tulo|untitled|bez tyt|^\(/i.test(nm))
+          : [];
         let next = 1;
-        const worker = async () => { while (next < batches.length) { const bi = next++; await runBatch(bi, restHint); } };
+        const worker = async () => { while (next < batches.length) { const bi = next++; await runBatch(bi, restHint, knownSections); } };
         await Promise.all(Array.from({ length: Math.min(3, batches.length - 1) }, worker));
       }
       if (anyCached) setScanFromCache(true);
@@ -720,32 +775,61 @@ export default function App() {
       setMenu(structureMenu);
       if (scanId) void updateScanMenu(scanId, structureMenu);
       setStructureReady(true); // struktura kompletna → ekran skanu pokaże „Otwórz menu" + kartę lokalu
+      structureFrozenRef.current = true; // #2a: od teraz wolno robić upgrade ★ (struktura niezmienna)
+      structureMenuRef.current = structureMenu;
+      scanIdRef.current = scanId!;
 
       // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
       if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
 
-      // Namierzenie lokalu na ZAMROŻONEJ strukturze (karta na ekranie skanu — user potwierdza/zmienia).
-      // upgradeVenuePhotos jest funkcyjny → komponuje się z Fazą B (enrich patchuje inne pola). Brak
-      // nazwy → tylko kontekst, user kliknie „w pobliżu".
-      setFreshRestaurant(null);
+      // Lokal na ZAMROŻONEJ strukturze. #2a: kartę mógł już pokazać wczesny lookup (onMeta) — NIE resetujemy
+      // freshRestaurant. Kontekst karty (wybór/szukanie) z prawdziwym scanId + zamrożonym menu.
       setRestaurantCtx({
         menu: structureMenu,
         location,
         scanId: scanId!,
         lang: opts.targetLang,
-        apply: setFreshRestaurant,
+        apply: applyEarlyVenue,
         applyMenu: setMenu,
-        current: null,
+        current: freshVenueRef.current,
         candidates: [],
       });
       setVenueConfirmed(false);
       setVenueQuery("");
-      if (structureMenu.restaurant_name) {
+      if (freshVenueRef.current) {
+        // wczesny lookup już znalazł lokal → domknij (zapis + ★ zdjęcia) na zamrożonej strukturze
+        void finalizeVenue(structureMenu, scanId!, freshVenueRef.current);
+      } else if (!earlyVenueRef.current && structureMenu.restaurant_name) {
+        // onMeta nie zgłosił nazwy w trakcie, ale jest w strukturze → PEŁNY lookup (robi upgrade sam,
+        // więc blokujemy finalizeVenue, żeby nie dublować ★).
+        venueFinalizedRef.current = true;
         void lookupRestaurant(structureMenu, location, scanId!, opts.targetLang, setFreshRestaurant, { applyMenu: setMenu });
       }
+      // (jeśli earlyVenueRef ustawiony, ale wynik jeszcze nie doszedł → applyEarlyVenue domknie sam, gdy wróci)
 
-      // === FAZA B: enrich w TLE (tłumaczenia/opisy/photo_query) — patch W MIEJSCU, struktura niezmienna ===
-      void runEnrichPhase(structureMenu, scanId!, opts, locationHint);
+      // === FAZA B (#2b): enrich już LECI per‑partia (ruszył w runBatch, nakłada się na strukturę). Tu
+      // czekamy aż wszystkie się wzbogacą → finalny zapis + zdjęcia/opisy + „done". ===
+      void (async () => {
+        setScanPhase({ label: "Tłumaczę i opisuję dania…" });
+        try {
+          await Promise.all(enrichJobs);
+        } catch {
+          /* pojedyncza partia mogła paść — finalizujemy z tym, co jest */
+        }
+        // Odczyt aktualnego (wzbogaconego w miejscu) menu — updater setState liczy się synchronicznie.
+        let finalMenu: Menu = structureMenu;
+        setMenu((prev) => {
+          if (prev) finalMenu = prev;
+          return prev;
+        });
+        if (scanId) void updateScanMenu(scanId, finalMenu);
+        setScans(await listScans());
+        if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId!, finalMenu.restaurant_name ?? undefined, setMenu);
+        if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
+        setScanPhase(null);
+        setScanItems([]);
+        setStatus("done");
+      })();
 
       // ODPORNOŚĆ: część partii (struktury) padła → doliczamy w TLE (tylko one — nie od początku).
       if (failedBatches.length > 0) {
@@ -808,43 +892,6 @@ export default function App() {
       })),
       notes: (prev.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
     };
-  }
-
-  // FAZA B — wzbogacenie gotowej struktury w TLE (/enrich): tłumaczenia/opisy/photo_query patchowane
-  // W MIEJSCU w miarę napływu (bez zmiany struktury), potem zdjęcia + rozszerzone opisy. Na końcu „done".
-  async function runEnrichPhase(
-    structureMenu: Menu,
-    scanId: string,
-    opts: { targetLang: string; models: Record<ModelRole, ModelId> },
-    locationHint: string | undefined,
-  ) {
-    try {
-      setScanPhase({ label: "Tłumaczę i opisuję dania…" });
-      const onEnrich = (stub: ScanItemStub) => {
-        setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev));
-        setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description } : x)));
-      };
-      const { menu: enriched, usage } = await enrichMenuOnServer(
-        structureMenu,
-        { targetLang: opts.targetLang, locationHint, cuisineHint: pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-        (p) => setScanPhase(scanPhaseLabel(p)),
-        onEnrich,
-      );
-      let finalMenu = structureMenu;
-      setMenu((prev) => { finalMenu = applyEnrich(prev ?? structureMenu, enriched); return finalMenu; });
-      void updateScanMenu(scanId, finalMenu);
-      void addScanUsage(scanId, usage);
-      setScans(await listScans());
-      // Tło (jak dotąd, sterowane „Kosztami"): tanie zdjęcia poglądowe + rozszerzone opisy.
-      if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId, finalMenu.restaurant_name ?? undefined, setMenu);
-      if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId, opts.targetLang, setMenu);
-    } catch {
-      // Enrich padł — zostaje STRUKTURA (oryginalne nazwy). Nie wywalamy menu; user ma co czytać.
-    } finally {
-      setScanPhase(null);
-      setScanItems([]);
-      setStatus("done");
-    }
   }
 
   // Dokańcza w TLE partie skanu, które padły (sieć/serwer): ponawia TYLKO je, scala z menu i
@@ -967,7 +1014,7 @@ export default function App() {
     scanId: string | null,
     lang: string,
     apply: (r: RestaurantInfo | null) => void,
-    opts?: { forceNearby?: boolean; applyMenu?: (u: (prev: Menu | null) => Menu | null) => void },
+    opts?: { forceNearby?: boolean; skipUpgrade?: boolean; applyMenu?: (u: (prev: Menu | null) => Menu | null) => void },
   ) {
     const forceNearby = opts?.forceNearby ?? false;
     const applyMenu = opts?.applyMenu ?? restaurantCtx?.applyMenu ?? setMenu;
@@ -1006,17 +1053,47 @@ export default function App() {
         await updateScanRestaurant(scanId, cached);
         setScans(await listScans());
       }
-      // Mamy teraz lokal (strona www + pewna nazwa + podpisy TripAdvisora) → doszukaj
-      // zdjęć Z TEGO LOKALU dla dań bez potwierdzonego (★). Gdy lokal się ZMIENIŁ na inny,
-      // zdejmij najpierw nieaktualne ★ (z poprzedniego lokalu), by potwierdzić od nowa.
-      const baseForUpgrade = await rebaseVenue(m, scanId, applyMenu, prevVenue, r);
-      if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+      // #2a: read-only (skipUpgrade) — karta lokalu W TRAKCIE struktury, BEZ mutacji menu (★ zdjęcia
+      // z lokalu) i bez wymogu scanId. Podmiana zdjęć z lokalu (upgradeVenuePhotos) idzie dopiero na
+      // ZAMROŻONEJ strukturze (finalizeVenue), żeby nie ruszać rosnącego menu.
+      if (!opts?.skipUpgrade) {
+        const baseForUpgrade = await rebaseVenue(m, scanId, applyMenu, prevVenue, r);
+        if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+      }
     } catch {
       // ciche niepowodzenie — karta lokalu po prostu się nie pokaże
     } finally {
       setRestaurantLoading(false);
     }
   }
+
+  // #2a: domknięcie lokalu na ZAMROŻONEJ strukturze — zapis do skanu + podmiana ★ zdjęć z lokalu
+  // (upgradeVenuePhotos jest funkcyjny → komponuje się z enrichem). Wołane gdy mamy lokal + scanId +
+  // zamrożoną strukturę, niezależnie od kolejności (wczesny lookup vs koniec Fazy A). Raz na skan.
+  async function finalizeVenue(menu: Menu, scanId: string, venue: RestaurantInfo) {
+    if (venueFinalizedRef.current) return;
+    venueFinalizedRef.current = true;
+    try {
+      await updateScanRestaurant(scanId, venue);
+      setScans(await listScans());
+      if (costPrefs.autoVenuePhotos) {
+        const base = await rebaseVenue(menu, scanId, setMenu, null, venue); // prevVenue null → bez demote
+        void upgradeVenuePhotos(base, scanId, venue, setMenu);
+      }
+    } catch {
+      /* ciche — karta lokalu i tak jest pokazana */
+    }
+  }
+
+  // Wczesny (read-only) lookup w trakcie struktury: pokaż kartę, a gdy struktura zamrożona + jest scanId
+  // → domknij (zapis + ★ zdjęcia). Działa w obu kolejnościach: lookup przed/po zamrożeniu struktury.
+  const applyEarlyVenue = (r: RestaurantInfo | null) => {
+    setFreshRestaurant(r);
+    freshVenueRef.current = r;
+    if (r && structureFrozenRef.current && scanIdRef.current && structureMenuRef.current) {
+      void finalizeVenue(structureMenuRef.current, scanIdRef.current, r);
+    }
+  };
 
   // User wybiera właściwy lokal z listy kandydatów (gdy zgadywaliśmy po GPS).
   async function pickRestaurant(choice: RestaurantInfo) {
@@ -2212,15 +2289,17 @@ export default function App() {
                       </ScrollView>
                     </>
                   ) : null}
-                  {structureReady ? (
-                    // Struktura gotowa (zamrożona) → potwierdź lokal i/lub wejdź do menu; enrich leci w tle.
+                  {/* #2a: karta lokalu pojawia się JUŻ w trakcie struktury (wczesny lookup z onMeta),
+                      żeby user mógł ją potwierdzić/zmienić czekając na resztę odczytu. */}
+                  {freshRestaurant || restaurantLoading ? (
                     <View style={styles.scanReadyBox}>
-                      {freshRestaurant || restaurantLoading ? (
-                        <>
-                          <Text style={styles.scanReadyVenueHdr}>📍 Lokal — potwierdź lub zmień</Text>
-                          {renderRestaurant(freshRestaurant)}
-                        </>
-                      ) : null}
+                      <Text style={styles.scanReadyVenueHdr}>📍 Lokal — potwierdź lub zmień</Text>
+                      {renderRestaurant(freshRestaurant)}
+                    </View>
+                  ) : null}
+                  {structureReady ? (
+                    // Struktura gotowa (zamrożona) → wejdź do menu; enrich/zdjęcia lecą w tle.
+                    <View style={styles.scanReadyBox}>
                       <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
                         <Text style={styles.enterMenuText}>📖 Otwórz menu →</Text>
                       </Pressable>

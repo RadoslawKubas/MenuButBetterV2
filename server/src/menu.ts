@@ -63,6 +63,9 @@ export interface ExtractOptions {
   noCache?: boolean;
   /** Tylko STRUKTURA (vision) — bez enrichu. Zwraca Menu z oryginalnymi nazwami; enrich robi /enrich. */
   structureOnly?: boolean;
+  /** Nazwy sekcji/grup ze WCZEŚNIEJSZYCH stron (gdy menu dzielone na partie) — ciągłość grup między
+   *  kartkami: strona bez nagłówka kontynuuje znaną sekcję zamiast tworzyć „(bez tytułu)". */
+  knownSections?: string[];
 }
 
 /** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
@@ -352,6 +355,10 @@ function contextTextStructure(opts: ExtractOptions, n: number): string {
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
     (opts.cuisineHint ? `Wstępnie rozpoznana kuchnia: ${opts.cuisineHint} (wskazówka — zweryfikuj z treścią).\n` : "") +
+    (opts.knownSections?.length
+      ? `UWAGA — to KOLEJNE strony tego samego menu. Sekcje/grupy z wcześniejszych stron: ${opts.knownSections.join(", ")}. ` +
+        `Jeśli strona ZACZYNA się od pozycji BEZ widocznego nagłówka grupy, prawdopodobnie KONTYNUUJĄ one ostatnią grupę z poprzedniej strony — przypisz je do PASUJĄCEJ znanej sekcji (DOKŁADNIE ta sama nazwa), NIE twórz „(bez tytułu)".\n`
+      : "") +
     `Połącz powyższe ${n} zdjęć w JEDNĄ strukturę menu (transkrypcja).`
   );
 }
@@ -378,7 +385,13 @@ export async function extractMenu(
   let total: Usage = ZERO_USAGE;
   // PRZEBIEG 1 — STRUKTURA (vision). Cache struktury per zestaw plików + model (BEZ języka/lokalizacji —
   // transkrypcja jest od nich niezależna → reuse między językami). Streaming nazw przez onItem/onProgress.
-  const sck = cacheKey("menu-structure", imagesHash(images), model);
+  // Klucz cache STRUKTURY: cała partia zdjęć (imagesHash) + model. Gdy są knownSections (kolejne partie
+  // z kontekstem ciągłości grup) — dołącz je do klucza (inny kontekst → inna struktura). Pusty → klucz
+  // jak dotąd (wsteczna zgodność z istniejącym cache pierwszej partii).
+  const sectCtx = opts.knownSections?.length ? opts.knownSections.join("|") : "";
+  const sck = sectCtx
+    ? cacheKey("menu-structure", imagesHash(images), model, sectCtx)
+    : cacheKey("menu-structure", imagesHash(images), model);
   let structure = !opts.noCache ? await cacheGet<MenuStructure>("menu-structure", sck, { op: "scan" }) : null;
   if (structure) {
     replayStructureItems(structure, opts); // odtwórz licznik/nazwy z cache (apka pokaże pozycje)

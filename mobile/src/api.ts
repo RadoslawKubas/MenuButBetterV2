@@ -199,6 +199,8 @@ export interface ScanParams {
   enrichModel?: ModelId;
   /** Tylko STRUKTURA (Faza A): szybkie, kompletne menu z oryginalnymi nazwami; enrich osobno (/enrich). */
   structureOnly?: boolean;
+  /** Sekcje z wcześniejszych partii (ciągłość grup między stronami przy menu dzielonym na partie). */
+  knownSections?: string[];
 }
 
 /** Postęp skanu: wysyłka zdjęć (%) → serwer odebrał → model czyta (czas) → składanie. */
@@ -243,6 +245,7 @@ export function scanMenu(
     model: params.model,
     enrichModel: params.enrichModel,
     structureOnly: params.structureOnly === true,
+    knownSections: params.knownSections,
     stream: true,
   });
 
