@@ -31,7 +31,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.appwithkiss.menubutbetter",
+      "bundleIdentifier": "com.appwithkiss.menubutbetter.lab",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

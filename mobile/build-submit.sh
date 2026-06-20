@@ -37,8 +37,8 @@ fi
 
 echo "▸ Wysyłam na TestFlight: $IPA"
 # --non-interactive działa, bo w eas.json jest submit.production.ios.ascAppId
-# (6760606303) → eas pomija krok „ensure app exists", który logował się do Apple
-# (2FA). Dzięki temu submit przechodzi też w tle, bez wpisywania kodu 2FA.
+# (6782273577 = apka LAB, bundle com.appwithkiss.menubutbetter.lab) → eas pomija krok
+# „ensure app exists", który logował się do Apple (2FA). Submit przechodzi w tle, bez 2FA.
 eas submit --platform ios --profile production --path "$IPA" --non-interactive
 
 echo "✓ Gotowe — $IPA wysłany. Apple przetworzy build za ~5–10 min (dostaniesz maila)."
