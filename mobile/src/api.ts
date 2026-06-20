@@ -101,7 +101,7 @@ export function scanMenu(
   params: ScanParams,
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
-): Promise<{ menu: Menu; usage: Usage }> {
+): Promise<{ menu: Menu; usage: Usage; cached: boolean }> {
   const t0 = Date.now();
   const body = JSON.stringify({
     images: params.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
@@ -168,7 +168,7 @@ export function scanMenu(
       onProgress?.({ phase: "finalizing" });
       // Wynik: ostatnia kompletna linia JSON z `menu`/`error`/`done`.
       const text = xhr.responseText || "";
-      let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
+      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean } | null = null;
       for (const line of text.split("\n")) {
         const tt = line.trim();
         if (!tt) continue;
@@ -188,7 +188,7 @@ export function scanMenu(
         return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
       }
       if (!result.menu) return fail("Pusta odpowiedź serwera.");
-      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE });
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached });
     };
     xhr.send(body);
   });

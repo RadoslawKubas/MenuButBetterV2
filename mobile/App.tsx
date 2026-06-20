@@ -157,6 +157,13 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
+  // Skan NIEKOMPLETNY: ile partii padło i jest dokańczanych w tle (null = komplet). Apka wpuszcza
+  // do menu z tym, co przeszło, a resztę dolicza w tle — bez powtarzania udanych partii.
+  const [scanIncomplete, setScanIncomplete] = useState<{ pending: number; working: boolean } | null>(null);
+  // Czy choć jedna partia skanu wróciła Z CACHE (ten sam plik) — do informacji o oszczędności.
+  const [scanFromCache, setScanFromCache] = useState(false);
+  // Ręczne ponowienie dokończenia skanu (gdy auto-doliczanie w tle też padło) — z banera.
+  const retryScanRef = useRef<null | (() => void)>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
   const [scanItems, setScanItems] = useState<
     { original: string; translated: string; branded: boolean; price: string | null; currency: string | null; description: string; photo?: string }[]
@@ -427,6 +434,12 @@ export default function App() {
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
+      // Odporność: partie, które padły (zapamiętujemy ich zdjęcia + indeks, by dokończyć w tle —
+      // tylko te, nie od początku). Plus znacznik, czy coś wróciło z cache (oszczędność).
+      const failedBatches: { idx: number; images: PreparedImage[] }[] = [];
+      let anyCached = false;
+      setScanIncomplete(null);
+      setScanFromCache(false);
 
       // PREFETCH zdjęć poglądowych NA ŻYWO: gdy model wypisze pozycję, od razu dociągamy dla niej
       // tanie zdjęcie (Serper) — gotowe, zanim skan się skończy; potem reużyte (bez ponownego szukania).
@@ -488,18 +501,28 @@ export default function App() {
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
           : opts.hint.trim() || undefined;
-        const { menu: incoming, usage } = await scanMenu(
-          {
-            images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-            targetLang: opts.targetLang,
-            restaurantHint: batchHint,
-            locationHint,
-            cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
-            model: opts.models.scan,
-          },
-          (p) => setScanPhase(scanPhaseLabel(p)),
-          onScanItem,
-        );
+        let incoming: Menu, usage: Usage, cached: boolean;
+        try {
+          ({ menu: incoming, usage, cached } = await scanMenu(
+            {
+              images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
+              targetLang: opts.targetLang,
+              restaurantHint: batchHint,
+              locationHint,
+              cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
+              model: opts.models.scan,
+            },
+            (p) => setScanPhase(scanPhaseLabel(p)),
+            onScanItem,
+          ));
+        } catch {
+          // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
+          // (tylko tę partię) i jedź dalej. Cache skanu sprawi, że jeśli serwer policzył a odpowiedź
+          // zginęła — ponowienie tej partii jest darmowe.
+          failedBatches.push({ idx: bi, images: batch });
+          continue;
+        }
+        if (cached) anyCached = true;
 
         if (!merged) {
           // Pierwsza partia → bazowe menu + zapis (kolejne tylko dokładają).
@@ -529,13 +552,19 @@ export default function App() {
         }
         setScans(await listScans());
       }
+      if (anyCached) setScanFromCache(true);
+
+      // Żadna partia nie przeszła → realny błąd (nie ma czego pokazać).
+      if (!merged || !scanId) {
+        throw new Error("Odczyt menu nie powiódł się (żadna partia nie przeszła) — spróbuj ponownie.");
+      }
 
       setScanProgress(null);
       setScanPhase(null);
       setStatus("done");
       setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
       setVenueQuery("");
-      const result = merged!;
+      const result = merged;
 
       // REUŻYCIE prefetchu: dołącz do menu zdjęcia poglądowe dociągnięte już w trakcie skanu —
       // dzięki temu pokazują się od razu, a fillDishPhotos je pominie (bez ponownego szukania).
@@ -575,14 +604,77 @@ export default function App() {
 
       // Tło, równolegle z automatu: (a) tanie zdjęcia poglądowe, (b) pełne opisy dań
       // (gotowe ad-hoc). Sterowane „Kosztami": wyłączniki + limit dań (reszta na dotknięcie).
-      if (costPrefs.autoPhotos) void fillDishPhotos(result, scanId!, result.restaurant_name ?? undefined, setMenu);
-      if (costPrefs.autoDescriptions) void fillDescriptions(result, scanId!, opts.targetLang, setMenu);
+      if (costPrefs.autoPhotos) void fillDishPhotos(result, scanId, result.restaurant_name ?? undefined, setMenu);
+      if (costPrefs.autoDescriptions) void fillDescriptions(result, scanId, opts.targetLang, setMenu);
+
+      // ODPORNOŚĆ: część partii padła → wpuszczamy do menu z tym, co mamy, a brakujące partie
+      // doliczamy w TLE (tylko one — nie od początku). Baner informuje o doliczaniu.
+      if (failedBatches.length > 0) {
+        setScanIncomplete({ pending: failedBatches.length, working: true });
+        void completeFailedBatches(scanId, opts, locationHint, pickPeekCuisine(), failedBatches, result);
+      }
     } catch (e) {
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
       setScanProgress(null);
       setScanPhase(null);
       setScanItems([]);
+    }
+  }
+
+  // Dokańcza w TLE partie skanu, które padły (sieć/serwer): ponawia TYLKO je, scala z menu i
+  // zapisuje. Cache skanu sprawia, że jeśli serwer już policzył (a odpowiedź zginęła), ponowienie
+  // jest DARMOWE. 2 podejścia; jak dalej się nie uda — baner z ręcznym ponowieniem (retryScanRef).
+  async function completeFailedBatches(
+    scanId: string,
+    opts: { targetLang: string; models: Record<ModelRole, ModelId> },
+    locationHint: string | undefined,
+    cuisineHint: string | undefined,
+    failed: { idx: number; images: PreparedImage[] }[],
+    baseMenu: Menu,
+  ) {
+    let acc = baseMenu;
+    let remaining = [...failed];
+    for (let pass = 0; pass < 2 && remaining.length > 0; pass++) {
+      const stillFailed: typeof remaining = [];
+      for (const fb of remaining) {
+        try {
+          const hint = [acc.restaurant_name, acc.cuisine].filter(Boolean).join(" ") || undefined;
+          const { menu: incoming, usage } = await scanMenu({
+            images: fb.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
+            targetLang: opts.targetLang,
+            restaurantHint: hint,
+            locationHint,
+            cuisineHint,
+            model: opts.models.scan,
+          });
+          acc = mergeMenus(acc, incoming).menu;
+          await updateScanMenu(scanId, acc);
+          await addScanUsage(scanId, usage);
+          const done = acc;
+          setMenu((prev) => (prev ? done : prev)); // odśwież widok, jeśli ten skan jest otwarty
+          setScanIncomplete((p) => (p ? { ...p, pending: Math.max(0, p.pending - 1) } : p));
+        } catch {
+          stillFailed.push(fb);
+        }
+      }
+      remaining = stillFailed;
+      if (remaining.length > 0) await new Promise((r) => setTimeout(r, 2500));
+    }
+    if (remaining.length === 0) {
+      setScanIncomplete(null);
+      retryScanRef.current = null;
+      setScans(await listScans());
+      if (costPrefs.autoPhotos) void fillDishPhotos(acc, scanId, acc.restaurant_name ?? undefined, setMenu);
+      if (costPrefs.autoDescriptions) void fillDescriptions(acc, scanId, opts.targetLang, setMenu);
+    } else {
+      const left = remaining;
+      const accFinal = acc;
+      retryScanRef.current = () => {
+        setScanIncomplete({ pending: left.length, working: true });
+        void completeFailedBatches(scanId, opts, locationHint, cuisineHint, left, accFinal);
+      };
+      setScanIncomplete({ pending: remaining.length, working: false });
     }
   }
 
@@ -1880,6 +1972,24 @@ export default function App() {
                       <Text style={styles.navText}>＋ Nowy skan</Text>
                     </Pressable>
                   </View>
+                  {scanIncomplete ? (
+                    <View style={styles.incompleteBox}>
+                      <Text style={styles.incompleteTitle}>⚠️ Menu może być niekompletne</Text>
+                      <Text style={styles.incompleteSub}>
+                        {scanIncomplete.working
+                          ? `Część stron nie przeszła — dolicza się w tle (pozostało ${scanIncomplete.pending}). Możesz już czytać; brakujące dania dojdą same.`
+                          : `Nie udało się doczytać ${scanIncomplete.pending} part. menu. Spróbuj dokończyć przy lepszym zasięgu — powtórzymy tylko brakujące strony.`}
+                      </Text>
+                      {!scanIncomplete.working ? (
+                        <Pressable style={styles.incompleteBtn} onPress={() => retryScanRef.current?.()}>
+                          <Text style={styles.incompleteBtnText}>↻ Dokończ brakujące</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ) : null}
+                  {scanFromCache ? (
+                    <Text style={styles.cacheNote}>🗄 Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
+                  ) : null}
                   {!venueConfirmed ? (
                     <View style={styles.confirmBox}>
                       <Text style={styles.confirmTitle}>📍 Potwierdź lokal</Text>
@@ -2126,6 +2236,12 @@ const styles = StyleSheet.create({
   },
   confirmTitle: { fontSize: 16, fontWeight: "800", color: colors.accent, marginBottom: 4 },
   confirmSub: { fontSize: 13, color: colors.muted, marginBottom: 12, lineHeight: 18 },
+  incompleteBox: { backgroundColor: "#FFF3D6", borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#E8C170" },
+  incompleteTitle: { fontSize: 14, fontWeight: "800", color: "#8A5A00", marginBottom: 3 },
+  incompleteSub: { fontSize: 12.5, color: "#6A5A2A", lineHeight: 17 },
+  incompleteBtn: { marginTop: 8, alignSelf: "flex-start", backgroundColor: "#8A5A00", borderRadius: 9, paddingVertical: 8, paddingHorizontal: 14 },
+  incompleteBtnText: { color: "#FFF", fontWeight: "800", fontSize: 13 },
+  cacheNote: { fontSize: 12, color: colors.muted, marginBottom: 12, fontStyle: "italic" },
   venueSearchRow: { flexDirection: "row", gap: 8, marginTop: 4, marginBottom: 12 },
   venueSearchInput: {
     flex: 1,
