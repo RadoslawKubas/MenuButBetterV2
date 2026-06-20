@@ -242,6 +242,8 @@ export default function App() {
   const [appending, setAppending] = useState(false);
   // Krok „Potwierdź lokal" po świeżym skanie (potwierdź / wybierz inny / wyszukaj / pomiń).
   const [venueConfirmed, setVenueConfirmed] = useState(true);
+  // „Przejdź do menu" w trakcie skanu — user czyta gotowe pozycje, reszta dochodzi w tle.
+  const [browseEarly, setBrowseEarly] = useState(false);
   const [venueQuery, setVenueQuery] = useState("");
 
   useEffect(() => {
@@ -424,6 +426,7 @@ export default function App() {
     if (opts.images.length === 0) return;
     setError(null);
     setStatus("scanning");
+    setBrowseEarly(false);
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
@@ -852,6 +855,7 @@ export default function App() {
     setFreshScanId(null);
     setRestaurantCtx(null);
     setVenueConfirmed(true);
+    setBrowseEarly(false);
     setVenueQuery("");
     setPeekByUri({});
     setPeekInfo(null);
@@ -2030,7 +2034,7 @@ export default function App() {
                 </View>
               ) : null}
 
-              {status === "scanning" ? (
+              {status === "scanning" && !browseEarly ? (
                 <View style={styles.center}>
                   <ActivityIndicator size="large" color={colors.accent} />
                   {scanProgress ? (
@@ -2109,6 +2113,11 @@ export default function App() {
                       </ScrollView>
                     </>
                   ) : null}
+                  {menu ? (
+                    <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
+                      <Text style={styles.enterMenuText}>📖 Otwórz menu — przeglądaj, resztę doczytuję w tle →</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
 
@@ -2122,14 +2131,29 @@ export default function App() {
                 </View>
               ) : null}
 
-              {status === "done" && menu ? (
+              {(status === "done" || (status === "scanning" && browseEarly)) && menu ? (
                 <View>
-                  <View style={styles.savedRow}>
-                    <Text style={styles.savedNote}>✓ Zapisano w historii</Text>
-                    <Pressable onPress={resetScan} style={styles.navBtn}>
-                      <Text style={styles.navText}>＋ Nowy skan</Text>
-                    </Pressable>
-                  </View>
+                  {status === "scanning" ? (
+                    // Przeglądanie w trakcie skanu: kompaktowy baner postępu zamiast „Zapisano".
+                    <View style={styles.scanBanner}>
+                      <ActivityIndicator size="small" color={colors.accent} />
+                      <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text style={styles.scanBannerTitle}>
+                          {scanProgress ? `⏳ Skanuję ${scanProgress.done}/${scanProgress.total} stron…` : "⏳ Skanuję dalej…"}
+                        </Text>
+                        <Text style={styles.scanBannerSub} numberOfLines={2}>
+                          📖 {menu.sections.reduce((n, s) => n + s.items.length, 0)} pozycji — czytaj, reszta dojdzie sama{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.savedRow}>
+                      <Text style={styles.savedNote}>✓ Zapisano w historii</Text>
+                      <Pressable onPress={resetScan} style={styles.navBtn}>
+                        <Text style={styles.navText}>＋ Nowy skan</Text>
+                      </Pressable>
+                    </View>
+                  )}
                   {scanIncomplete ? (
                     <View style={styles.incompleteBox}>
                       <Text style={styles.incompleteTitle}>⚠️ Menu może być niekompletne</Text>
@@ -2198,7 +2222,7 @@ export default function App() {
                     onItemPress={onFreshItemPress}
                     nameFallback={freshRestaurant?.name}
                   />
-                  {freshScanId ? (
+                  {status === "done" && freshScanId ? (
                     <Pressable
                       style={[styles.button, styles.secondary, appending && styles.disabled]}
                       disabled={appending}
@@ -2448,6 +2472,11 @@ const styles = StyleSheet.create({
   inlineError: { color: colors.error, fontSize: 14, textAlign: "center", marginTop: 4 },
   savedRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
   savedNote: { color: colors.accent, fontWeight: "700", fontSize: 15 },
+  enterMenuBtn: { marginTop: 18, marginHorizontal: 16, alignSelf: "stretch", backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16 },
+  enterMenuText: { color: "#fff", fontWeight: "800", fontSize: 15, textAlign: "center" },
+  scanBanner: { flexDirection: "row", alignItems: "center", backgroundColor: colors.badgeBg, borderRadius: 12, padding: 12, marginBottom: 16 },
+  scanBannerTitle: { fontSize: 14, fontWeight: "800", color: colors.accent },
+  scanBannerSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   geo: { fontSize: 13, color: colors.muted, marginTop: 12 },
   metaCard: {
     backgroundColor: colors.card,
