@@ -89,17 +89,6 @@
 <div id="tab-lab">
 <div class="wrap">
   <div class="left">
-    <div class="panel" style="margin-bottom:12px">
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-        <label class="chip" style="cursor:pointer">📥 Importuj ZIP<input id="zipFile" type="file" accept=".zip" style="display:none" onchange="importZip(this)"></label>
-        <span class="mut small">scala do biblioteki (dedup po sygnaturze)</span>
-      </div>
-      <div style="display:flex; gap:6px; margin-top:8px">
-        <input type="text" id="impPath" placeholder="albo ścieżka folderu lub .zip na dysku" onkeydown="if(event.key==='Enter')importPath()" />
-        <button onclick="importPath()">Importuj</button>
-      </div>
-      <div class="mut small" id="impInfo" style="margin-top:6px"></div>
-    </div>
     <div id="map"></div>
     <div class="mut small" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px">
       <span>Migawki — klik = do testu · 📍 lokal · 🗄 archiwum</span>
@@ -218,6 +207,16 @@
       <button class="primary" onclick="importAllServerSamples(this)" style="padding:4px 10px">⬇ Importuj wszystkie</button>
     </div>
     <div id="serverSamples"></div>
+  </div>
+  <div class="panel">
+    <h3>📥 Importuj z pliku (udostępnianie)</h3>
+    <div class="mut small" style="margin-bottom:8px">Migawki udostępnione z apki jako ZIP. Scala do lokalnej biblioteki (dedup po sygnaturze) — najnowsze trafiają na górę listy poniżej, oznaczone „NEW".</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <label class="chip primary" style="cursor:pointer">📥 Importuj ZIP<input id="zipFile" type="file" accept=".zip" style="display:none" onchange="importZip(this)"></label>
+      <input type="text" id="impPath" placeholder="albo ścieżka folderu lub .zip na dysku" style="flex:1; min-width:160px" onkeydown="if(event.key==='Enter')importPath()" />
+      <button onclick="importPath()" style="padding:4px 10px">Importuj ścieżkę</button>
+    </div>
+    <div class="mut small" id="impInfo" style="margin-top:6px"></div>
   </div>
   <div class="panel">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
@@ -401,14 +400,16 @@ async function importZip(input){ const f=input.files[0]; if(!f) return; const in
   const fd=new FormData(); fd.append('file', f);
   try{ const r=await fetch('/api/import-zip',{method:'POST', body:fd}).then(x=>x.json());
     info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
-    if(!r.error) await loadState();
+    if(!r.error) await afterImport(r.added);
   }catch(e){ info.textContent='błąd: '+e.message; } finally { input.value=''; }
 }
 async function importPath(){ const p=document.getElementById('impPath').value.trim(); const info=document.getElementById('impInfo'); if(!p){ info.textContent='⚠️ Podaj ścieżkę folderu z metadata.json lub pliku .zip (albo użyj „📥 Importuj ZIP").'; return; } info.textContent='importuję…';
   const r=await api('/api/import-path',{path:p});
   info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
-  if(!r.error){ document.getElementById('impPath').value=''; await loadState(); }
+  if(!r.error){ document.getElementById('impPath').value=''; await afterImport(r.added); }
 }
+// Po każdym imporcie: odśwież dane i listę Sample lokalnych (najnowsze na górze, oznaczone NEW).
+async function afterImport(added){ if(SAMPLE_SHOW_ARCH) SAMPLE_SHOW_ARCH=false; await loadState(); renderLocalSamples(); }
 
 function renderMap() {
   if (!map) { map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(map); }
@@ -991,7 +992,7 @@ async function importServerSample(id, btn){
   if(btn){ btn.disabled=true; btn.textContent='importuję…'; }
   const r=await api('/api/server-samples/import',{id});
   if(r&&r.error){ alert('Import: '+r.error); if(btn){btn.disabled=false;btn.textContent='⬇ Importuj';} return; }
-  await loadState(); await loadServerSamples();
+  await afterImport(1); await loadServerSamples();
 }
 async function deleteServerSample(id){
   if(!confirm('Usunąć sampel z serwera (cofnięcie wysyłki)?')) return;
@@ -1003,15 +1004,16 @@ async function importAllServerSamples(btn){
   if(btn) btn.disabled=true;
   for(const x of [...SRV_SAMPLES]){ await api('/api/server-samples/import',{id:x.id}).catch(()=>{}); }
   if(btn) btn.disabled=false;
-  await loadState(); await loadServerSamples();
+  await afterImport(SRV_SAMPLES.length); await loadServerSamples();
 }
 let SAMPLE_SHOW_ARCH=false;
 function sampleCard(c, archived){
   const res = c.result ? `${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}` : 'brak zapisanego wyniku';
+  const isNew = !archived && c.importedAt && (Date.now()-c.importedAt < 12*3600*1000);
   return `<div class="cand" style="display:flex; gap:10px; align-items:flex-start">
     ${capThumb(c.id, c.images, 54, 68)}
     <div style="flex:1; min-width:0">
-      <div style="font-weight:700">${archived?'🗄 ':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
+      <div style="font-weight:700">${archived?'🗄 ':''}${isNew?'<span class="badge pass" style="margin-right:4px">NEW</span>':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
       <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
       ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
       <div class="mut small">wynik: ${esc(res)}</div>
@@ -1030,7 +1032,7 @@ function renderLocalSamples(){
   const arch=caps.filter(c=>c.archived), active=caps.filter(c=>!c.archived);
   const btn=document.getElementById('archToggleBtn'); if(btn) btn.textContent = SAMPLE_SHOW_ARCH ? '← aktywne' : `🗄 archiwum (${arch.length})`;
   const hdr=document.getElementById('localSamplesHdr'); if(hdr) hdr.textContent = SAMPLE_SHOW_ARCH ? '🗄 Archiwum lokalne' : '🗂 Sample lokalne (aktywne)';
-  const list=SAMPLE_SHOW_ARCH?arch:active;
+  const list=(SAMPLE_SHOW_ARCH?arch:active).slice().sort((a,b)=>(b.importedAt||b.createdAt||0)-(a.importedAt||a.createdAt||0));
   box.innerHTML = list.length ? list.map(c=>sampleCard(c,SAMPLE_SHOW_ARCH)).join('') : `<div class="mut small">${SAMPLE_SHOW_ARCH?'Archiwum puste.':'Brak aktywnych sampli.'}</div>`;
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }

@@ -189,6 +189,8 @@ interface MetaCapture {
   sig?: string;
   /** GUID instancji apki, z której pochodzi migawka (eksport/plik) — do rozpoznania źródła w labie. */
   installId?: string;
+  /** Kiedy migawka trafiła do biblioteki (import) — do sortowania „najnowsze na górze" + znacznika NEW. */
+  importedAt?: number;
   images: MetaImage[];
   result?: { restaurantName?: string | null; cuisine?: string; models?: Record<string, string>; menu?: unknown } | null;
   /** Zapisany skan z LABU (najlepsza wersja menu + lokal) — by testy zdjęć nie skanowały od nowa. */
@@ -243,7 +245,7 @@ async function ingest(captures: MetaCapture[], readImage: (file: string) => Prom
       writeFileSync(join(LIB_IMAGES, base), buf);
       newImages.push({ ...im, file: `images/${base}` });
     }
-    existing.push({ ...cap, images: newImages });
+    existing.push({ ...cap, images: newImages, importedAt: Date.now() });
     keys.add(key);
     added++;
   }
@@ -551,6 +553,7 @@ app.get("/api/state", (c) => {
     location: cap.location ?? null,
     locationSource: cap.locationSource ?? null,
     installId: cap.installId ?? null,
+    importedAt: cap.importedAt ?? null,
     exifLocations: cap.images.map((im) => im.exifLocation ?? null),
     images: cap.images.length,
     result: cap.result
