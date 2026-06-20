@@ -119,12 +119,14 @@ function InfoFooter({
   loading,
   photoLoading,
   onPhotoOpen,
+  onSearchMore,
 }: {
   item: MenuItem;
   expanded: boolean;
   loading: boolean; // generowanie OPISU (gdy go brak)
-  photoLoading: boolean; // doszukiwanie LEPSZYCH zdjęć (w tle, nie blokuje)
+  photoLoading: boolean; // doszukiwanie LEPSZYCH zdjęć (na żądanie)
   onPhotoOpen: (state: LightboxState) => void;
+  onSearchMore: () => void; // #4: tap „więcej zdjęć" → szukaj lepszych (zamiast auto)
 }) {
   const [showDebug, setShowDebug] = useState(false);
   const photos = item.photos ?? [];
@@ -162,18 +164,42 @@ function InfoFooter({
                   </View>
                 </Pressable>
               ))}
+              {/* #4: kafel „więcej zdjęć" za pierwszym zdjęciem — szukanie lepszych dopiero na tap. */}
+              {!item.photosUpgraded ? (
+                <Pressable onPress={onSearchMore} disabled={photoLoading} style={[styles.dishPhotoWrap, styles.morePhotos]}>
+                  {photoLoading ? (
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  ) : (
+                    <>
+                      <Text style={styles.morePhotosGlyph}>🔍</Text>
+                      <Text style={styles.morePhotosText}>więcej{"\n"}zdjęć</Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
             </ScrollView>
             <Text style={styles.photoNote}>
-              {anyRepresentative ? "🔸 Poglądowe (typ dania) · " : "📷 "}dotknij, by powiększyć
+              {anyRepresentative ? "🔸 Poglądowe (typ dania) · " : "📷 "}dotknij zdjęcie, by powiększyć
             </Text>
           </>
+        ) : !item.photosUpgraded ? (
+          // Brak zdjęcia poglądowego — kafel do ręcznego poszukania (zamiast auto).
+          <Pressable onPress={onSearchMore} disabled={photoLoading} style={[styles.dishPhoto, styles.morePhotos, styles.photoStrip]}>
+            {photoLoading ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <>
+                <Text style={styles.morePhotosGlyph}>🔍</Text>
+                <Text style={styles.morePhotosText}>poszukaj zdjęć</Text>
+              </>
+            )}
+          </Pressable>
         ) : (
-          // Wyblakły placeholder — stały rozmiar, layout się nie przesuwa gdy zdjęcie się ładuje.
+          // Szukano, nic nie znaleziono — wyblakły placeholder.
           <View style={[styles.dishPhoto, styles.thumbPlaceholder, styles.photoStrip]}>
             <Text style={styles.thumbPlaceholderGlyph}>🍽️</Text>
           </View>
         )}
-        {photoLoading ? <Text style={styles.photoNote}>⏳ Doszukuję lepszych zdjęć…</Text> : null}
         {item.extraInfo ? (
           <Text style={styles.infoText}>{clean(item.extraInfo)}</Text>
         ) : loading ? (
@@ -245,12 +271,15 @@ export function MenuView({
   infoLoading,
   photoLoading,
   onItemPress,
+  onSearchMorePhotos,
   nameFallback,
 }: {
   menu: Menu;
   infoLoading: Set<string>;
   photoLoading: Set<string>;
   onItemPress: (sectionIndex: number, itemIndex: number) => void;
+  /** #4: tap „więcej zdjęć" przy daniu → uruchom doszukiwanie lepszych (zamiast auto na rozwinięciu). */
+  onSearchMorePhotos: (sectionIndex: number, itemIndex: number) => void;
   /** Nazwa z dopasowanego lokalu — gdy menu nie miało własnej nazwy. */
   nameFallback?: string;
 }) {
@@ -393,6 +422,7 @@ export function MenuView({
                   loading={infoLoading.has(key)}
                   photoLoading={photoLoading.has(key)}
                   onPhotoOpen={setPreview}
+                  onSearchMore={() => onSearchMorePhotos(si, ii)}
                 />
               </Pressable>
             );
@@ -502,6 +532,9 @@ const styles = StyleSheet.create({
   photoStrip: { marginBottom: 6 },
   dishPhotoWrap: { marginRight: 8, position: "relative" },
   dishPhoto: { width: 150, height: 110, borderRadius: 10, backgroundColor: colors.badgeBg },
+  morePhotos: { width: 100, height: 110, borderRadius: 10, backgroundColor: colors.badgeBg, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.muted, borderStyle: "dashed" },
+  morePhotosGlyph: { fontSize: 22, opacity: 0.6 },
+  morePhotosText: { fontSize: 11, fontWeight: "700", color: colors.muted, textAlign: "center", marginTop: 2 },
   verifiedBadge: {
     position: "absolute",
     top: 6,

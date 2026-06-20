@@ -634,6 +634,9 @@ export default function App() {
       // Spójność klucza cache: ta sama kuchnia (scanCuisine) + locationHint + menu_description (ze strumienia)
       // co finałowy enrich → finał trafia w cache, nic się nie marnuje.
       const enrichJobs: Promise<void>[] = [];
+      // Usage enrichu kumulujemy LOKALNIE — rolling leci w trakcie struktury, gdy scanId jeszcze NIE
+      // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
+      let enrichUsage: Usage = ZERO_USAGE;
       let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
       const enrichQueue: ScanItemStub[] = [];
       const ENRICH_FLUSH = 8;
@@ -666,7 +669,7 @@ export default function App() {
               onEnrich,
             );
             setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
-            if (scanId) void addScanUsage(scanId, usage);
+            enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj (scanId może jeszcze nie istnieć)
           } catch {
             // paczka enrich padła — pozycje zostają z oryginałem; finałowy enrich i tak dopina
           }
@@ -853,10 +856,11 @@ export default function App() {
             (stub) => setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev)),
           );
           setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
-          if (scanId) void addScanUsage(scanId, usage);
+          enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj
         } catch {
           /* finał padł — rolling i tak dał większość; zostaje co jest */
         }
+        if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich (rolling+finał) raz
         // Odczyt aktualnego (wzbogaconego w miejscu) menu — updater setState liczy się synchronicznie.
         let finalMenu: Menu = structureMenu;
         setMenu((prev) => {
@@ -1448,6 +1452,8 @@ export default function App() {
     website?: string;
     city?: string;
     taLocationId?: string;
+    /** #4: pomiń auto-doszukiwanie LEPSZYCH zdjęć (Faza 2) — robione dopiero na tap „więcej zdjęć". */
+    skipPhotos?: boolean;
     applyMenu: (updater: (prev: Menu | null) => Menu | null) => void;
   }) {
     const item = opts.menu.sections[opts.si]?.items[opts.ii];
@@ -1486,8 +1492,8 @@ export default function App() {
       }
     }
 
-    // === FAZA 2: LEPSZE ZDJĘCIA — w tle, NIE blokuje (opis już widoczny). ===
-    if (!item.photosUpgraded && !photoLoading.has(key)) {
+    // === FAZA 2: LEPSZE ZDJĘCIA — tylko na ŻĄDANIE (tap „więcej zdjęć"), nie automatycznie (#4). ===
+    if (!opts.skipPhotos && !item.photosUpgraded && !photoLoading.has(key)) {
       setPhotoLoading((p) => new Set(p).add(key));
       try {
         // Podpisy TripAdvisora (zweryfikowane) → pełne wyszukiwanie (z lokalu/web).
@@ -1930,7 +1936,9 @@ export default function App() {
     );
   }
 
-  function onFreshItemPress(si: number, ii: number) {
+  // skipPhotos: rozwinięcie dania (true = tylko opis, BEZ auto-szukania lepszych zdjęć);
+  // tap „więcej zdjęć" woła z false → uruchamia Fazę 2 (#4).
+  function freshLoadInfo(si: number, ii: number, skipPhotos: boolean) {
     if (menu)
       loadInfo({
         menu,
@@ -1944,11 +1952,14 @@ export default function App() {
         website: freshRestaurant?.website ?? undefined,
         city: freshRestaurant?.city ?? undefined,
         taLocationId: freshRestaurant?.tripAdvisor?.locationId ?? undefined,
+        skipPhotos,
         applyMenu: setMenu,
       });
   }
+  function onFreshItemPress(si: number, ii: number) { freshLoadInfo(si, ii, true); }
+  function onFreshSearchMore(si: number, ii: number) { freshLoadInfo(si, ii, false); }
 
-  function onDetailItemPress(si: number, ii: number) {
+  function detailLoadInfo(si: number, ii: number, skipPhotos: boolean) {
     if (!openScan) return;
     loadInfo({
       menu: openScan.menu,
@@ -1962,9 +1973,12 @@ export default function App() {
       website: openScan.restaurant?.website ?? undefined,
       city: openScan.restaurant?.city ?? undefined,
       taLocationId: openScan.restaurant?.tripAdvisor?.locationId ?? undefined,
+      skipPhotos,
       applyMenu: makeApplyMenu(openScan.id, true),
     });
   }
+  function onDetailItemPress(si: number, ii: number) { detailLoadInfo(si, ii, true); }
+  function onDetailSearchMore(si: number, ii: number) { detailLoadInfo(si, ii, false); }
 
   const showingDetail = openScan !== null;
 
@@ -2052,6 +2066,7 @@ export default function App() {
                 infoLoading={infoLoading}
                 photoLoading={photoLoading}
                 onItemPress={onDetailItemPress}
+                onSearchMorePhotos={onDetailSearchMore}
                 nameFallback={openScan.restaurant?.name}
               />
               {openScan.location ? (
@@ -2291,8 +2306,25 @@ export default function App() {
                       ) : null}
                     </>
                   ) : null}
-                  {scanFoundName ? (
+                  {scanFoundName && !(freshRestaurant || restaurantLoading) ? (
                     <Text style={styles.scanFoundName}>🏠 Znaleziono lokal: {scanFoundName}</Text>
+                  ) : null}
+                  {/* #2a: karta lokalu NAD listą dań — potwierdź/zmień czekając na resztę odczytu (#1/#2). */}
+                  {freshRestaurant || restaurantLoading ? (
+                    <View style={styles.scanReadyBox}>
+                      <Text style={styles.scanReadyVenueHdr}>{venueConfirmed ? "📍 Lokal potwierdzony" : "📍 Lokal — potwierdź lub zmień"}</Text>
+                      {renderRestaurant(freshRestaurant)}
+                      {freshRestaurant && !venueConfirmed ? (
+                        <View style={styles.confirmActions}>
+                          <Pressable style={styles.confirmYes} onPress={() => setVenueConfirmed(true)}>
+                            <Text style={styles.confirmYesText}>✓ To ten lokal</Text>
+                          </Pressable>
+                          <Pressable style={styles.confirmSkip} onPress={() => setVenueConfirmed(true)}>
+                            <Text style={styles.confirmSkipText}>Pomiń</Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                    </View>
                   ) : null}
                   {scanItems.length > 0 ? (
                     <>
@@ -2329,14 +2361,6 @@ export default function App() {
                         ))}
                       </ScrollView>
                     </>
-                  ) : null}
-                  {/* #2a: karta lokalu pojawia się JUŻ w trakcie struktury (wczesny lookup z onMeta),
-                      żeby user mógł ją potwierdzić/zmienić czekając na resztę odczytu. */}
-                  {freshRestaurant || restaurantLoading ? (
-                    <View style={styles.scanReadyBox}>
-                      <Text style={styles.scanReadyVenueHdr}>📍 Lokal — potwierdź lub zmień</Text>
-                      {renderRestaurant(freshRestaurant)}
-                    </View>
                   ) : null}
                   {structureReady ? (
                     // Struktura gotowa (zamrożona) → wejdź do menu; enrich/zdjęcia lecą w tle.
@@ -2449,6 +2473,7 @@ export default function App() {
                     infoLoading={infoLoading}
                     photoLoading={photoLoading}
                     onItemPress={onFreshItemPress}
+                    onSearchMorePhotos={onFreshSearchMore}
                     nameFallback={freshRestaurant?.name}
                   />
                   {status === "done" && freshScanId ? (
