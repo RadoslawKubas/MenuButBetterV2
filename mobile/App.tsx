@@ -562,13 +562,24 @@ export default function App() {
       };
       if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
 
-      for (let bi = 0; bi < batches.length; bi++) {
+      // RÓWNOLEGŁOŚĆ: kolejne zdjęcie NIE czeka na enrich/fotki poprzedniego (jedyna zależność to
+      // miękki kontekst nazwa/kuchnia). Same wywołania skanu lecą równolegle; SCALANIE musi iść po
+      // kolei (mutuje merged/scanId + zapis), więc serializujemy tylko ten fragment.
+      let mergeLock: Promise<unknown> = Promise.resolve();
+      const serialize = <T,>(fn: () => Promise<T>): Promise<T> => {
+        const run = mergeLock.then(fn, fn);
+        mergeLock = run.then(() => {}, () => {});
+        return run;
+      };
+      let doneCount = 0;
+      const bumpProgress = () => {
+        doneCount++;
+        if (batches.length > 1) setScanProgress({ done: Math.min(doneCount * SCAN_BATCH, opts.images.length), total: opts.images.length });
+      };
+
+      const runBatch = async (bi: number, batchHint: string | undefined) => {
         const batch = batches[bi]!;
-        setScanCurrentImage(batch[0]?.uri ?? null); // pokaż aktualnie analizowaną fotkę
-        // Dla kolejnych partii dajemy modelowi kontekst (nazwa/kuchnia) z dotychczasowego menu.
-        const batchHint = merged
-          ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
-          : opts.hint.trim() || undefined;
+        setScanCurrentImage(batch[0]?.uri ?? null); // pokaż którąś z aktualnie analizowanych fotek
         let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean, partialQuality: boolean;
         try {
           ({ menu: incoming, usage, cached, lowQuality, partialQuality } = await scanMenu(
@@ -588,24 +599,23 @@ export default function App() {
           ));
         } catch {
           // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
-          // (tylko tę partię) i jedź dalej. Cache skanu sprawi, że jeśli serwer policzył a odpowiedź
-          // zginęła — ponowienie tej partii jest darmowe.
+          // (tylko tę partię). Cache skanu sprawi, że jeśli serwer policzył a odpowiedź zginęła —
+          // ponowienie tej partii jest darmowe.
           failedBatches.push({ idx: bi, images: batch });
-          continue;
+          bumpProgress();
+          return;
         }
         if (lowQuality) {
-          // Model skanujący nie odczytał tej fotki (za słaba jakość) — serwer zapamiętał ją jako złą.
-          // Oznacz w UI (badge) i pomiń (nie scalamy pustego wyniku, nie wysyłaj jej ponownie).
+          // Model nie odczytał tej fotki (za słaba jakość) — serwer zapamiętał ją jako złą.
           for (const img of batch) {
             setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "" }), readable: false, bad: true } }));
           }
           lowQualityCount += batch.length;
-          if (batches.length > 1) setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, opts.images.length), total: opts.images.length });
-          continue;
+          bumpProgress();
+          return;
         }
         if (partialQuality) {
-          // Odczytano, ale SŁABA jakość (np. działy ok, pozycje za małe) → wynik może być niepełny.
-          // Zostawiamy treść (scalamy niżej), tylko oznaczamy fotkę MIĘKKO i ostrzeżemy usera.
+          // Odczytano, ale SŁABA jakość → wynik może być niepełny. Zostawiamy treść, oznaczamy miękko.
           for (const img of batch) {
             setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "", readable: true, bad: false }), partial: true } }));
           }
@@ -613,33 +623,45 @@ export default function App() {
         }
         if (cached) anyCached = true;
 
-        if (!merged) {
-          // Pierwsza partia → bazowe menu + zapis (kolejne tylko dokładają).
-          merged = incoming;
-          if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
-          const saved = await saveScan({
-            menu: merged,
-            targetLang: opts.targetLang,
-            model: opts.models.scan,
-            models: opts.models,
-            location,
-            locationSource,
-            useExifLocation: opts.useExifLocation,
-            useDeviceLocation: opts.useDeviceLocation,
-            usage,
-          });
-          scanId = saved.id;
-          setFreshScanId(saved.id);
-        } else {
-          merged = mergeMenus(merged, incoming).menu;
-          await updateScanMenu(scanId!, merged);
-          await addScanUsage(scanId!, usage);
-        }
-        setMenu(merged);
-        if (batches.length > 1) {
-          setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, opts.images.length), total: opts.images.length });
-        }
-        setScans(await listScans());
+        // Scalanie + zapis po kolei (pierwszy, który dobiegnie, tworzy bazę; reszta dokłada).
+        await serialize(async () => {
+          if (!merged) {
+            merged = incoming;
+            if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
+            const saved = await saveScan({
+              menu: merged,
+              targetLang: opts.targetLang,
+              model: opts.models.scan,
+              models: opts.models,
+              location,
+              locationSource,
+              useExifLocation: opts.useExifLocation,
+              useDeviceLocation: opts.useDeviceLocation,
+              usage,
+            });
+            scanId = saved.id;
+            setFreshScanId(saved.id);
+          } else {
+            merged = mergeMenus(merged, incoming).menu;
+            await updateScanMenu(scanId!, merged);
+            await addScanUsage(scanId!, usage);
+          }
+          setMenu(merged);
+          setScans(await listScans());
+        });
+        bumpProgress();
+      };
+
+      // Partia 0 OSOBNO — ustala bazowe menu + nazwę/kuchnię (kontekst dla pozostałych). Potem
+      // reszta RÓWNOLEGLE (limit 3) z tym kontekstem — bez czekania na enrich/fotki poprzedniej.
+      await runBatch(0, opts.hint.trim() || undefined);
+      if (batches.length > 1) {
+        const restHint = merged
+          ? [(merged as Menu).restaurant_name, (merged as Menu).cuisine].filter(Boolean).join(" ") || undefined
+          : opts.hint.trim() || undefined;
+        let next = 1;
+        const worker = async () => { while (next < batches.length) { const bi = next++; await runBatch(bi, restHint); } };
+        await Promise.all(Array.from({ length: Math.min(3, batches.length - 1) }, worker));
       }
       if (anyCached) setScanFromCache(true);
 
@@ -662,7 +684,9 @@ export default function App() {
       } else if (partialCount > 0) {
         Alert.alert("Słaba jakość zdjęcia", `${partialCount > 1 ? `${partialCount} zdjęć było` : "Zdjęcie było"} słabej jakości — odczytałem co się dało, ale część pozycji mogła się nie zmieścić. Dla pełnego menu zrób ostrzejsze/bliższe zdjęcie.`);
       }
-      const result = merged;
+      // merged jest przypisywane w domknięciach (równoległe partie) — CFA tego nie śledzi, więc
+      // po guardzie traktuje je jako never. Runtime jest poprawny (guard realnie sprawdza); asercja.
+      const result = merged as Menu;
 
       // REUŻYCIE prefetchu: dołącz do menu zdjęcia poglądowe dociągnięte już w trakcie skanu —
       // dzięki temu pokazują się od razu, a fillDishPhotos je pominie (bez ponownego szukania).
