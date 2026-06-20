@@ -270,7 +270,7 @@ app.post("/dish-info", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dish: body.name.trim(), cached: !!cached },
+      data: { dish: body.name.trim(), cached: !!cached, restaurant: body.restaurant?.trim() || null },
     });
     return c.json({ info, usage, cached: !!cached });
   } catch (e) {
@@ -433,7 +433,7 @@ app.post("/dish-photos", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly },
+      data: { dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly, restaurant: body.restaurantName?.trim() || body.restaurantHint?.trim() || null },
     });
     return c.json({ photos, usage, debug });
   } catch (e) {
