@@ -164,7 +164,7 @@
         <div id="costLog"></div>
         <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px; display:flex; gap:8px; align-items:center">
           <b>Ceny używane</b>
-          <button onclick="loadPrices()" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
+          <button onclick="refreshPrices(this)" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
           <span class="mut small">klik źródło → oficjalna strona; pola edytowalne (ręczna podmiana)</span>
         </div>
         <div id="pricesBox"></div>
@@ -740,6 +740,12 @@ function toggleGroupEntry(gi,ei){
     </tbody></table>`;
 }
 async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
+async function refreshPrices(btn){
+  btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
+  try{ await loadPrices(); btn.textContent='✓ odświeżono '+new Date().toLocaleTimeString(); }
+  catch(e){ btn.textContent='✗ błąd'; }
+  setTimeout(()=>{ btn.textContent=t; btn.disabled=false; }, 1500);
+}
 async function loadPrices(){
   const r=await api('/api/prices');
   const src=(u)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener">źródło ↗</a>`:'';
