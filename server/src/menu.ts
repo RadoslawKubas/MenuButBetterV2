@@ -57,6 +57,8 @@ export interface ExtractOptions {
   /** Wzbogacona pozycja NA ŻYWO z przebiegu enrich (tłumaczenie + photo_query + opis) — apka
    *  sukcesywnie uzupełnia mini-karty (opis) i dociąga zdjęcie po photo_query. */
   onEnrichItem?: (item: ScanItemStub) => void;
+  /** Nazwa lokalu NA ŻYWO — gdy tylko model ją ustali (z szyldu/okładki), nie czekając na koniec. */
+  onMeta?: (m: { restaurantName?: string }) => void;
   /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
 }
@@ -185,9 +187,13 @@ export const STRUCTURE_SYSTEM = [
   "Podaj też `source_text` = przepisany FRAGMENT karty dla tej pozycji (pełna linijka/blok jak na",
   "menu: nazwa + ewentualny opis + cena), słowo w słowo — żeby pokazać użytkownikowi skąd pochodzi.",
   "NIE tłumacz, NIE generuj opisów, NIE zgaduj składników — to zrobi osobny krok.",
-  "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz, jeśli widać na okładce/",
-  "szyldzie/stopce — `restaurant_name` i `restaurant_address` (inaczej null). Zdjęcie lokalu z",
-  "zewnątrz służy tylko do nazwy/adresu — nie twórz z niego pozycji menu.",
+  "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz `restaurant_name`/`restaurant_address`.",
+  "Wśród zdjęć MOŻE być fasada/szyld/witryna lokalu, wizytówka, pieczątka, paragon, okładka, nagłówek lub",
+  "stopka — KONIECZNIE odczytaj z nich NAZWĘ lokalu (i adres), nawet gdy dane zdjęcie nie zawiera dań.",
+  "Nazwa lokalu to cenna informacja — szukaj jej wszędzie. Ze zdjęcia z zewnątrz NIE twórz pozycji menu",
+  "(zostaw `sections` puste dla niego), ale ZWRÓĆ z niego `restaurant_name`/`restaurant_address` i `readable=true`",
+  "(to przydatne zdjęcie). `readable=false` ustaw TYLKO gdy zdjęcie jest zbyt słabej jakości, by odczytać",
+  "COKOLWIEK (mocno rozmazane/ciemne/ucięte) albo zupełnie przypadkowe (bez menu, bez nazwy, bez treści).",
   "WAŻNE: teksty, które NIE są daniami (czas oczekiwania, dopłaty: taras/serwis/cover, VAT/podatek,",
   "napiwek, godziny otwarcia, minimalne zamówienie, 'ceny zawierają/nie zawierają', ogólne uwagi o",
   "alergenach) NIE mogą trafić jako pozycje (dania). Wydziel je do tablicy `notes`: `text` (oryginał),",
@@ -199,8 +205,9 @@ export const STRUCTURE_SYSTEM = [
   "INFO DOTYCZĄCE CAŁEJ GRUPY dań (np. 'do każdego dania dodajemy sałatkę', 'w cenie pieczywo', 'ryż min.",
   "dla 2 osób') — adnotacja przy TEJ sekcji (scope='section' + section_index), `kind='included'` gdy coś",
   "dochodzi/jest wliczone, inaczej 'info'; dzięki temu pokażemy to pod nazwą grupy (tyczy wszystkich jej dań).",
-  "Ustaw `readable=false`, gdy zdjęcia są ZA SŁABEJ JAKOŚCI, by cokolwiek odczytać (mocno rozmazane, za ciemne,",
-  "prześwietlone, ucięte, albo to nie menu) — wtedy zostaw `sections` puste. W zwykłym przypadku `readable=true`.",
+  "(Przypomnienie) `readable=false` ZAR0WNO dla zbyt słabej jakości (rozmazane/ciemne/ucięte), JAK i zupełnie",
+  "przypadkowych zdjęć bez menu I bez nazwy lokalu — wtedy `sections` puste. Samo 'to nie menu' to ZA MAŁO,",
+  "by dać readable=false: jeśli widać nazwę/szyld/wizytówkę → readable=true i zwróć `restaurant_name`.",
   "Ustaw `low_quality=true`, gdy jakość jest SŁABA, ale częściowo dało się odczytać (np. widać nazwy działów,",
   "lecz pozycje są za małe/rozmyte/ucięte i odczyt może być NIEPEŁNY lub niepewny) — mimo to wypisz wszystko,",
   "co dało się odczytać. Przy wyraźnym, pełnym odczycie `low_quality=false`.",
@@ -411,13 +418,18 @@ async function structureClaude(
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: STRUCTURE_SCHEMA } },
   });
-  if (opts.onProgress || opts.onItem) {
+  if (opts.onProgress || opts.onItem || opts.onMeta) {
     let lastItems = -1;
     const itemState = { emitted: 0 };
+    let nameSent = false;
     stream.on("text", (_delta, snapshot) => {
       if (opts.onProgress) {
         const items = (snapshot.match(/"original"\s*:/g) || []).length;
         if (items !== lastItems) { lastItems = items; opts.onProgress({ chars: snapshot.length, items }); }
+      }
+      if (opts.onMeta && !nameSent) {
+        const m = snapshot.match(/"restaurant_name"\s*:\s*"([^"]+)"/); // nazwa pojawia się wcześnie w JSON
+        if (m && m[1]!.trim()) { nameSent = true; opts.onMeta({ restaurantName: m[1] }); }
       }
       if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem);
     });

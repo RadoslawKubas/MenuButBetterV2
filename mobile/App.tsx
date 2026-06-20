@@ -179,6 +179,8 @@ export default function App() {
   const [scanFromCache, setScanFromCache] = useState(false);
   // Aktualnie analizowane zdjęcie (URI miniatury) — przy skanie per-zdjęcie pokazuje, co idzie teraz.
   const [scanCurrentImage, setScanCurrentImage] = useState<string | null>(null);
+  // Nazwa lokalu wykryta NA ŻYWO w trakcie skanu (z szyldu/okładki) — pokazujemy od razu.
+  const [scanFoundName, setScanFoundName] = useState<string | null>(null);
   // Ręczne ponowienie dokończenia skanu (gdy auto-doliczanie w tle też padło) — z banera.
   const retryScanRef = useRef<null | (() => void)>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
@@ -495,6 +497,7 @@ export default function App() {
       // tanie zdjęcie (Serper) — gotowe, zanim skan się skończy; potem reużyte (bez ponownego szukania).
       prefetchedPhotos.current.clear();
       setScanItems([]);
+      setScanFoundName(null);
       const eff = opts.models;
       const pfQueue: ScanItemStub[] = [];
       let pfActive = 0;
@@ -581,6 +584,7 @@ export default function App() {
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
             onEnrichItem,
+            (m) => { if (m.restaurantName) setScanFoundName(m.restaurantName); }, // nazwa lokalu na żywo
           ));
         } catch {
           // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
@@ -2042,6 +2046,9 @@ export default function App() {
                       ) : null}
                     </>
                   ) : null}
+                  {scanFoundName ? (
+                    <Text style={styles.scanFoundName}>🏠 Znaleziono lokal: {scanFoundName}</Text>
+                  ) : null}
                   {scanItems.length > 0 ? (
                     <>
                       <Text style={styles.scanItemsHdr}>
@@ -2436,6 +2443,7 @@ const styles = StyleSheet.create({
   scanCurrentWrap: { alignItems: "center", marginTop: 14 },
   scanCurrentImg: { width: 120, height: 150, borderRadius: 10, backgroundColor: colors.badgeBg, borderWidth: 1, borderColor: colors.accent },
   scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
+  scanFoundName: { marginTop: 12, fontSize: 14, fontWeight: "800", color: colors.accent, alignSelf: "stretch", marginHorizontal: 16, textAlign: "center" },
   scanItemsHdr: { marginTop: 14, fontSize: 13, fontWeight: "700", color: colors.muted, alignSelf: "stretch", marginHorizontal: 16 },
   scanItemsBox: { marginTop: 6, maxHeight: 320, alignSelf: "stretch", marginHorizontal: 12 },
   scanCard: {

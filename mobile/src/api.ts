@@ -229,6 +229,7 @@ export function scanMenu(
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
   onEnrichItem?: (item: ScanItemStub) => void,
+  onMeta?: (m: { restaurantName?: string }) => void,
 ): Promise<{ menu: Menu; usage: Usage; cached: boolean; lowQuality: boolean; partialQuality: boolean }> {
   const t0 = Date.now();
   const body = JSON.stringify({
@@ -290,6 +291,7 @@ export function scanMenu(
               price: ev.price ?? null,
               currency: ev.currency ?? null,
             });
+          else if (ev.phase === "meta") onMeta?.({ restaurantName: ev.restaurantName });
         } catch {
           /* niepełna linia — doczyta się później */
         }

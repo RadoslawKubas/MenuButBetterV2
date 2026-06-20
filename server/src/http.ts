@@ -221,6 +221,12 @@ app.post("/scan", async (c) => {
               s.write(JSON.stringify({ phase: "enrich-item", ...it }) + "\n").catch(() => {});
             }
           : undefined,
+        // Nazwa lokalu NA ŻYWO (z szyldu/okładki) — gdy tylko model ją ustali.
+        onMeta: wantSteps
+          ? (m) => {
+              s.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {});
+            }
+          : undefined,
       });
       // Trwały log skanu — do statystyk „ile menu / dań / koszt per model".
       const items = menu.sections.reduce((n, sec) => n + sec.items.length, 0);
