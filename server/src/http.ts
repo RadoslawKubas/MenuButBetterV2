@@ -15,7 +15,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
@@ -665,8 +665,29 @@ app.post("/samples/status", async (c) => {
 
 const port = Number(process.env.PORT) || 8787;
 // hostname 0.0.0.0 — żeby telefon w tej samej sieci Wi-Fi dosięgnął serwera po LAN.
-serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
+const server = serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
   console.log(`🍝 MenuButBetter API na http://localhost:${info.port} (LAN: 0.0.0.0:${info.port})`);
   console.log(`   GET  /health`);
   console.log(`   POST /scan   { imageBase64, mediaType, targetLang?, restaurantHint? }`);
 });
+
+// GRACEFUL SHUTDOWN: przy redeployu Railway wysyła SIGTERM. Zamykamy serwer HTTP + pulę Postgresa
+// i wychodzimy kodem 0 — dzięki temu kontener kończy się CZYSTO i Railway nie raportuje „crashed".
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — zamykam serwer i bazę…`);
+  const timer = setTimeout(() => process.exit(0), 5000); // twardy limit, gdyby coś wisiało
+  try {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeDb();
+  } catch {
+    /* ignoruj */
+  } finally {
+    clearTimeout(timer);
+    process.exit(0);
+  }
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

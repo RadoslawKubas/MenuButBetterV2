@@ -53,6 +53,15 @@ export async function initDb(): Promise<void> {
   }
 }
 
+/** Zamyka pulę Postgresa (graceful shutdown). Best‑effort. */
+export async function closeDb(): Promise<void> {
+  if (pool) {
+    try { await pool.end(); } catch { /* ignoruj */ }
+    pool = null;
+    ready = false;
+  }
+}
+
 export interface EventInput {
   type: string; // "scan" | "ai" | "error" | ...
   op?: string;
