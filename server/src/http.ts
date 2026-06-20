@@ -17,6 +17,7 @@ import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
+import { initSamples, samplesEnabled, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
 const app = new Hono();
@@ -25,6 +26,8 @@ const app = new Hono();
 void initDb();
 // Cache treści (Postgres + LRU) — obniża koszt powtórek; bez DATABASE_URL działa tylko L1.
 void initCache();
+// Sample online (Postgres) — apka wysyła migawki, lab je importuje; bez DATABASE_URL wyłączone.
+void initSamples();
 
 // CORS — żeby appka (Expo web / urządzenie) mogła wołać endpoint w devie.
 app.use("/*", cors());
@@ -605,6 +608,59 @@ app.get("/place-photo", async (c) => {
     console.error("place-photo error:", e);
     return c.json({ error: (e as Error).message }, 502);
   }
+});
+
+// ===== SAMPLE ONLINE: apka wysyła migawki, lab je pobiera/importuje (po imporcie zip kasowany) =====
+const MAX_SAMPLE_BYTES = 15_000_000; // ~15 MB zip / sampel (zabezpieczenie rozmiaru)
+
+// Apka: wyślij migawkę. Body: { hash, meta, zipBase64 }. Dedup po hashu.
+app.post("/samples", async (c) => {
+  if (!samplesEnabled()) return c.json({ error: "Sample online wyłączone (brak bazy)." }, 503);
+  let b: { hash?: string; meta?: Record<string, unknown>; zipBase64?: string };
+  try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  if (!b.hash || !b.zipBase64) return c.json({ error: "Brak hash/zipBase64." }, 400);
+  const zip = Buffer.from(b.zipBase64.includes(",") ? b.zipBase64.split(",")[1]! : b.zipBase64, "base64");
+  if (zip.length === 0 || zip.length > MAX_SAMPLE_BYTES) return c.json({ error: `Zip pusty lub za duży (limit ${Math.round(MAX_SAMPLE_BYTES / 1e6)} MB).` }, 413);
+  try {
+    const r = await saveSample(b.hash, b.meta ?? {}, zip);
+    return c.json(r);
+  } catch (e) {
+    console.error("samples upload error:", e);
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+// Lab: lista sampli. ?pending=1 → tylko nieimportowane (z zipem do pobrania).
+app.get("/samples", async (c) => {
+  const pending = c.req.query("pending") === "1";
+  return c.json({ enabled: samplesEnabled(), samples: await listSamples(pending) });
+});
+
+// Lab: pobierz zip sampla do importu.
+app.get("/samples/:id/zip", async (c) => {
+  const id = Number(c.req.param("id"));
+  const zip = await getSampleZip(id);
+  if (!zip) return c.json({ error: "Brak zipu (sampel nie istnieje lub już zaimportowany)." }, 404);
+  return c.body(new Uint8Array(zip), 200, { "Content-Type": "application/zip" });
+});
+
+// Lab: po udanym imporcie — oznacz zaimportowany i skasuj zip (hash+meta zostają na zawsze).
+app.post("/samples/:id/imported", async (c) => {
+  await markImported(Number(c.req.param("id")));
+  return c.json({ ok: true });
+});
+
+// Cofnięcie wysyłki (usuń całkowicie).
+app.delete("/samples/:id", async (c) => {
+  await deleteSample(Number(c.req.param("id")));
+  return c.json({ ok: true });
+});
+
+// Apka: status migawek po hashach (na serwerze? zaimportowane?). Body: { hashes: string[] }.
+app.post("/samples/status", async (c) => {
+  let b: { hashes?: string[] };
+  try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  return c.json({ enabled: samplesEnabled(), status: await statusByHashes(b.hashes ?? []) });
 });
 
 const port = Number(process.env.PORT) || 8787;
