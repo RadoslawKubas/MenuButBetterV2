@@ -19,9 +19,10 @@ const MAX_WIDTH = 2000;
 const JPEG_QUALITY = 0.72;
 // Górny, rozsądny limit liczby zdjęć na jeden skan (duże menu robimy partiami).
 export const MAX_IMAGES = 40;
-// Ile zdjęć leci do modelu w jednym wywołaniu (≤ limit serwera = 10). Większe menu
-// dzielimy na partie i scalamy wyniki z deduplikacją.
-export const SCAN_BATCH = 8;
+// Skan PER ZDJĘCIE (1): lepszy progres, recovery (powtarzamy tylko padłą fotkę) i live preview
+// (dania z danej fotki dochodzą z pełnymi danymi). Koszt ≈ jak wsadowo dzięki prompt-cache +
+// cache struktury/pozycji. Wyniki kolejnych fotek scalane z deduplikacją.
+export const SCAN_BATCH = 1;
 
 /** Wyciąga GPS z EXIF (best-effort — formaty różnią się między platformami). */
 function exifToGeo(exif: Record<string, unknown> | undefined | null): GeoPoint | undefined {

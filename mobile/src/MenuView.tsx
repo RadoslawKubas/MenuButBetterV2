@@ -297,6 +297,9 @@ export function MenuView({
                       ) : null}
                     </View>
                     <Text style={styles.original}>{item.original}</Text>
+                    {item.source_text && item.source_text.trim() && item.source_text.trim() !== item.original.trim() ? (
+                      <Text style={styles.sourceText}>📄 {item.source_text}</Text>
+                    ) : null}
                     <Badges item={item} />
                     <Text style={styles.description}>{item.description}</Text>
                     {item.allergens.length > 0 ? (
@@ -433,6 +436,7 @@ const styles = StyleSheet.create({
   // zawijają się do 2 linii zamiast spychać nazwę w wąską kolumnę). textAlign do prawej.
   price: { fontSize: 16, fontWeight: "700", color: colors.text, flexShrink: 0, maxWidth: 120, textAlign: "right" },
   original: { fontSize: 13, color: colors.muted, marginTop: 2, fontStyle: "italic" },
+  sourceText: { fontSize: 11, color: colors.muted, marginTop: 3, lineHeight: 15, opacity: 0.85 },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   badge: { backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   badgeText: { fontSize: 12, color: colors.badgeText },

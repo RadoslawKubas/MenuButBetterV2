@@ -17,6 +17,8 @@ export type DishCategory =
 export interface MenuItem {
   original: string;
   translated: string;
+  /** Fragment oryginalnej karty (przepisana linijka/blok), z którego pochodzi danie. */
+  source_text?: string;
   /** Kanoniczna nazwa dania (EN/native) do wyszukiwania zdjęcia — lepsze trafienia globalne. */
   photo_query?: string;
   /** Nazwa dania w języku kraju lokalu — dodatkowy wariant do portali (lokalne trafienia). */

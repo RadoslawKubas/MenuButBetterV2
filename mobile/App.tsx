@@ -162,6 +162,8 @@ export default function App() {
   const [scanIncomplete, setScanIncomplete] = useState<{ pending: number; working: boolean } | null>(null);
   // Czy choć jedna partia skanu wróciła Z CACHE (ten sam plik) — do informacji o oszczędności.
   const [scanFromCache, setScanFromCache] = useState(false);
+  // Aktualnie analizowane zdjęcie (URI miniatury) — przy skanie per-zdjęcie pokazuje, co idzie teraz.
+  const [scanCurrentImage, setScanCurrentImage] = useState<string | null>(null);
   // Ręczne ponowienie dokończenia skanu (gdy auto-doliczanie w tle też padło) — z banera.
   const retryScanRef = useRef<null | (() => void)>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
@@ -500,6 +502,7 @@ export default function App() {
 
       for (let bi = 0; bi < batches.length; bi++) {
         const batch = batches[bi]!;
+        setScanCurrentImage(batch[0]?.uri ?? null); // pokaż aktualnie analizowaną fotkę
         // Dla kolejnych partii dajemy modelowi kontekst (nazwa/kuchnia) z dotychczasowego menu.
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
@@ -565,6 +568,7 @@ export default function App() {
 
       setScanProgress(null);
       setScanPhase(null);
+      setScanCurrentImage(null);
       setStatus("done");
       setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
       setVenueQuery("");
@@ -622,6 +626,7 @@ export default function App() {
       setStatus("error");
       setScanProgress(null);
       setScanPhase(null);
+      setScanCurrentImage(null);
       setScanItems([]);
     }
   }
@@ -1914,6 +1919,12 @@ export default function App() {
                       <Text style={styles.scanningSub}>Im więcej stron, tym dłużej — zwykle do minuty.</Text>
                     </>
                   )}
+                  {scanCurrentImage ? (
+                    <View style={styles.scanCurrentWrap}>
+                      <Image source={{ uri: scanCurrentImage }} style={styles.scanCurrentImg} />
+                      <Text style={styles.scanningSub}>Analizuję to zdjęcie…</Text>
+                    </View>
+                  ) : null}
                   {scanPhase ? (
                     <>
                       <Text style={styles.scanPhase}>{scanPhase.label}</Text>
@@ -2308,6 +2319,8 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", paddingVertical: 48 },
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
+  scanCurrentWrap: { alignItems: "center", marginTop: 14 },
+  scanCurrentImg: { width: 120, height: 150, borderRadius: 10, backgroundColor: colors.badgeBg, borderWidth: 1, borderColor: colors.accent },
   scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
   scanItemsHdr: { marginTop: 14, fontSize: 13, fontWeight: "700", color: colors.muted, alignSelf: "stretch", marginHorizontal: 16 },
   scanItemsBox: { marginTop: 6, maxHeight: 320, alignSelf: "stretch", marginHorizontal: 12 },
