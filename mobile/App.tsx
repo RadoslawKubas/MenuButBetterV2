@@ -25,6 +25,7 @@ import {
   placePhotoUrl,
   reportError,
   registerInstall,
+  initForceFresh,
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
@@ -237,6 +238,7 @@ export default function App() {
 
   useEffect(() => {
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
+    void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
     // Przywróć zapamiętane modele per miejsce (brakujące pola uzupełniamy domyślnymi).

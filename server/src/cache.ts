@@ -5,7 +5,7 @@
 //
 // Klucz NIESIE WERSJĘ (CACHE_VERSION[kind]) — zmiana promptu/progu/pipeline’u = bump wersji →
 // stary cache automatycznie omijany, nigdy nie poda starego, gorszego wyniku po ulepszeniu.
-import { getPool } from "./db.ts";
+import { getPool, reqContext } from "./db.ts";
 import { recordCacheHit } from "./apiLog.ts";
 
 let ready = false;
@@ -17,7 +17,7 @@ export const CACHE_VERSION = {
   "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
   "menu-scan": 3, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst (v3: notes/adnotacje)
   "menu-structure": 3, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (v3: notes/adnotacje)
-  "item-enrich": 1, // przebieg 2: wzbogacenie jednej pozycji (tłumaczenie/opis/photo_query) per kraj/język
+  "item-enrich": 2, // przebieg 2: wzbogacenie pozycji (v2: tłumaczenie opisu z karty menu_description_translated)
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
 
@@ -105,6 +105,8 @@ export interface CacheGetOpts { op?: string; bypass?: boolean }
  */
 export async function cacheGet<T>(kind: CacheKind, key: string, opts?: CacheGetOpts): Promise<T | null> {
   if (DISABLED || opts?.bypass) return null;
+  // Debug „bez cache" (x-force-fresh): omiń ODCZYT (świeże generowanie), zapis nadal działa → cache się odświeży.
+  if (reqContext.getStore()?.forceFresh) return null;
   const l1 = l1Get(key);
   if (l1 !== undefined) { recordCacheHit(opts?.op ?? kind); return l1 as T; }
   const p = getPool();

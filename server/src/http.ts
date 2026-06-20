@@ -55,7 +55,9 @@ if (APP_TOKEN) {
 // (skan, ai, błąd, sample) zostaną otagowane tym GUID-em → grupowanie per instancja w labie.
 app.use("/*", async (c, next) => {
   const installId = c.req.header("x-install-id") || undefined;
-  await reqContext.run({ installId }, () => next());
+  // Debug apki: x-force-fresh=1 → cache POMIJA ODCZYT (świeże generowanie), ale nadal ZAPISUJE wynik.
+  const forceFresh = c.req.header("x-force-fresh") === "1";
+  await reqContext.run({ installId, forceFresh }, () => next());
 });
 
 // Ruch apka ↔ serwer: odebrane = upload od apki (Content-Length żądania, głównie zdjęcia),

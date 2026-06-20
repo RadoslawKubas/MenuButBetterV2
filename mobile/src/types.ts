@@ -19,6 +19,10 @@ export interface MenuItem {
   translated: string;
   /** Fragment oryginalnej karty (przepisana linijka/blok), z którego pochodzi danie. */
   source_text?: string;
+  /** Opis NADRUKOWANY na karcie (oryginał), gdy był. */
+  menu_description?: string;
+  /** Wierne tłumaczenie opisu z karty — pokazywane jako słowa lokalu. */
+  menu_description_translated?: string;
   /** Kanoniczna nazwa dania (EN/native) do wyszukiwania zdjęcia — lepsze trafienia globalne. */
   photo_query?: string;
   /** Nazwa dania w języku kraju lokalu — dodatkowy wariant do portali (lokalne trafienia). */

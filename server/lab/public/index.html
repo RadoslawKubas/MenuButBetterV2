@@ -189,12 +189,6 @@
     </div>
     <div id="costLog"></div>
   </div>
-  <div class="panel">
-    <h3>🗄 Cache treści — obniża koszt powtórek</h3>
-    <div class="mut small" style="margin-bottom:6px">Struktura menu / wzbogacenie pozycji / zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache są oznaczone „🗄 z cache" w logu wyżej.</div>
-    <div id="cacheStats"></div>
-    <div id="cacheClearBtns" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap"></div>
-  </div>
 </div>
 
 <div id="tab-samples" class="tabpane scrollpane" style="display:none">
@@ -265,7 +259,13 @@
 
 <div id="tab-cache" class="tabpane scrollpane" style="display:none">
   <div class="panel">
-    <h3>🗄 Podgląd cache</h3>
+    <h3>🗄 Cache treści — obniża koszt powtórek</h3>
+    <div class="mut small" style="margin-bottom:6px">Struktura menu / wzbogacenie pozycji / zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache oznaczone „🗄 z cache" w zakładce Logi.</div>
+    <div id="cacheStats"></div>
+    <div id="cacheClearBtns" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap"></div>
+  </div>
+  <div class="panel">
+    <h3>🔍 Podgląd wpisów</h3>
     <div id="cacheSize" class="mut small" style="margin-bottom:8px"></div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
       <input type="text" id="cacheQ" placeholder="szukaj w kluczach / treści…" style="flex:1; min-width:180px" onkeydown="if(event.key==='Enter')loadCacheBrowse()" />
@@ -807,9 +807,9 @@ function switchTab(name){
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
-  if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
+  if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
-  else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
+  else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
   else if(name==='instances'){ loadInstances(); }

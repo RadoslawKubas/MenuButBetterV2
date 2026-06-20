@@ -10,7 +10,7 @@ let ready = false;
 
 // Kontekst per-request: GUID instalacji apki (x-install-id). Dzięki AsyncLocalStorage KAŻDe
 // logEvent w obrębie requestu samo dostaje installId — bez przekazywania przez wszystkie wywołania.
-export const reqContext = new AsyncLocalStorage<{ installId?: string }>();
+export const reqContext = new AsyncLocalStorage<{ installId?: string; forceFresh?: boolean }>();
 
 /** Współdzielona pula Postgresa (lub null bez DATABASE_URL). Używa też cache.ts. */
 export function getPool(): Pool | null {

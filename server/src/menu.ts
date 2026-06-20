@@ -204,8 +204,10 @@ export const ENRICH_SYSTEM = [
   "Dla KAŻDEJ pozycji zwróć wzbogacenie po jej `index` (i tłumaczenia nazw sekcji po `index`).",
   "Wszystko MUSI pasować do podanej kuchni i regionu.",
   "Tłumacz nazwy (pozycji i sekcji) na język docelowy.",
-  "OPIS pisz ZWIĘŹLE i RZECZOWO, wyłącznie z tego, co wynika z nazwy i typowego przyrządzania dania",
-  "w TEJ kuchni/regionie. NIE upiększaj i NIE dodawaj nietypowych składników (np. NIE dodawaj awokado",
+  "Gdy pozycja ma OPIS Z KARTY (część po '|' w wejściu): przetłumacz go WIERNIE do `menu_description_translated`",
+  "(dokładnie, bez dodatków) i OPRZYJ na nim generowany `description`. Gdy opisu z karty nie ma — `menu_description_translated` to pusty string.",
+  "OPIS (`description`) pisz ZWIĘŹLE i RZECZOWO, z tego, co wynika z nazwy/opisu z karty i typowego przyrządzania",
+  "dania w TEJ kuchni/regionie. NIE upiększaj i NIE dodawaj nietypowych składników (np. NIE dodawaj awokado",
   "do zwykłej zielonej sałatki w kuchni indyjskiej). Lepiej ogólnie i PRAWDZIWIE niż barwnie i zmyślnie.",
   "W `ingredients` tylko składniki pewne/typowe; alergeny i flagi dietetyczne szacuj zachowawczo.",
   "`photo_query`: KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności",
@@ -444,6 +446,8 @@ interface ItemEnrich {
   photo_query: string;
   photo_query_local: string;
   branded: boolean;
+  /** Wierne tłumaczenie opisu NADRUKOWANEGO na karcie (gdy był), inaczej "". */
+  menu_description_translated?: string;
   description: string;
   ingredients: string[];
   allergens: string[];
@@ -469,6 +473,8 @@ function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
     photo_query: e?.photo_query || it.original,
     photo_query_local: e?.photo_query_local || e?.photo_query || it.original,
     branded: e?.branded ?? false,
+    menu_description: it.menu_description || "",
+    menu_description_translated: e?.menu_description_translated || (it.menu_description && !e ? it.menu_description : ""),
     description: e?.description || it.menu_description || "",
     ingredients: e?.ingredients ?? [],
     allergens: e?.allergens ?? [],

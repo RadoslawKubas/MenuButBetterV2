@@ -17,7 +17,7 @@ import {
   type ModelRole,
   type ModelProvider,
 } from "./types";
-import { fetchDiagnostics, API_BASE } from "./api";
+import { fetchDiagnostics, API_BASE, isForceFresh, setForceFresh } from "./api";
 import { colors } from "./theme";
 
 const PROVIDER_ORDER: ModelProvider[] = ["anthropic", "openai", "google"];
@@ -65,6 +65,7 @@ export function SettingsView({
   capturesCount: number;
 }) {
   const [openRole, setOpenRole] = useState<ModelRole | null>(null);
+  const [forceFresh, setForceFreshState] = useState(isForceFresh());
   // Status kluczy providerów (z /diagnostics) — by ostrzec przed modelem bez klucza.
   const [configured, setConfigured] = useState<Record<string, boolean> | null>(null);
 
@@ -235,6 +236,19 @@ export function SettingsView({
         <Text style={styles.toolText}>📊 Diagnostyka i logi</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
+
+      <Text style={styles.section}>Debugowanie</Text>
+      <Text style={styles.sub}>
+        Tryb bez cache: serwer NIE czyta z cache (generuje wszystko od nowa — skan, opisy, zdjęcia), ale świeży
+        wynik nadal zapisuje (cache się odświeża). Do testowania zmian. Zostaw wyłączone na co dzień.
+      </Text>
+      <View style={styles.roleCard}>
+        <CostSwitch
+          label="🧪 Wymuś świeży wynik (bez cache)"
+          value={forceFresh}
+          onChange={(v) => { setForceFreshState(v); void setForceFresh(v); }}
+        />
+      </View>
 
       <Text style={styles.section}>Informacje</Text>
       <View style={styles.infoBox}>

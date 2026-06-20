@@ -56,6 +56,10 @@ export interface MenuItem {
   translated: string;
   /** Fragment oryginalnej karty (przepisana linijka/blok), z którego pochodzi danie. */
   source_text?: string;
+  /** Opis NADRUKOWANY na karcie (oryginał), gdy był. */
+  menu_description?: string;
+  /** Wierne tłumaczenie opisu z karty (gdy był) — pokazywane jako słowa lokalu. */
+  menu_description_translated?: string;
   photo_query: string;
   photo_query_local: string;
   /** Markowy/paczkowany produkt (Coca-Cola, butelkowany napój) — lepszy generyczny produktowy shot. */
@@ -176,7 +180,8 @@ export const ENRICH_SCHEMA = {
           photo_query: { type: "string", description: "KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności; opisz CZYM danie jest, nie markową/lokalną nazwą. Np. 'Mango'→'mango chicken curry indian'." },
           photo_query_local: { type: "string", description: "Nazwa do zdjęć W JĘZYKU KRAJU lokalu (z lokalizacji). Gdy język menu = język kraju, zwykle = original; gdy się nie da — powtórz photo_query." },
           branded: { type: "boolean", description: "true = markowy/paczkowany produkt o stałym wyglądzie (Coca-Cola, butelkowana woda) → lepszy generyczny shot; false = potrawa z kuchni." },
-          description: { type: "string", description: "Zwięzłe wyjaśnienie czym jest danie: składniki, podanie, kontekst kulinarny — pasujące do TEJ kuchni i regionu." },
+          menu_description_translated: { type: "string", description: "Wierne TŁUMACZENIE opisu nadrukowanego na karcie (część po '|' w wejściu), gdy taki opis był. Tłumacz dokładnie, nie dodawaj nic od siebie. Gdy pozycja nie miała opisu z karty — pusty string." },
+          description: { type: "string", description: "Zwięzłe wyjaśnienie czym jest danie: składniki, podanie, kontekst kulinarny — pasujące do TEJ kuchni i regionu. Gdy jest opis z karty, OPRZYJ się GŁÓWNIE na nim." },
           ingredients: { type: "array", items: { type: "string" } },
           allergens: { type: "array", items: { type: "string" } },
           category: { type: "string", enum: [...DISH_CATEGORIES] },
@@ -188,7 +193,7 @@ export const ENRICH_SCHEMA = {
           },
           spice_level: { type: "integer", enum: [0, 1, 2, 3] },
         },
-        required: ["index", "translated", "photo_query", "photo_query_local", "branded", "description", "ingredients", "allergens", "category", "dietary", "spice_level"],
+        required: ["index", "translated", "photo_query", "photo_query_local", "branded", "menu_description_translated", "description", "ingredients", "allergens", "category", "dietary", "spice_level"],
       },
     },
     notes: {
@@ -238,6 +243,8 @@ export const MENU_SCHEMA = {
               properties: {
                 original: { type: "string", description: "Nazwa dania w oryginale." },
                 translated: { type: "string", description: "Nazwa dania po przetłumaczeniu." },
+                menu_description: { type: "string", description: "Opis NADRUKOWANY na karcie (transkrypcja), gdy był; inaczej pusty string." },
+                menu_description_translated: { type: "string", description: "Wierne tłumaczenie opisu z karty (gdy był); inaczej pusty string." },
                 photo_query: {
                   type: "string",
                   description:
@@ -290,6 +297,8 @@ export const MENU_SCHEMA = {
               required: [
                 "original",
                 "translated",
+                "menu_description",
+                "menu_description_translated",
                 "photo_query",
                 "photo_query_local",
                 "branded",

@@ -57,6 +57,18 @@ export async function initInstallId(): Promise<string> {
 }
 export function getInstallId(): string { return INSTALL_ID; }
 
+// DEBUG: wymuszenie świeżego wyniku — serwer omija ODCZYT z cache (generuje od nowa), ale wynik nadal
+// ZAPISUJE (cache się odświeża). Stan trzymany w pamięci + AsyncStorage (przeżywa restart apki).
+let FORCE_FRESH = false;
+export function isForceFresh(): boolean { return FORCE_FRESH; }
+export async function initForceFresh(): Promise<void> {
+  try { FORCE_FRESH = (await AsyncStorage.getItem("force-fresh")) === "1"; } catch { /* ignoruj */ }
+}
+export async function setForceFresh(on: boolean): Promise<void> {
+  FORCE_FRESH = on;
+  try { await AsyncStorage.setItem("force-fresh", on ? "1" : "0"); } catch { /* ignoruj */ }
+}
+
 /** Rejestruje instalację na serwerze: urządzenie (model/brand/OS) + wersja apki → zakładka „Instancje". */
 export async function registerInstall(): Promise<void> {
   try {
@@ -80,6 +92,7 @@ function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (APP_TOKEN) h["x-app-token"] = APP_TOKEN;
   if (INSTALL_ID) h["x-install-id"] = INSTALL_ID;
+  if (FORCE_FRESH) h["x-force-fresh"] = "1"; // debug: omiń odczyt z cache (serwer i tak zapisze świeży wynik)
   return h;
 }
 
