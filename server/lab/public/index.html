@@ -77,6 +77,7 @@
     <button class="tab" id="tabBtn-logs" onclick="switchTab('logs')">📊 Logi</button>
     <button class="tab" id="tabBtn-cache" onclick="switchTab('cache')">🗄 Cache</button>
     <button class="tab" id="tabBtn-samples" onclick="switchTab('samples')">📦 Sample</button>
+    <button class="tab" id="tabBtn-errors" onclick="switchTab('errors')">🐞 Błędy</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
   </nav>
   <span class="mut small" id="dir"></span>
@@ -224,6 +225,18 @@
     </div>
     <div class="mut small" style="margin:4px 0 8px">Migawki w bibliotece labu — miniatura, nazwa, lokal/kuchnia, zapisany skan. Wejście do archiwum opcjonalne.</div>
     <div id="localSamplesList"></div>
+  </div>
+</div>
+
+<div id="tab-errors" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>🐞 Błędy z aplikacji</h3>
+    <div class="mut small" style="margin-bottom:6px">Każdy błąd w apce jest zgłaszany na serwer (komunikat + stack + kontekst + wersja/platforma). Tu widzisz ostatnie — do analizy.</div>
+    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center">
+      <button onclick="loadClientErrors(this)" style="padding:4px 10px">↻ odśwież</button>
+      <span class="mut small" id="errInfo"></span>
+    </div>
+    <div id="errList"></div>
   </div>
 </div>
 
@@ -774,7 +787,7 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','prices'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','prices'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
@@ -782,6 +795,7 @@ function switchTab(name){
   else if(name==='prices'){ loadPrices(); }
   else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ loadServerSamples(); renderLocalSamples(); }
+  else if(name==='errors'){ loadClientErrors(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
@@ -1004,6 +1018,34 @@ function renderLocalSamples(){
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
 async function archiveFromTab(id,on){ await api('/api/archive',{captureId:id, archived:on}); await loadState(); renderLocalSamples(); }
+/* ---- Błędy z apki (zakładka 🐞 Błędy) ---- */
+let ERR_LIST=[];
+async function loadClientErrors(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
+  const info=document.getElementById('errInfo'), box=document.getElementById('errList');
+  if(!info||!box) return; info.textContent='pobieram…';
+  let r; try{ r=await api('/api/client-errors'); }catch(e){ info.textContent='błąd połączenia'; return; }
+  if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
+  ERR_LIST=r.errors||[];
+  info.textContent = `${ERR_LIST.length} błędów · serwer ${r.prodUrl||''}`;
+  box.innerHTML = ERR_LIST.length ? ERR_LIST.map((e,i)=>{
+    const d=e.data||{};
+    return `<div class="cand" onclick="toggleErr(${i})">
+      <div style="display:flex; justify-content:space-between; gap:8px"><b style="color:var(--err)">${esc((d.message||'(brak)').slice(0,120))}</b><span class="mut small" style="white-space:nowrap">${esc(e.op||'')}</span></div>
+      <div class="mut small">${new Date(e.at).toLocaleString()}${d.appVersion?' · build '+esc(d.appVersion):''}${d.platform?' · '+esc(d.platform):''}</div>
+      <div id="err-${i}"></div>
+    </div>`;
+  }).join('') : '<div class="mut small">Brak zgłoszonych błędów 🎉</div>';
+}
+function toggleErr(i){
+  const el=document.getElementById('err-'+i); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  const d=ERR_LIST[i].data||{};
+  el.innerHTML=`<div style="margin-top:6px; border-top:1px solid var(--line); padding-top:6px">
+    ${d.context!=null?`<div class="mut small"><b>kontekst:</b> ${esc(typeof d.context==='string'?d.context:JSON.stringify(d.context)).slice(0,400)}</div>`:''}
+    ${d.stack?`<pre class="pre" style="margin-top:6px">${esc(d.stack)}</pre>`:'<div class="mut small">(brak stack trace)</div>'}
+  </div>`;
+}
 
 loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu
 </script>

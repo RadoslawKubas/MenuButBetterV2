@@ -722,6 +722,16 @@ app.post("/api/server-samples/import", async (c) => {
   }
 });
 
+app.get("/api/client-errors", async (c) => {
+  try {
+    const r = await prodFetch("/client-errors?limit=300");
+    const d = (await r.json()) as { errors?: unknown[] };
+    return c.json({ prodUrl: PROD_URL, configured: !!PROD_TOKEN, errors: d.errors ?? [] });
+  } catch (e) {
+    return c.json({ error: `Nie połączono z serwerem (${PROD_URL}): ${(e as Error).message}`, prodUrl: PROD_URL }, 502);
+  }
+});
+
 app.post("/api/server-samples/delete", async (c) => {
   const { id } = await c.req.json<{ id: number }>();
   if (!id) return c.json({ error: "brak id" }, 400);

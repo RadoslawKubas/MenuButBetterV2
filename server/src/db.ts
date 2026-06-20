@@ -205,6 +205,18 @@ export async function budgetExceeded(): Promise<boolean> {
   return (await getTodayCostUsd()) >= budget;
 }
 
+/** Ostatnie BŁĘDY KLIENTA (zgłoszone z apki) — do zakładki „Błędy" w labie. */
+export async function getClientErrors(limit = 200): Promise<{ at: string; op: string | null; data: Record<string, unknown> | null }[]> {
+  const p = getPool();
+  if (!p || !ready) return [];
+  const r = await p.query(
+    `SELECT to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at, op, data
+     FROM events WHERE type = 'client-error' ORDER BY id DESC LIMIT $1`,
+    [Math.min(Math.max(limit, 1), 1000)],
+  );
+  return r.rows.map((x) => ({ at: x.at, op: x.op, data: x.data }));
+}
+
 /** Ostatnie surowe zdarzenia (do eksportu/debug). */
 export async function getRecentEvents(limit = 200): Promise<unknown[]> {
   const p = getPool();

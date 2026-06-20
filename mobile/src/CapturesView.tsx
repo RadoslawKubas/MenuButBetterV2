@@ -18,7 +18,7 @@ import {
   buildCaptureUpload,
   type ScanCapture,
 } from "./captures";
-import { uploadSample, fetchSampleStatus } from "./api";
+import { uploadSample, fetchSampleStatus, reportError } from "./api";
 import type { SavedScan } from "./storage";
 import { MODEL_OPTIONS, distinctModels } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
@@ -106,9 +106,16 @@ export function CapturesView({
       const pkg = await buildCaptureUpload(c.id);
       if (!pkg) { Alert.alert("Błąd", "Nie udało się spakować migawki."); return; }
       const r = await uploadSample(pkg.hash, pkg.meta, pkg.zipBase64);
-      if (!r.ok) { Alert.alert("Wysyłka nieudana", r.error ?? "Spróbuj ponownie."); return; }
+      if (!r.ok) {
+        reportError(`upload sampla: ${r.error ?? "?"}`, { label: "sample-upload", context: { hash: pkg.hash, bytes: pkg.zipBase64.length } });
+        Alert.alert("Wysyłka nieudana", r.error ?? "Spróbuj ponownie.");
+        return;
+      }
       setSampleStatus((prev) => ({ ...prev, [c.sig || c.id]: { onServer: true, imported: false } }));
       Alert.alert(r.status === "exists" ? "Już na serwerze" : "Wysłano", "Migawka jest na serwerze — zaimportuj ją w labie.");
+    } catch (e) {
+      reportError((e as Error)?.message ?? String(e), { stack: (e as Error)?.stack, label: "sample-upload-throw", context: { id: c.id } });
+      Alert.alert("Wysyłka nieudana", (e as Error)?.message ?? "Spróbuj ponownie.");
     } finally {
       setUploading(null);
     }

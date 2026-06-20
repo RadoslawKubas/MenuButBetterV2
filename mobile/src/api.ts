@@ -1,6 +1,7 @@
 // Klient API backendu. Adres bazowy wykrywamy automatycznie z hosta dev-serwera
 // Expo (żeby działało na fizycznym telefonie bez ręcznego wpisywania IP).
 import Constants from "expo-constants";
+import { Platform } from "react-native";
 import * as appLog from "./appLog";
 import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type PhotoDebug, type RestaurantInfo, type Usage } from "./types";
 
@@ -52,7 +53,33 @@ async function loggedFetch(label: string, input: string, init?: RequestInit): Pr
     return res;
   } catch (e) {
     appLog.logCall({ ts: Date.now(), label, ok: false, ms: Date.now() - t0, detail: (e as Error).message });
+    reportError((e as Error)?.message ?? String(e), { stack: (e as Error)?.stack, label: `net:${label}` });
     throw e;
+  }
+}
+
+const APP_VERSION = `${Constants.expoConfig?.version ?? "?"} (build ${Constants.nativeBuildVersion ?? "?"})`;
+
+/**
+ * Zgłasza błąd na serwer (trwały log → zakładka „Błędy" w labie). Fire‑and‑forget: nie blokuje i sam
+ * nie rzuca (błędy raportowania ignorujemy, żeby nie zapętlić). message + stack + kontekst + wersja/platforma.
+ */
+export function reportError(message: string, opts?: { stack?: string; label?: string; context?: unknown }): void {
+  try {
+    void fetch(`${API_BASE}/client-error`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        message: String(message).slice(0, 1000),
+        stack: opts?.stack,
+        label: opts?.label,
+        context: opts?.context,
+        appVersion: APP_VERSION,
+        platform: Platform.OS,
+      }),
+    }).catch(() => {});
+  } catch {
+    /* ignoruj — raportowanie błędu nie może wywalić apki */
   }
 }
 

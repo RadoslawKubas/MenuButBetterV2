@@ -15,7 +15,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
@@ -661,6 +661,31 @@ app.post("/samples/status", async (c) => {
   let b: { hashes?: string[] };
   try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
   return c.json({ enabled: samplesEnabled(), status: await statusByHashes(b.hashes ?? []) });
+});
+
+// ===== BŁĘDY KLIENTA: apka zgłasza każdy błąd → trwały log (Postgres) → zakładka „Błędy" w labie ====
+app.post("/client-error", async (c) => {
+  let b: { message?: string; stack?: string; label?: string; context?: unknown; appVersion?: string; platform?: string };
+  try { b = await c.req.json(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  if (!b.message) return c.json({ error: "Brak message." }, 400);
+  logEvent({
+    type: "client-error",
+    op: (b.label || "error").slice(0, 60),
+    data: {
+      message: String(b.message).slice(0, 1000),
+      stack: b.stack ? String(b.stack).slice(0, 4000) : null,
+      context: b.context ?? null,
+      appVersion: b.appVersion ?? null,
+      platform: b.platform ?? null,
+    },
+  });
+  return c.json({ ok: true });
+});
+
+// Lab: pobierz ostatnie błędy klienta.
+app.get("/client-errors", async (c) => {
+  const limit = Number(c.req.query("limit")) || 200;
+  return c.json({ errors: await getClientErrors(limit) });
 });
 
 const port = Number(process.env.PORT) || 8787;

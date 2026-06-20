@@ -23,6 +23,7 @@ import {
   fetchVenuePhotos,
   quickPeek,
   placePhotoUrl,
+  reportError,
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
@@ -125,6 +126,18 @@ function matchTaPhotos(dishName: string, taPhotos: TripAdvisorPhoto[] | undefine
 
 type Status = "idle" | "scanning" | "done" | "error";
 type Tab = "scan" | "history";
+
+// Globalny handler błędów RN → zgłoś KAŻDY niewyłapany błąd na serwer (zakładka „Błędy" w labie),
+// zachowując domyślne zachowanie apki. Ustawiany raz, na poziomie modułu.
+const _EU = (globalThis as unknown as { ErrorUtils?: { setGlobalHandler?: (h: (e: unknown, f?: boolean) => void) => void; getGlobalHandler?: () => ((e: unknown, f?: boolean) => void) | undefined } }).ErrorUtils;
+if (_EU?.setGlobalHandler) {
+  const _prev = _EU.getGlobalHandler?.();
+  _EU.setGlobalHandler((error: unknown, isFatal?: boolean) => {
+    const err = error as { message?: string; stack?: string } | undefined;
+    try { reportError(err?.message ?? String(error), { stack: err?.stack, label: isFatal ? "fatal" : "uncaught", context: { isFatal: !!isFatal } }); } catch { /* ignoruj */ }
+    _prev?.(error, isFatal);
+  });
+}
 
 // Faza skanu → krótki, „żywy" opis kroku + ewentualny % wysyłki (do paska postępu).
 function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
@@ -622,6 +635,7 @@ export default function App() {
         void completeFailedBatches(scanId, opts, locationHint, pickPeekCuisine(), failedBatches, result);
       }
     } catch (e) {
+      reportError(e instanceof Error ? e.message : String(e), { stack: e instanceof Error ? e.stack : undefined, label: "scan", context: { images: opts.images.length, model: opts.models.scan } });
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
       setStatus("error");
       setScanProgress(null);
