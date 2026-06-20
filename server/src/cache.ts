@@ -15,14 +15,16 @@ export const CACHE_VERSION = {
   "repr-photos": 1, // zdjęcia poglądowe „typ dania" (lista zweryfikowanych URL)
   "dish-info": 1, // opis dania (tekst)
   "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
+  "menu-scan": 1, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
 
-/** Domyślny TTL (dni) per rodzaj. Zdjęcia gniją (URL-e) → krócej; tekst → długo. */
+/** Domyślny TTL (dni) per rodzaj. Zdjęcia gniją (URL-e) → krócej; tekst/menu → długo. */
 const TTL_DAYS: Record<CacheKind, number> = {
   "repr-photos": 45,
   "dish-info": 200,
   "vision-url": 45,
+  "menu-scan": 120, // ten sam plik = ta sama treść; długo (a wersja klucza i tak chroni przy zmianach)
 };
 
 const DISABLED = process.env.CACHE_DISABLED === "1";

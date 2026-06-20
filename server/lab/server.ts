@@ -344,6 +344,7 @@ async function opScan(cap: MetaCapture, model: ModelId, withVenue: boolean, gt?:
     targetLang: "polski",
     locationHint: cap.locationHint,
     model,
+    noCache: true, // eksperymenty (porównania modeli) ZAWSZE świeże — uczciwy koszt/jakość
   });
   const items = menu.sections.reduce((n, s) => n + s.items.length, 0);
   const out: Record<string, unknown> = {
@@ -741,6 +742,7 @@ app.post("/api/sim-scan", async (c) => {
     locationHint: cap.locationHint,
     cuisineHint: peek?.cuisine || undefined,
     model,
+    noCache: true, // sim-scan w labie zawsze świeży (lab ma własny zapis skanu labScan)
   });
   const items = (menu.sections ?? []).flatMap((s: any) =>
     (s.items ?? []).map((it: any) => ({

@@ -1,12 +1,14 @@
 // Rdzeń: jedno lub WIELE zdjęć menu → vision (Claude lub OpenAI) → jedno spójne menu.
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { MENU_SCHEMA, type Menu } from "./schema.ts";
-import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
+import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, apiTag, type ModelId } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
+import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
 
 // Rejestr modeli + walidator współdzielone z resztą serwera (re-eksport z models.ts).
 export { MODELS, DEFAULT_MODEL, isModelId, type ModelId };
@@ -50,6 +52,8 @@ export interface ExtractOptions {
   /** Każda sparsowana pozycja (nazwa + photo_query) NA ŻYWO ze strumienia — apka pokazuje nazwy
    *  i od razu dociąga dla nich tanie zdjęcia poglądowe (gotowe, zanim skan się skończy). */
   onItem?: (item: ScanItemStub) => void;
+  /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
+  noCache?: boolean;
 }
 
 /** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
@@ -257,14 +261,44 @@ async function extractMenuOpenAI(
 }
 
 /** Główna funkcja: wyciąga jedno menu z dowolnej liczby obrazów (+ zużycie tokenów). */
+/** Hash zestawu plików (kolejność ma znaczenie) — stabilny klucz „ten sam plik/zestaw przyszedł". */
+function imagesHash(images: InputImage[]): string {
+  const h = createHash("sha256");
+  for (const img of images) { h.update(img.mediaType); h.update("|"); h.update(img.base64); h.update("\n"); }
+  return h.digest("hex").slice(0, 32);
+}
+/** Klucz cache skanu: hash zestawu + KONTEKST wpływający na wynik (język/lokalizacja/kuchnia/lokal/model). */
+function scanCacheKey(images: InputImage[], opts: ExtractOptions, model: ModelId): string {
+  return cacheKey("menu-scan", imagesHash(images), opts.targetLang, opts.locationHint, opts.restaurantHint, opts.cuisineHint, model);
+}
+
+/**
+ * Dyspozytor: CACHE skanu (dokładnie ten sam zestaw plików + ten sam kontekst i model → zwróć
+ * zapamiętane menu, bez płatnego odczytu vision), a przy pudle — odczyt Claude/OpenAI i zapis.
+ */
 export async function extractMenu(
   images: InputImage[],
   opts: ExtractOptions,
-): Promise<{ menu: Menu; usage: Usage }> {
+): Promise<{ menu: Menu; usage: Usage; cached?: boolean }> {
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
-
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
-  if (usesOpenAiApi(model)) return extractMenuOpenAI(images, opts, model);
+
+  const ck = scanCacheKey(images, opts, model);
+  if (!opts.noCache) {
+    const hit = await cacheGet<Menu>("menu-scan", ck, { op: "scan" });
+    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true };
+  }
+  const res = usesOpenAiApi(model) ? await extractMenuOpenAI(images, opts, model) : await extractMenuClaude(images, opts, model);
+  if (!opts.noCache && res.menu) void cacheSet("menu-scan", ck, res.menu, { lang: opts.targetLang });
+  return res;
+}
+
+/** Ścieżka Claude: vision + structured outputs (streaming). */
+async function extractMenuClaude(
+  images: InputImage[],
+  opts: ExtractOptions,
+  model: ModelId,
+): Promise<{ menu: Menu; usage: Usage }> {
   // max_tokens = maksimum modelu (to tylko sufit; nie kosztuje, gdy model skończy wcześniej).
   const maxTokens = MODELS[model].maxOutput;
 

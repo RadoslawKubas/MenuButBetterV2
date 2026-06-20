@@ -161,7 +161,7 @@ app.post("/scan", async (c) => {
     }, wantSteps ? 2000 : 5000);
     try {
       const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
-      const { menu, usage } = await extractMenu(images, {
+      const { menu, usage, cached } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
@@ -201,7 +201,7 @@ app.post("/scan", async (c) => {
           cuisine: menu.cuisine ?? null,
         },
       });
-      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage }) + "\n" : JSON.stringify({ menu, usage }));
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached }));
     } catch (e) {
       console.error("scan error:", e);
       const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;
