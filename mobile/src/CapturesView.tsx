@@ -15,8 +15,10 @@ import {
   renameCapture,
   captureRuns,
   capturesDiskBytes,
+  buildCaptureUpload,
   type ScanCapture,
 } from "./captures";
+import { uploadSample, fetchSampleStatus } from "./api";
 import type { SavedScan } from "./storage";
 import { MODEL_OPTIONS, distinctModels } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
@@ -83,13 +85,34 @@ export function CapturesView({
   // Co teraz pakujemy: "all" | id konkretnej migawki | null. Blokuje pozostałe przyciski.
   const [exporting, setExporting] = useState<string | null>(null);
   const [preview, setPreview] = useState<LightboxState | null>(null);
+  // Stan migawek na serwerze (po hashu/sygnaturze): na serwerze? zaimportowane do labu?
+  const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
+  const [uploading, setUploading] = useState<string | null>(null);
 
   async function load() {
-    setCaptures(await listCaptures().catch(() => []));
+    const caps = await listCaptures().catch(() => []);
+    setCaptures(caps);
+    // Znaczniki „na serwerze / zaimportowany" — best-effort (cicho, gdy serwer/baza niedostępne).
+    const hashes = caps.map((c) => c.sig || c.id);
+    fetchSampleStatus(hashes).then(setSampleStatus).catch(() => {});
   }
   useEffect(() => {
     void load();
   }, []);
+
+  async function uploadOne(c: ScanCapture) {
+    setUploading(c.id);
+    try {
+      const pkg = await buildCaptureUpload(c.id);
+      if (!pkg) { Alert.alert("Błąd", "Nie udało się spakować migawki."); return; }
+      const r = await uploadSample(pkg.hash, pkg.meta, pkg.zipBase64);
+      if (!r.ok) { Alert.alert("Wysyłka nieudana", r.error ?? "Spróbuj ponownie."); return; }
+      setSampleStatus((prev) => ({ ...prev, [c.sig || c.id]: { onServer: true, imported: false } }));
+      Alert.alert(r.status === "exists" ? "Już na serwerze" : "Wysłano", "Migawka jest na serwerze — zaimportuj ją w labie.");
+    } finally {
+      setUploading(null);
+    }
+  }
 
   const scanById = new Map(scans.map((s) => [s.id, s]));
 
@@ -212,6 +235,31 @@ export function CapturesView({
                   </Pressable>
                 </View>
 
+                {/* Wysyłka na serwer + znacznik stanu (na serwerze / zaimportowany do labu). */}
+                {(() => {
+                  const st = sampleStatus[c.sig || c.id];
+                  return (
+                    <View style={styles.sampleRow}>
+                      {st?.imported ? (
+                        <Text style={[styles.sampleBadge, styles.sampleImported]}>✓ zaimportowany do labu</Text>
+                      ) : st?.onServer ? (
+                        <Text style={[styles.sampleBadge, styles.sampleOnServer]}>☁ na serwerze</Text>
+                      ) : (
+                        <Text style={styles.sampleDim}>nie wysłano</Text>
+                      )}
+                      {!st?.onServer && !st?.imported ? (
+                        <Pressable
+                          style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
+                          disabled={uploading === c.id}
+                          onPress={() => void uploadOne(c)}
+                        >
+                          <Text style={styles.sampleBtnText}>{uploading === c.id ? "wysyłam…" : "☁ Wyślij na serwer"}</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  );
+                })()}
+
                 {c.images.length > 0 ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbRow}>
                     {c.images.map((im, i) => (
@@ -331,6 +379,13 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, fontWeight: "800", color: colors.text },
   titleSub: { fontSize: 11, color: colors.muted, marginTop: 1 },
   rename: { fontSize: 16, paddingLeft: 10 },
+  sampleRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" },
+  sampleBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: "hidden" },
+  sampleOnServer: { backgroundColor: "#DDEBFF", color: "#1A4E8A" },
+  sampleImported: { backgroundColor: "#D7EFD7", color: "#2E7D32" },
+  sampleDim: { fontSize: 11, color: colors.muted },
+  sampleBtn: { backgroundColor: colors.accent, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 },
+  sampleBtnText: { color: colors.buttonText, fontWeight: "800", fontSize: 12 },
   thumbRow: { flexDirection: "row", marginTop: 10 },
   thumb: { width: 64, height: 80, borderRadius: 8, marginRight: 8, backgroundColor: colors.badgeBg },
   metaLine: { fontSize: 12, color: colors.text, marginTop: 4 },

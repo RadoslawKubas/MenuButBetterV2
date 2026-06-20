@@ -436,6 +436,35 @@ export async function fetchStats(): Promise<DiagStats> {
   return json;
 }
 
+/** Wysyła migawkę (zip base64 + hash + meta) na serwer — lab ją potem zaimportuje. */
+export async function uploadSample(
+  hash: string,
+  meta: Record<string, unknown>,
+  zipBase64: string,
+): Promise<{ ok: boolean; status?: string; error?: string }> {
+  const res = await loggedFetch("samples-upload", `${API_BASE}/samples`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ hash, meta, zipBase64 }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { status?: string; error?: string };
+  if (!res.ok) return { ok: false, error: json.error ?? `HTTP ${res.status}` };
+  return { ok: true, status: json.status };
+}
+
+/** Stan migawek po hashach: na serwerze? zaimportowane? (do znaczników w „Trybie testowym"). */
+export async function fetchSampleStatus(hashes: string[]): Promise<Record<string, { onServer: boolean; imported: boolean }>> {
+  if (hashes.length === 0) return {};
+  const res = await loggedFetch("samples-status", `${API_BASE}/samples/status`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ hashes }),
+  }).catch(() => null);
+  if (!res || !res.ok) return {};
+  const json = (await res.json().catch(() => ({}))) as { status?: Record<string, { onServer: boolean; imported: boolean }> };
+  return json.status ?? {};
+}
+
 /** Surowe ostatnie zdarzenia z trwałego logu (feed aktywności + eksport debug). */
 export async function fetchEvents(limit = 500): Promise<DiagEvent[]> {
   const res = await loggedFetch("events", `${API_BASE}/events?limit=${limit}`, { headers: jsonHeaders() });

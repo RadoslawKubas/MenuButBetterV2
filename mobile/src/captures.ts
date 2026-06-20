@@ -346,3 +346,37 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
   await file.write(bytes);
   return file.uri;
 }
+
+/**
+ * Buduje paczkę do WYSYŁKI ONLINE jednej migawki: zip (base64, ten sam format co eksport →
+ * lab importuje istniejącym ingestem), hash = stabilna sygnatura migawki, meta = podsumowanie do
+ * listy w labie. Zwraca null, gdy migawki nie ma. Wysyłkę robi api.uploadSample.
+ */
+export async function buildCaptureUpload(captureId: string): Promise<{ hash: string; meta: Record<string, unknown>; zipBase64: string } | null> {
+  const all = await listCaptures();
+  const c = all.find((x) => x.id === captureId);
+  if (!c) return null;
+  const scans = await listScans().catch(() => []);
+  const scan = c.scanId ? scans.find((s) => s.id === c.scanId) : undefined;
+
+  const zip = new JSZip();
+  const imagesDir = zip.folder("images")!;
+  const images: CaptureExportEntry["images"] = [];
+  for (let i = 0; i < c.images.length; i++) {
+    const im = c.images[i]!;
+    const base64 = await captureImageBase64(im);
+    if (!base64) continue;
+    imagesDir.file(`${c.id}-${i}.jpg`, base64, { base64: true });
+    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation });
+  }
+  const { images: _drop, ...metaCap } = c;
+  const result: CaptureExportEntry["result"] = scan
+    ? { targetLang: scan.targetLang, models: scan.models, model: scan.model, restaurantName: scan.menu.restaurant_name, cuisine: scan.menu.cuisine, restaurant: scan.restaurant ?? undefined, usage: scan.usage, menu: scan.menu }
+    : undefined;
+  const entries: CaptureExportEntry[] = [{ ...metaCap, images, result }];
+  zip.file("metadata.json", JSON.stringify({ format: "menubutbetter.captures", version: 1, exportedAt: Date.now(), count: 1, captures: entries }, null, 2));
+  const zipBase64 = await zip.generateAsync({ type: "base64", compression: "STORE" });
+
+  const meta = { name: c.name ?? null, images: images.length, restaurantHint: c.restaurantHint ?? null, locationHint: c.locationHint ?? null, createdAt: c.createdAt };
+  return { hash: c.sig || c.id, meta, zipBase64 };
+}
