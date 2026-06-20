@@ -1554,6 +1554,7 @@ await migrateSamplesIfEmpty();
 
 const PORT = Number(process.env.LAB_PORT ?? 8799);
 void initCache(); // cache treści (L1 w pamięci; L2 Postgres gdy DATABASE_URL) — do testów cache w labie
-serve({ fetch: app.fetch, port: PORT });
+// Tylko localhost: lab nie ma auth i odpala płatne modele — nie wystawiamy go na LAN (domyślnie 0.0.0.0).
+serve({ fetch: app.fetch, port: PORT, hostname: "127.0.0.1" });
 console.log(`\n🔬 LAB modeli: http://localhost:${PORT}`);
 console.log(`   biblioteka: ${LIBRARY} (${loadMeta().length} migawek)\n`);

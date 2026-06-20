@@ -518,7 +518,7 @@ export default function App() {
       // — pakuj ile się ZMIEŚCI pod budżet rozmiaru żądania (zapas pod limit API ~32MB), z twardym sufitem.
       // Większy batch = model widzi kartki RAZEM → grupy ciągnące się przez strony nie pękają.
       const SIZE_BUDGET = 22 * 1024 * 1024; // ~22MB base64/partię (zapas: JSON+prompt+margines < 32MB API)
-      const MAX_PER_BATCH = 12; // twardy sufit (gdyby zdjęcia były malutkie — nie pakuj wszystkich 40 naraz)
+      const MAX_PER_BATCH = 10; // twardy sufit = serwerowy MAX_IMAGES (większa partia → 400 i utrata stron)
       const fixed = Math.max(0, Math.round(costPrefs.batchSize || 0));
       const batches: PreparedImage[][] = [];
       if (fixed >= 1) {
@@ -628,6 +628,11 @@ export default function App() {
             } finally {
               pfActive--;
               pumpPreview();
+              // Gdy pompa skończyła (brak aktywnych i kolejka pusta) → zapisz menu z dociągniętymi
+              // poglądowymi (inaczej te dodane PO compose nie trafiłyby do zapisanego skanu).
+              if (pfActive === 0 && pfQueue.length === 0 && scanIdRef.current) {
+                setMenu((prev) => { if (prev && scanIdRef.current) void updateScanMenu(scanIdRef.current, prev); return prev; });
+              }
             }
           })();
         }
