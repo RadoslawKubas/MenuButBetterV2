@@ -218,9 +218,12 @@
     <div id="serverSamples"></div>
   </div>
   <div class="panel">
-    <h3>🗄 Archiwum lokalne</h3>
-    <div class="mut small" style="margin-bottom:6px">Zarchiwizowane migawki — przywróć do listy testów albo usuń na stałe.</div>
-    <div id="archiveList"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+      <h3 style="margin:0" id="localSamplesHdr">🗂 Sample lokalne (aktywne)</h3>
+      <button id="archToggleBtn" onclick="toggleSampleArchive()" style="padding:3px 8px; font-size:12px"></button>
+    </div>
+    <div class="mut small" style="margin:4px 0 8px">Migawki w bibliotece labu — miniatura, nazwa, lokal/kuchnia, zapisany skan. Wejście do archiwum opcjonalne.</div>
+    <div id="localSamplesList"></div>
   </div>
 </div>
 
@@ -752,7 +755,7 @@ function switchTab(name){
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
-  else if(name==='samples'){ loadServerSamples(); renderArchive(); }
+  else if(name==='samples'){ loadServerSamples(); renderLocalSamples(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
@@ -946,16 +949,35 @@ async function importAllServerSamples(btn){
   if(btn) btn.disabled=false;
   await loadState(); await loadServerSamples();
 }
-function renderArchive(){
-  const box=document.getElementById('archiveList'); if(!box) return;
-  const arch=(STATE?.captures||[]).filter(c=>c.archived);
-  box.innerHTML = arch.length ? arch.map(c=>`
-    <div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-      <div><b>🗄 ${esc(c.name||new Date(c.createdAt).toLocaleString())}</b><div class="mut small">${c.images||''} zdj${c.locationHint?' · '+esc(c.locationHint):''}</div></div>
-      <div style="display:flex; gap:6px; white-space:nowrap"><button onclick="archiveFromTab('${c.id}')" style="padding:3px 8px; font-size:12px">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 Usuń</button></div>
-    </div>`).join('') : '<div class="mut small">Archiwum puste.</div>';
+let SAMPLE_SHOW_ARCH=false;
+function sampleCard(c, archived){
+  const res = c.result ? `${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}` : 'brak zapisanego wyniku';
+  return `<div class="cand" style="display:flex; gap:10px; align-items:flex-start">
+    <img src="/api/image?id=${c.id}&n=0" title="otwórz" style="width:54px;height:68px;object-fit:cover;border-radius:6px;background:#000;cursor:pointer" onclick="window.open('/api/image?id=${c.id}&n=0')">
+    <div style="flex:1; min-width:0">
+      <div style="font-weight:700">${archived?'🗄 ':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
+      <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
+      <div class="mut small">wynik: ${esc(res)}</div>
+      ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
+      <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
+        ${archived
+          ? `<button onclick="archiveFromTab('${c.id}',false)" style="padding:3px 8px; font-size:12px">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 Usuń na stałe</button>`
+          : `<button onclick="archiveFromTab('${c.id}',true)" style="padding:3px 8px; font-size:12px">🗄 Archiwizuj</button>`}
+      </div>
+    </div>
+  </div>`;
 }
-async function archiveFromTab(id){ await api('/api/archive',{captureId:id, archived:false}); await loadState(); renderArchive(); }
+function renderLocalSamples(){
+  const box=document.getElementById('localSamplesList'); if(!box) return;
+  const caps=STATE?.captures||[];
+  const arch=caps.filter(c=>c.archived), active=caps.filter(c=>!c.archived);
+  const btn=document.getElementById('archToggleBtn'); if(btn) btn.textContent = SAMPLE_SHOW_ARCH ? '← aktywne' : `🗄 archiwum (${arch.length})`;
+  const hdr=document.getElementById('localSamplesHdr'); if(hdr) hdr.textContent = SAMPLE_SHOW_ARCH ? '🗄 Archiwum lokalne' : '🗂 Sample lokalne (aktywne)';
+  const list=SAMPLE_SHOW_ARCH?arch:active;
+  box.innerHTML = list.length ? list.map(c=>sampleCard(c,SAMPLE_SHOW_ARCH)).join('') : `<div class="mut small">${SAMPLE_SHOW_ARCH?'Archiwum puste.':'Brak aktywnych sampli.'}</div>`;
+}
+function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
+async function archiveFromTab(id,on){ await api('/api/archive',{captureId:id, archived:on}); await loadState(); renderLocalSamples(); }
 
 loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu
 </script>
