@@ -250,7 +250,7 @@ export function scanMenu(
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/scan`);
     Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
-    xhr.timeout = 180000; // model przy wielu stronach potrafi liczyć ~2 min
+    xhr.timeout = 240000; // duży batch struktury (domyślnie 10 zdjęć) potrafi liczyć ~1.5–2 min — zapas
 
     // Postęp WYSYŁKI zdjęć (najdłuższe przy wielu/dużych zdjęciach).
     xhr.upload.onprogress = (e) => {
@@ -364,7 +364,7 @@ export function enrichMenuOnServer(
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/enrich`);
     Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
-    xhr.timeout = 180000;
+    xhr.timeout = 240000; // enrich dużego menu (setki pozycji) — zapas
     let scanned = 0;
     const parseLines = (text: string) => {
       const nl = text.lastIndexOf("\n");
