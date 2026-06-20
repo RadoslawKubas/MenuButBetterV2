@@ -11,7 +11,13 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { writeFile, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { getPool } from "./db.ts";
+
+/** Bezpieczna nazwa pliku z hasza (sygnatura migawki ma slashe/znaki specjalne → nie jako ścieżka!). */
+function safeFileName(hash: string): string {
+  return createHash("sha256").update(hash).digest("hex") + ".zip";
+}
 
 let ready = false;
 let storeDir: string | null = null; // katalog plików zipów (null = tryb BYTEA w bazie)
@@ -89,7 +95,7 @@ export async function saveSample(hash: string, meta: Record<string, unknown>, zi
   if (existing.rows.length) return { ok: true, status: "exists", id: existing.rows[0].id };
 
   if (storeDir) {
-    const fname = `${hash}.zip`;
+    const fname = safeFileName(hash);
     await writeFile(join(storeDir, fname), zip);
     const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes) VALUES ($1,$2,$3,$4) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length]);
     return { ok: true, status: "created", id: r.rows[0].id };
