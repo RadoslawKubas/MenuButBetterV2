@@ -15,7 +15,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete } from "./cache.ts";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
@@ -50,6 +50,13 @@ if (APP_TOKEN) {
     return next();
   });
 }
+
+// Kontekst instalacji: z nagłówka x-install-id (GUID apki) — wszystkie logEvent w tym requeście
+// (skan, ai, błąd, sample) zostaną otagowane tym GUID-em → grupowanie per instancja w labie.
+app.use("/*", async (c, next) => {
+  const installId = c.req.header("x-install-id") || undefined;
+  await reqContext.run({ installId }, () => next());
+});
 
 // Ruch apka ↔ serwer: odebrane = upload od apki (Content-Length żądania, głównie zdjęcia),
 // wysłane = odpowiedź do apki (Content-Length, gdy nie strumień). Egress liczy się na Railway.
@@ -682,10 +689,17 @@ app.post("/client-error", async (c) => {
   return c.json({ ok: true });
 });
 
-// Lab: pobierz ostatnie błędy klienta.
+// Lab: pobierz ostatnie błędy klienta (z install_id do grupowania per instancja).
 app.get("/client-errors", async (c) => {
-  const limit = Number(c.req.query("limit")) || 200;
+  const limit = Number(c.req.query("limit")) || 300;
   return c.json({ errors: await getClientErrors(limit) });
+});
+
+// Lab: wszystkie zdarzenia jednej INSTALACJI (skany, ai, sample, błędy) — wgląd „co robiła ta apka".
+app.get("/install-activity", async (c) => {
+  const installId = c.req.query("installId") || "";
+  const limit = Number(c.req.query("limit")) || 200;
+  return c.json({ installId, activity: await getInstallActivity(installId, limit) });
 });
 
 const port = Number(process.env.PORT) || 8787;

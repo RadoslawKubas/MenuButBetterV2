@@ -732,6 +732,17 @@ app.get("/api/client-errors", async (c) => {
   }
 });
 
+app.get("/api/install-activity", async (c) => {
+  const installId = c.req.query("installId") || "";
+  try {
+    const r = await prodFetch(`/install-activity?installId=${encodeURIComponent(installId)}&limit=200`);
+    const d = (await r.json()) as { activity?: unknown[] };
+    return c.json({ activity: d.activity ?? [] });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
 app.post("/api/server-samples/delete", async (c) => {
   const { id } = await c.req.json<{ id: number }>();
   if (!id) return c.json({ error: "brak id" }, 400);

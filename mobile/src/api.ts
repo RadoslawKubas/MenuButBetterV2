@@ -2,6 +2,7 @@
 // Expo (żeby działało na fizycznym telefonie bez ręcznego wpisywania IP).
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as appLog from "./appLog";
 import { ZERO_USAGE, type DishPhotoLite, type GeoPoint, type Menu, type ModelId, type PhotoDebug, type RestaurantInfo, type Usage } from "./types";
 
@@ -32,9 +33,33 @@ export const API_BASE = resolveApiBase();
 const APP_TOKEN = process.env.EXPO_PUBLIC_APP_TOKEN ?? "";
 
 /** Nagłówki zapytań JSON + (opcjonalnie) token aplikacji. */
+// GUID INSTALACJI apki — identyfikuje KONKRETNĄ instalację (do debugowania). Trwa między
+// uruchomieniami (AsyncStorage), nie musi przeżyć reinstalacji. Doklejany do KAŻDEGO żądania
+// (x-install-id) → serwer taguje nim wszystkie zdarzenia (skan/ai/sample/błąd) → grupowanie w labie.
+let INSTALL_ID = "";
+function genInstallId(): string {
+  return "i_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+}
+/** Wczytuje/tworzy GUID instalacji (raz, na starcie apki) + opróżnia kolejkę błędów offline. */
+export async function initInstallId(): Promise<string> {
+  if (INSTALL_ID) return INSTALL_ID;
+  try {
+    const stored = await AsyncStorage.getItem("install-id");
+    if (stored) INSTALL_ID = stored;
+  } catch { /* ignoruj */ }
+  if (!INSTALL_ID) {
+    INSTALL_ID = genInstallId();
+    try { await AsyncStorage.setItem("install-id", INSTALL_ID); } catch { /* ignoruj */ }
+  }
+  void flushErrorQueue();
+  return INSTALL_ID;
+}
+export function getInstallId(): string { return INSTALL_ID; }
+
 function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (APP_TOKEN) h["x-app-token"] = APP_TOKEN;
+  if (INSTALL_ID) h["x-install-id"] = INSTALL_ID;
   return h;
 }
 
@@ -50,6 +75,9 @@ async function loggedFetch(label: string, input: string, init?: RequestInit): Pr
       ms: Date.now() - t0,
       detail: res.ok ? undefined : `HTTP ${res.status}`,
     });
+    // Błędy serwera (5xx) — diagnostycznie istotne (API nie zwraca poprawnie). 4xx zwykle obsługiwane
+    // przez wywołującego, więc tu nie raportujemy, by nie zaśmiecać.
+    if (res.status >= 500) reportError(`API ${label}: HTTP ${res.status}`, { label: `api:${label}`, context: { status: res.status, ms: Date.now() - t0 } });
     return res;
   } catch (e) {
     appLog.logCall({ ts: Date.now(), label, ok: false, ms: Date.now() - t0, detail: (e as Error).message });
@@ -59,28 +87,60 @@ async function loggedFetch(label: string, input: string, init?: RequestInit): Pr
 }
 
 const APP_VERSION = `${Constants.expoConfig?.version ?? "?"} (build ${Constants.nativeBuildVersion ?? "?"})`;
+const ERR_QUEUE_KEY = "err-queue";
+
+type ErrPayload = { message: string; stack?: string; label?: string; context?: unknown; appVersion: string; platform: string; at: number };
+
+async function enqueueError(p: ErrPayload): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(ERR_QUEUE_KEY);
+    const q: ErrPayload[] = raw ? JSON.parse(raw) : [];
+    q.push(p);
+    while (q.length > 50) q.shift(); // cap — najstarsze wypadają
+    await AsyncStorage.setItem(ERR_QUEUE_KEY, JSON.stringify(q));
+  } catch { /* ignoruj */ }
+}
+
+/** Ponawia wysyłkę zalegających błędów (np. po odzyskaniu netu). Wołane na starcie apki. */
+export async function flushErrorQueue(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(ERR_QUEUE_KEY);
+    if (!raw) return;
+    const q: ErrPayload[] = JSON.parse(raw);
+    if (!q.length) return;
+    const remaining: ErrPayload[] = [];
+    for (const p of q) {
+      try {
+        const res = await fetch(`${API_BASE}/client-error`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(p) });
+        if (!res.ok) remaining.push(p);
+      } catch { remaining.push(p); }
+    }
+    await AsyncStorage.setItem(ERR_QUEUE_KEY, JSON.stringify(remaining));
+  } catch { /* ignoruj */ }
+}
 
 /**
- * Zgłasza błąd na serwer (trwały log → zakładka „Błędy" w labie). Fire‑and‑forget: nie blokuje i sam
- * nie rzuca (błędy raportowania ignorujemy, żeby nie zapętlić). message + stack + kontekst + wersja/platforma.
+ * Zgłasza błąd na serwer (trwały log → zakładka „Błędy" w labie). Fire‑and‑forget; gdy się NIE uda
+ * (brak netu/serwer) → ląduje w kolejce offline i jest ponawiane później. Nie blokuje i nie rzuca.
  */
 export function reportError(message: string, opts?: { stack?: string; label?: string; context?: unknown }): void {
-  try {
-    void fetch(`${API_BASE}/client-error`, {
-      method: "POST",
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        message: String(message).slice(0, 1000),
-        stack: opts?.stack,
-        label: opts?.label,
-        context: opts?.context,
-        appVersion: APP_VERSION,
-        platform: Platform.OS,
-      }),
-    }).catch(() => {});
-  } catch {
-    /* ignoruj — raportowanie błędu nie może wywalić apki */
-  }
+  const p: ErrPayload = {
+    message: String(message).slice(0, 1000),
+    stack: opts?.stack,
+    label: opts?.label,
+    context: opts?.context,
+    appVersion: APP_VERSION,
+    platform: Platform.OS,
+    at: Date.now(),
+  };
+  void (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/client-error`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(p) });
+      if (!res.ok) await enqueueError(p);
+    } catch {
+      await enqueueError(p); // brak netu / serwer niedostępny → spróbuj później
+    }
+  })();
 }
 
 export interface ScanImage {

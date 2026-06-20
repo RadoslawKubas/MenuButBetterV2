@@ -1018,33 +1018,50 @@ function renderLocalSamples(){
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
 async function archiveFromTab(id,on){ await api('/api/archive',{captureId:id, archived:on}); await loadState(); renderLocalSamples(); }
-/* ---- Błędy z apki (zakładka 🐞 Błędy) ---- */
-let ERR_LIST=[];
+/* ---- Błędy z apki — grupowane PER INSTANCJA (GUID instalacji) ---- */
+let ERR_GROUPS=[];
 async function loadClientErrors(btn){
   if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
   const info=document.getElementById('errInfo'), box=document.getElementById('errList');
   if(!info||!box) return; info.textContent='pobieram…';
   let r; try{ r=await api('/api/client-errors'); }catch(e){ info.textContent='błąd połączenia'; return; }
   if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
-  ERR_LIST=r.errors||[];
-  info.textContent = `${ERR_LIST.length} błędów · serwer ${r.prodUrl||''}`;
-  box.innerHTML = ERR_LIST.length ? ERR_LIST.map((e,i)=>{
-    const d=e.data||{};
-    return `<div class="cand" onclick="toggleErr(${i})">
-      <div style="display:flex; justify-content:space-between; gap:8px"><b style="color:var(--err)">${esc((d.message||'(brak)').slice(0,120))}</b><span class="mut small" style="white-space:nowrap">${esc(e.op||'')}</span></div>
-      <div class="mut small">${new Date(e.at).toLocaleString()}${d.appVersion?' · build '+esc(d.appVersion):''}${d.platform?' · '+esc(d.platform):''}</div>
-      <div id="err-${i}"></div>
-    </div>`;
-  }).join('') : '<div class="mut small">Brak zgłoszonych błędów 🎉</div>';
+  const errs=r.errors||[];
+  const map={};
+  for(const e of errs){ const id=e.installId||'(brak GUID)'; const g=(map[id]=map[id]||{id, errors:[], build:null, platform:null, last:0}); g.errors.push(e); const d=e.data||{}; if(d.appVersion)g.build=d.appVersion; if(d.platform)g.platform=d.platform; g.last=Math.max(g.last,new Date(e.at).getTime()); }
+  ERR_GROUPS=Object.values(map).sort((a,b)=>b.last-a.last);
+  info.textContent=`${errs.length} błędów · ${ERR_GROUPS.length} instancji apki`;
+  box.innerHTML = ERR_GROUPS.length ? ERR_GROUPS.map((g,gi)=>`
+    <div class="cand">
+      <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+        <b>📱 ${esc(g.id.slice(0,20))}${g.build?' · build '+esc(g.build):''}${g.platform?' · '+esc(g.platform):''}</b>
+        <span style="display:flex; gap:6px; white-space:nowrap"><span class="badge fail">${g.errors.length} błędów</span><button onclick="loadInstallActivity('${esc(g.id)}',${gi})" style="padding:2px 7px; font-size:11px">📋 aktywność</button></span>
+      </div>
+      <div class="mut small">ostatni: ${new Date(g.last).toLocaleString()}</div>
+      <div id="act-${gi}"></div>
+      <div style="margin-top:6px">${g.errors.map((e,ei)=>errRow(gi,ei,e)).join('')}</div>
+    </div>`).join('') : '<div class="mut small">Brak zgłoszonych błędów 🎉</div>';
 }
-function toggleErr(i){
-  const el=document.getElementById('err-'+i); if(!el) return;
+function errRow(gi,ei,e){ const d=e.data||{};
+  return `<div class="cand" style="margin-top:4px" onclick="toggleErr(${gi},${ei})">
+    <div style="display:flex; justify-content:space-between; gap:8px"><span style="color:var(--err)">${esc((d.message||'(brak)').slice(0,100))}</span><span class="mut small" style="white-space:nowrap">${esc(e.op||'')}</span></div>
+    <div class="mut small">${new Date(e.at).toLocaleString()}</div><div id="err-${gi}-${ei}"></div></div>`;
+}
+function toggleErr(gi,ei){
+  const el=document.getElementById('err-'+gi+'-'+ei); if(!el) return;
   if(el.innerHTML){ el.innerHTML=''; return; }
-  const d=ERR_LIST[i].data||{};
+  const d=(ERR_GROUPS[gi].errors[ei].data)||{};
   el.innerHTML=`<div style="margin-top:6px; border-top:1px solid var(--line); padding-top:6px">
     ${d.context!=null?`<div class="mut small"><b>kontekst:</b> ${esc(typeof d.context==='string'?d.context:JSON.stringify(d.context)).slice(0,400)}</div>`:''}
-    ${d.stack?`<pre class="pre" style="margin-top:6px">${esc(d.stack)}</pre>`:'<div class="mut small">(brak stack trace)</div>'}
-  </div>`;
+    ${d.stack?`<pre class="pre" style="margin-top:6px">${esc(d.stack)}</pre>`:'<div class="mut small">(brak stack trace)</div>'}</div>`;
+}
+async function loadInstallActivity(id,gi){
+  const el=document.getElementById('act-'+gi); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="mut small" style="margin-top:6px">ładuję…</div>';
+  const r=await api('/api/install-activity?installId='+encodeURIComponent(id));
+  const a=r.activity||[];
+  el.innerHTML=`<div class="step" style="margin-top:6px"><div class="mut small" style="font-weight:700">Aktywność tej instancji (${a.length}):</div>${a.map(x=>`<div class="mut small">${new Date(x.at).toLocaleTimeString()} · <b>${esc(x.type)}</b> ${esc(x.op||'')}${x.model?' · '+esc(x.model):''}${x.costUsd?' · $'+x.costUsd.toFixed(4):''}</div>`).join('')||'<div class="mut small">brak</div>'}</div>`;
 }
 
 loadState().then(()=>loadPrices()); // chipy modeli wg aktualnego cennika od startu

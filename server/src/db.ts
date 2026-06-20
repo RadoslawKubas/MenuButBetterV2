@@ -3,9 +3,14 @@
 // działa normalnie (in‑memory diagnostyka w apiLog.ts zostaje). Zapisy nigdy nie blokują
 // ani nie wywalają requestu (błędy łapane i logowane do konsoli).
 import { Pool } from "pg";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 let pool: Pool | null = null;
 let ready = false;
+
+// Kontekst per-request: GUID instalacji apki (x-install-id). Dzięki AsyncLocalStorage KAŻDe
+// logEvent w obrębie requestu samo dostaje installId — bez przekazywania przez wszystkie wywołania.
+export const reqContext = new AsyncLocalStorage<{ installId?: string }>();
 
 /** Współdzielona pula Postgresa (lub null bez DATABASE_URL). Używa też cache.ts. */
 export function getPool(): Pool | null {
@@ -41,10 +46,13 @@ export async function initDb(): Promise<void> {
         input_tokens INTEGER,
         output_tokens INTEGER,
         cost_usd DOUBLE PRECISION,
-        data JSONB
+        data JSONB,
+        install_id TEXT
       );
+      ALTER TABLE events ADD COLUMN IF NOT EXISTS install_id TEXT;
       CREATE INDEX IF NOT EXISTS events_created_at_idx ON events (created_at);
       CREATE INDEX IF NOT EXISTS events_type_idx ON events (type);
+      CREATE INDEX IF NOT EXISTS events_install_idx ON events (install_id);
     `);
     ready = true;
     console.log("[db] trwałe logi GOTOWE (Postgres).");
@@ -71,15 +79,18 @@ export interface EventInput {
   outputTokens?: number;
   costUsd?: number;
   data?: Record<string, unknown>;
+  /** GUID instalacji apki — gdy nie podany, brany z kontekstu requestu (x-install-id). */
+  installId?: string;
 }
 
 /** Zapisuje zdarzenie (best‑effort, nieblokująco). No‑op bez DB. */
 export function logEvent(ev: EventInput): void {
   const p = getPool();
   if (!p || !ready) return;
+  const installId = ev.installId ?? reqContext.getStore()?.installId ?? null;
   p.query(
-    `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       ev.type,
       ev.op ?? null,
@@ -89,6 +100,7 @@ export function logEvent(ev: EventInput): void {
       ev.outputTokens ?? null,
       ev.costUsd ?? null,
       ev.data ? JSON.stringify(ev.data) : null,
+      installId,
     ],
   ).catch((e) => console.error("[db] logEvent:", (e as Error).message));
 }
@@ -205,16 +217,28 @@ export async function budgetExceeded(): Promise<boolean> {
   return (await getTodayCostUsd()) >= budget;
 }
 
-/** Ostatnie BŁĘDY KLIENTA (zgłoszone z apki) — do zakładki „Błędy" w labie. */
-export async function getClientErrors(limit = 200): Promise<{ at: string; op: string | null; data: Record<string, unknown> | null }[]> {
+/** Ostatnie BŁĘDY KLIENTA (zgłoszone z apki) — do zakładki „Błędy" w labie. Z install_id (grupowanie). */
+export async function getClientErrors(limit = 300): Promise<{ at: string; op: string | null; installId: string | null; data: Record<string, unknown> | null }[]> {
   const p = getPool();
   if (!p || !ready) return [];
   const r = await p.query(
-    `SELECT to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at, op, data
+    `SELECT to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at, op, install_id, data
      FROM events WHERE type = 'client-error' ORDER BY id DESC LIMIT $1`,
     [Math.min(Math.max(limit, 1), 1000)],
   );
-  return r.rows.map((x) => ({ at: x.at, op: x.op, data: x.data }));
+  return r.rows.map((x) => ({ at: x.at, op: x.op, installId: x.install_id, data: x.data }));
+}
+
+/** Wszystkie zdarzenia jednej INSTALACJI apki (skany, ai, sample, błędy) — do wglądu „co robiła ta apka". */
+export async function getInstallActivity(installId: string, limit = 200): Promise<{ at: string; type: string; op: string | null; model: string | null; costUsd: number | null; data: Record<string, unknown> | null }[]> {
+  const p = getPool();
+  if (!p || !ready || !installId) return [];
+  const r = await p.query(
+    `SELECT to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at, type, op, model, cost_usd, data
+     FROM events WHERE install_id = $1 ORDER BY id DESC LIMIT $2`,
+    [installId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return r.rows.map((x) => ({ at: x.at, type: x.type, op: x.op, model: x.model, costUsd: x.cost_usd != null ? Number(x.cost_usd) : null, data: x.data }));
 }
 
 /** Ostatnie surowe zdarzenia (do eksportu/debug). */
