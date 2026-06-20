@@ -112,41 +112,49 @@ export function RestaurantCard({
         {cityLine ? <Text style={styles.city}>{cityLine}</Text> : null}
         {r.address ? <Text style={styles.address}>{r.address}</Text> : null}
 
-        {(candidates && candidates.length > 0) || r.guessedByLocation ? (
-          <View style={styles.guessBox}>
-            <Text style={styles.guessNote}>
-              {r.guessedByLocation
-                ? "📍 Dopasowano po lokalizacji i kuchni (nie znaleziono nazwy w menu). "
-                : ""}
-              {candidates && candidates.length > 0
-                ? "To nie ten lokal? Wybierz właściwy z pobliża:"
-                : ""}
-              {nearbyLoading ? "  ⏳ szukam…" : ""}
-            </Text>
+        {/* Wybór właściwego lokalu: przycisk wyszukania i LISTA są RAZEM (nie rozbite). Lista to
+            czytelne wiersze: ocena + nazwa + adres — łatwo ocenić i wybrać. */}
+        {onSearchNearby || (candidates && candidates.length > 0) ? (
+          <View style={styles.pickBox}>
+            <View style={styles.pickHead}>
+              <Text style={styles.pickTitle}>
+                {r.guessedByLocation ? "📍 Zgadnięto po lokalizacji — to ten lokal?" : "To nie ten lokal?"}
+              </Text>
+              {onSearchNearby ? (
+                <Pressable style={[styles.pickSearchBtn, nearbyLoading && styles.pickSearchBtnOff]} onPress={onSearchNearby} disabled={nearbyLoading}>
+                  <Text style={styles.pickSearchText}>{nearbyLoading ? "⏳ szukam…" : "🔄 Inne w pobliżu"}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <Text style={styles.pickHint}>Wyszukuje wg GPS zapisanego przy skanie (nie Twojej obecnej pozycji).</Text>
             {candidates && candidates.length > 0 && onPick ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chips}>
+              <View style={styles.candList}>
                 {candidates.map((c) => {
                   const active = c.placeId === r.placeId;
+                  const addr = [c.address, c.city].filter(Boolean).join(" · ");
                   return (
                     <Pressable
                       key={c.placeId}
                       onPress={() => !active && onPick(c)}
-                      style={[styles.chip, active && styles.chipActive]}
+                      style={[styles.candRow, active && styles.candRowActive]}
                     >
-                      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                        {active ? "✓ " : ""}
-                        {c.name}
-                        {c.rating != null ? ` · ★${c.rating.toFixed(1)}` : ""}
-                      </Text>
+                      <View style={[styles.candRating, c.rating != null && styles.candRatingHas]}>
+                        <Text style={styles.candRatingText}>{c.rating != null ? `★ ${c.rating.toFixed(1)}` : "—"}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.candName, active && styles.candNameActive]} numberOfLines={1}>{active ? "✓ " : ""}{c.name}</Text>
+                        {addr ? <Text style={styles.candAddr} numberOfLines={1}>{addr}</Text> : null}
+                      </View>
+                      {!active ? <Text style={styles.candPick}>wybierz ›</Text> : null}
                     </Pressable>
                   );
                 })}
                 {onExpandSearch ? (
-                  <Pressable onPress={onExpandSearch} style={[styles.chip, styles.chipExpand]}>
-                    <Text style={styles.chipText}>🔭 Szerszy zasięg</Text>
+                  <Pressable onPress={onExpandSearch} style={styles.candExpand}>
+                    <Text style={styles.candExpandText}>🔭 Szerszy zasięg</Text>
                   </Pressable>
                 ) : null}
-              </ScrollView>
+              </View>
             ) : null}
           </View>
         ) : null}
@@ -200,17 +208,12 @@ export function RestaurantCard({
           ) : null}
         </View>
 
-        {/* Korekta dopasowania lokalu: szukaj po nazwie, w pobliżu, lub usuń. */}
-        {onSearchByName || onSearchNearby || onRemove ? (
+        {/* Pozostałe korekty: szukaj po nazwie / usuń. „Inny w pobliżu" jest wyżej, przy liście wyboru. */}
+        {onSearchByName || onRemove ? (
           <View style={styles.fixRow}>
             {onSearchByName ? (
               <Pressable style={styles.fixBtn} onPress={onSearchByName}>
                 <Text style={styles.fixText}>🔎 Szukaj po nazwie</Text>
-              </Pressable>
-            ) : null}
-            {onSearchNearby ? (
-              <Pressable style={styles.fixBtn} onPress={onSearchNearby}>
-                <Text style={styles.fixText}>🔄 Inny w pobliżu</Text>
               </Pressable>
             ) : null}
             {onRemove ? (
@@ -251,27 +254,25 @@ const styles = StyleSheet.create({
   open: { fontSize: 13, fontWeight: "700" },
   openYes: { color: "#2e7d32" },
   openNo: { color: colors.error },
-  guessBox: {
-    marginTop: 12,
-    backgroundColor: colors.badgeBg,
-    borderRadius: 10,
-    padding: 10,
-  },
-  guessNote: { fontSize: 12, color: colors.muted, lineHeight: 17 },
-  chips: { marginTop: 8 },
-  chip: {
-    backgroundColor: colors.card,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: colors.badgeBg,
-  },
-  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  chipExpand: { borderStyle: "dashed", borderColor: colors.accent },
-  chipText: { fontSize: 13, color: colors.text, fontWeight: "600" },
-  chipTextActive: { color: "#fff" },
+  pickBox: { marginTop: 12, backgroundColor: colors.badgeBg, borderRadius: 12, padding: 10 },
+  pickHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  pickTitle: { flex: 1, fontSize: 13, color: colors.text, fontWeight: "700" },
+  pickSearchBtn: { backgroundColor: colors.accent, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  pickSearchBtnOff: { opacity: 0.6 },
+  pickSearchText: { color: "#fff", fontWeight: "800", fontSize: 12 },
+  pickHint: { fontSize: 11, color: colors.muted, marginTop: 4, lineHeight: 15 },
+  candList: { marginTop: 10, gap: 6 },
+  candRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, borderWidth: 1, borderColor: "transparent" },
+  candRowActive: { borderColor: colors.accent, backgroundColor: colors.accent + "12" },
+  candRating: { minWidth: 46, alignItems: "center", paddingVertical: 3, borderRadius: 8, backgroundColor: colors.badgeBg },
+  candRatingHas: { backgroundColor: colors.accent + "1f" },
+  candRatingText: { fontSize: 12, fontWeight: "800", color: colors.accent },
+  candName: { fontSize: 14, fontWeight: "700", color: colors.text },
+  candNameActive: { color: colors.accent },
+  candAddr: { fontSize: 12, color: colors.muted, marginTop: 1 },
+  candPick: { fontSize: 12, color: colors.accent, fontWeight: "700" },
+  candExpand: { alignSelf: "flex-start", marginTop: 2, paddingVertical: 6, paddingHorizontal: 4 },
+  candExpandText: { fontSize: 13, color: colors.accent, fontWeight: "700" },
   city: { fontSize: 14, color: colors.text, marginTop: 8, fontWeight: "600" },
   address: { fontSize: 13, color: colors.muted, marginTop: 2 },
   gallery: { marginTop: 14 },

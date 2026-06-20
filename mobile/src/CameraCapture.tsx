@@ -63,6 +63,35 @@ export function CameraCapture({
   const [busy, setBusy] = useState(false); // robienie zdjęcia
   const [saving, setSaving] = useState(false); // przetwarzanie „Użyj"
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
+  const [torch, setTorch] = useState(false); // latarka (doświetlenie menu)
+  const [zoom, setZoom] = useState(0); // 0..1 (expo-camera) — pinch + chipy powiększeń
+  const zoomRef = useRef(0);
+  const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
+  const applyZoom = (z: number) => { const v = Math.max(0, Math.min(1, z)); zoomRef.current = v; setZoom(v); };
+  // Pinch (2 palce) nad podglądem aparatu → płynny zoom. Pojedyncze dotyki puszczamy (migawka itd.).
+  const pinch = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+      onMoveShouldSetPanResponder: (e) => e.nativeEvent.touches.length === 2,
+      onPanResponderGrant: (e) => {
+        const t = e.nativeEvent.touches;
+        if (t.length === 2) pinchStart.current = { dist: Math.hypot(t[0]!.pageX - t[1]!.pageX, t[0]!.pageY - t[1]!.pageY), zoom: zoomRef.current };
+      },
+      onPanResponderMove: (e) => {
+        const t = e.nativeEvent.touches;
+        if (t.length === 2 && pinchStart.current) {
+          const d = Math.hypot(t[0]!.pageX - t[1]!.pageX, t[0]!.pageY - t[1]!.pageY);
+          applyZoom(pinchStart.current.zoom + (d / pinchStart.current.dist - 1) * 0.35); // czułość
+        }
+      },
+      onPanResponderRelease: () => { pinchStart.current = null; },
+      onPanResponderTerminate: () => { pinchStart.current = null; },
+    }),
+  ).current;
+  // Chipy „natywne" — przybliżenia 0..1 (cyfrowy zoom expo-camera jest nieliniowy, niskie wartości = przydatny zakres).
+  const ZOOM_PRESETS: { label: string; z: number }[] = [
+    { label: "1×", z: 0 }, { label: "2×", z: 0.04 }, { label: "3×", z: 0.09 }, { label: "5×", z: 0.2 },
+  ];
   const [gallery, setGallery] = useState(false); // galeria zdjęć tej sesji
   const pagerRef = useRef<FlatList<Shot>>(null);
   const [galIdx, setGalIdx] = useState(0); // bieżąca strona galerii (do paska miniatur)
@@ -133,6 +162,8 @@ export function CameraCapture({
       setBusy(false);
       setSaving(false);
       setGallery(false);
+      setTorch(false);
+      applyZoom(0);
     }
   }, [visible]);
 
@@ -177,15 +208,24 @@ export function CameraCapture({
         {permission?.granted ? (
           <>
             {/* Żywy aparat pod spodem — zostaje „ciepły". */}
-            <CameraView ref={ref} style={styles.camera} facing="back" />
+            <CameraView ref={ref} style={styles.camera} facing="back" enableTorch={torch} zoom={zoom} />
+
+            {/* Warstwa pinch-zoom nad aparatem (paski są renderowane później → są na wierzchu). */}
+            {!pending ? <View style={StyleSheet.absoluteFill} {...pinch.panHandlers} /> : null}
 
             {/* Zamrożony podgląd ostatniego zdjęcia. */}
             {pending ? (
               <Image source={{ uri: pending.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
             ) : null}
 
-            {/* Górny pasek: przełącznik „szybkiego podglądu" + banner z kontekstem. */}
+            {/* Górny pasek: latarka + przełącznik „szybkiego podglądu" + banner z kontekstem. */}
             <View style={styles.topBar}>
+              <Pressable
+                style={[styles.peekToggle, torch && styles.peekToggleOn]}
+                onPress={() => setTorch((t) => !t)}
+              >
+                <Text style={styles.peekToggleText}>{torch ? "🔦 Latarka wł." : "🔦 Latarka"}</Text>
+              </Pressable>
               <Pressable
                 style={[styles.peekToggle, peekEnabled && styles.peekToggleOn]}
                 onPress={() => onTogglePeek(!peekEnabled)}
@@ -213,7 +253,19 @@ export function CameraCapture({
                 </Pressable>
               </View>
             ) : (
-              // Pasek aparatu: Gotowe / migawka / licznik.
+              <>
+              {/* Chipy zoomu (natywny styl) — nad paskiem; aktywny = najbliższy preset. */}
+              <View style={styles.zoomBar} pointerEvents="box-none">
+                {ZOOM_PRESETS.map((p) => {
+                  const active = Math.abs(zoom - p.z) < 0.02;
+                  return (
+                    <Pressable key={p.label} style={[styles.zoomChip, active && styles.zoomChipOn]} onPress={() => applyZoom(p.z)}>
+                      <Text style={[styles.zoomChipText, active && styles.zoomChipTextOn]}>{p.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {/* Pasek aparatu: Gotowe / migawka / licznik. */}
               <View style={styles.bar}>
                 <Pressable style={styles.side} onPress={onClose}>
                   <Text style={styles.doneText}>Gotowe ({count})</Text>
@@ -244,6 +296,7 @@ export function CameraCapture({
                   )}
                 </Pressable>
               </View>
+              </>
             )}
           </>
         ) : (
@@ -363,6 +416,11 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "rgba(0,0,0,0.4)",
   },
+  zoomBar: { position: "absolute", left: 0, right: 0, bottom: 132, flexDirection: "row", justifyContent: "center", gap: 8 },
+  zoomChip: { minWidth: 40, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.45)", alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" },
+  zoomChipOn: { backgroundColor: "rgba(255,255,255,0.92)", borderColor: "#fff" },
+  zoomChipText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  zoomChipTextOn: { color: "#000" },
   side: { minWidth: 96 },
   doneText: { color: "#fff", fontSize: 16, fontWeight: "800" },
   counter: { color: "#fff", fontSize: 15, fontWeight: "700", textAlign: "right" },
