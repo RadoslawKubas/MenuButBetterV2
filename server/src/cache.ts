@@ -166,6 +166,56 @@ export async function cacheStats(): Promise<{ enabled: boolean; l1: number; rows
   }
 }
 
+export interface CacheRow { key: string; kind: string; lang: string | null; createdAt: string | null; expiresAt: string | null; hits: number; value: unknown }
+
+/** Przegląd wpisów cache (do podglądu w LABie): filtr po rodzaju + wyszukiwanie w kluczu/wartości.
+ *  Źródło: Postgres (pełne metadane) lub — lokalnie bez DB — L1 w pamięci. */
+export async function cacheBrowse(opts: { kind?: string; q?: string; limit?: number }): Promise<{ source: "pg" | "l1"; rows: CacheRow[] }> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const p = getPool();
+  if (p && ready) {
+    const params: unknown[] = [];
+    const where: string[] = ["(expires_at IS NULL OR expires_at > now())"];
+    if (opts.kind) { params.push(opts.kind); where.push(`kind = $${params.length}`); }
+    if (opts.q) { params.push("%" + opts.q.toLowerCase() + "%"); where.push(`(lower(key) LIKE $${params.length} OR lower(value::text) LIKE $${params.length})`); }
+    params.push(limit);
+    const r = await p.query(
+      `SELECT key, kind, lang, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS') AS created_at,
+              to_char(expires_at,'YYYY-MM-DD"T"HH24:MI:SS') AS expires_at, hits, value
+       FROM content_cache WHERE ${where.join(" AND ")} ORDER BY hits DESC, created_at DESC LIMIT $${params.length}`,
+      params,
+    );
+    return { source: "pg", rows: r.rows.map((x) => ({ key: x.key, kind: x.kind, lang: x.lang, createdAt: x.created_at, expiresAt: x.expires_at, hits: x.hits, value: x.value })) };
+  }
+  const q = opts.q?.toLowerCase();
+  const rows: CacheRow[] = [];
+  for (const [key, e] of L1) {
+    const kind = key.split(":")[0] ?? "";
+    if (opts.kind && kind !== opts.kind) continue;
+    if (q && !key.toLowerCase().includes(q) && !JSON.stringify(e.value).toLowerCase().includes(q)) continue;
+    rows.push({ key, kind, lang: null, createdAt: null, expiresAt: e.exp ? new Date(e.exp).toISOString().slice(0, 19) : null, hits: 0, value: e.value });
+    if (rows.length >= limit) break;
+  }
+  return { source: "l1", rows };
+}
+
+/** Rozmiar cache (bajty wartości + liczba wpisów). Postgres: realny rozmiar tabeli; L1: szacunek. */
+export async function cacheSize(): Promise<{ enabled: boolean; bytes: number; rows: number }> {
+  const p = getPool();
+  if (!p || !ready) {
+    let bytes = 0;
+    for (const [k, e] of L1) bytes += k.length + JSON.stringify(e.value).length;
+    return { enabled: false, bytes, rows: L1.size };
+  }
+  try {
+    const r = await p.query(`SELECT count(*)::int AS n FROM content_cache WHERE expires_at IS NULL OR expires_at > now()`);
+    const t = await p.query(`SELECT pg_total_relation_size('content_cache')::bigint AS s`);
+    return { enabled: true, bytes: Number(t.rows[0].s), rows: r.rows[0].n };
+  } catch {
+    return { enabled: false, bytes: 0, rows: 0 };
+  }
+}
+
 /** Czyści cache (cały lub jednego rodzaju). Do przycisku „wyczyść" w LABie. */
 export async function cacheClear(kind?: CacheKind): Promise<void> {
   L1.clear();

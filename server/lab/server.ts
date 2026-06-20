@@ -29,7 +29,7 @@ import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
 import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
-import { cacheStats, cacheClear, initCache, type CacheKind } from "../src/cache.ts";
+import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, type CacheKind } from "../src/cache.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
@@ -53,6 +53,7 @@ const OTHER_PRICES_DEFAULT: { key: string; label: string; unit: string; value: n
   { key: "google_places", label: "Google Places (details+photos)", unit: "$/1000 req", value: 17, source: PRICE_SOURCES.google_places! },
   { key: "serper", label: "Serper.dev (Google Images)", unit: "$/1000 req", value: 0.6, source: PRICE_SOURCES.serper! },
   { key: "serpapi", label: "SerpApi", unit: "$/1000 req", value: 10, source: PRICE_SOURCES.serpapi! },
+  { key: "storage", label: "Cache storage (Postgres)", unit: "$/GB-mies.", value: 0.25, source: PRICE_SOURCES.egress! },
 ];
 
 const PRICES_FILE = join(HERE, "prices-override.json");
@@ -994,6 +995,17 @@ app.post("/api/cost-log-clear", (c) => {
 app.get("/api/cache-stats", async (c) => {
   const stats = await cacheStats();
   return c.json({ ...stats, sessionHits: cacheHitsSnapshot() });
+});
+app.get("/api/cache-browse", async (c) => {
+  const kind = c.req.query("kind") || undefined;
+  const q = c.req.query("q") || undefined;
+  const limit = Number(c.req.query("limit")) || 100;
+  return c.json(await cacheBrowse({ kind, q, limit }));
+});
+app.get("/api/cache-size", async (c) => {
+  const sz = await cacheSize();
+  const rate = otherRate("storage"); // $/GB-mies.
+  return c.json({ ...sz, storageUsdPerGbMonth: rate, storageCostMonthly: (sz.bytes / 1e9) * rate });
 });
 app.post("/api/cache-clear", async (c) => {
   const b = await c.req.json<{ kind?: string }>().catch(() => ({}) as { kind?: string });

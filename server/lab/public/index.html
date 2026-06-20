@@ -75,6 +75,7 @@
   <nav class="tabs">
     <button class="tab on" id="tabBtn-lab" onclick="switchTab('lab')">🧪 Laboratorium</button>
     <button class="tab" id="tabBtn-logs" onclick="switchTab('logs')">📊 Logi</button>
+    <button class="tab" id="tabBtn-cache" onclick="switchTab('cache')">🗄 Cache</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
   </nav>
   <span class="mut small" id="dir"></span>
@@ -217,6 +218,19 @@
       <span class="mut small">klik „źródło ↗" → oficjalna strona z cenami; pola edytowalne (ręczna podmiana, zapis lokalny). Te stawki liczą koszty w zakładce Logi.</span>
     </div>
     <div id="pricesBox"></div>
+  </div>
+</div>
+
+<div id="tab-cache" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>🗄 Podgląd cache</h3>
+    <div id="cacheSize" class="mut small" style="margin-bottom:8px"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+      <input type="text" id="cacheQ" placeholder="szukaj w kluczach / treści…" style="flex:1; min-width:180px" onkeydown="if(event.key==='Enter')loadCacheBrowse()" />
+      <button onclick="loadCacheBrowse()">🔍 szukaj</button>
+    </div>
+    <div class="chips" id="cacheKindChips" style="margin-top:8px"></div>
+    <div id="cacheBrowse" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -716,12 +730,13 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','prices'].forEach(t=>{
+  ['lab','logs','cache','prices'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
   else if(name==='prices'){ loadPrices(); }
+  else if(name==='cache'){ renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
@@ -794,7 +809,46 @@ async function loadCacheStats(btn){
       ${body}
     </div>`;
 }
-async function clearCache(kind){ if(!confirm('Wyczyścić cache '+(kind?CACHE_LABELS[kind]:'WSZYSTKO')+'?')) return; await api('/api/cache-clear',kind?{kind}:{}); loadCacheStats(); }
+async function clearCache(kind){ if(!confirm('Wyczyścić cache '+(kind?CACHE_LABELS[kind]:'WSZYSTKO')+'?')) return; await api('/api/cache-clear',kind?{kind}:{}); loadCacheStats(); if(CURRENT_TAB==='cache'){ loadCacheBrowse(); loadCacheSize(); } }
+/* ---- Podgląd cache (zakładka Cache) ---- */
+let CACHE_KIND='', CACHE_ROWS=[];
+function renderCacheKindChips(){
+  const opts=[['','Wszystko'],['repr-photos','🖼 zdjęcia'],['dish-info','📝 opisy'],['vision-url','✓ werdykty']];
+  document.getElementById('cacheKindChips').innerHTML=opts.map(([k,l])=>`<div class="chip ${CACHE_KIND===k?'on':''}" onclick="setCacheKind('${k}')">${l}</div>`).join('');
+}
+function setCacheKind(k){ CACHE_KIND=k; renderCacheKindChips(); loadCacheBrowse(); }
+async function loadCacheSize(){
+  const r=await api('/api/cache-size');
+  document.getElementById('cacheSize').innerHTML=`Wpisów: <b>${r.rows||0}</b> · rozmiar: <b>${fmtBytes(r.bytes)}</b>${r.enabled?'':' <span class="mut">(L1 w pamięci — bez Postgresa)</span>'} · koszt przechowywania: <b>${fmtUsd(r.storageCostMonthly)}/mies.</b> <span class="mut">(${r.storageUsdPerGbMonth}$/GB-mies., z cennika)</span>`;
+}
+async function loadCacheBrowse(){
+  const q=(document.getElementById('cacheQ').value||'').trim();
+  const r=await api('/api/cache-browse?limit=200'+(CACHE_KIND?'&kind='+encodeURIComponent(CACHE_KIND):'')+(q?'&q='+encodeURIComponent(q):''));
+  CACHE_ROWS=r.rows||[];
+  const box=document.getElementById('cacheBrowse');
+  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">${CACHE_ROWS.length} wpisów (źródło: ${r.source==='pg'?'Postgres':'pamięć L1'})</div>`+CACHE_ROWS.map((row,i)=>`
+    <div class="cand" onclick="toggleCacheRow(${i})">
+      <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(CACHE_LABELS[row.kind]||row.kind)}</b> <span class="mut small">trafień ${row.hits}</span></div>
+      <div class="mut" style="font-size:11px; word-break:break-all">${esc(row.key)}</div>
+      ${row.expiresAt?`<div class="mut small">wygasa ${esc(String(row.expiresAt).replace('T',' '))}</div>`:''}
+      <div id="cacheR-${i}"></div>
+    </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak wpisów (pasujących do filtra)</div>';
+}
+function toggleCacheRow(i){
+  const el=document.getElementById('cacheR-'+i); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  const row=CACHE_ROWS[i]; let inner='';
+  if(row.kind==='repr-photos' && Array.isArray(row.value)){
+    inner=`<div class="cands" style="margin-top:6px">${row.value.map(ph=>`<div class="ct"><img src="${esc(ph.url)}" loading="lazy" onerror="this.style.opacity=.15"><div class="cap2">${esc(ph.source||'')}</div></div>`).join('')}</div>`;
+  } else if(row.kind==='dish-info'){
+    inner=`<pre class="pre" style="margin-top:6px">${esc(typeof row.value==='string'?row.value:JSON.stringify(row.value))}</pre>`;
+  } else if(row.kind==='vision-url'){
+    const v=row.value||{}; inner=`<div class="mut small" style="margin-top:6px">match <b>${v.m!=null?v.m:'?'}</b> · wpalony tekst: ${v.t?'tak':'nie'}</div>`;
+  } else {
+    inner=`<pre class="pre" style="margin-top:6px">${esc(JSON.stringify(row.value).slice(0,500))}</pre>`;
+  }
+  el.innerHTML=inner;
+}
 async function refreshPrices(btn){
   btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
   try{ await loadPrices(); btn.textContent='✓ odświeżono '+new Date().toLocaleTimeString(); }
