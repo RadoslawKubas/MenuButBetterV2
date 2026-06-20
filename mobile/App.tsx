@@ -487,7 +487,10 @@ export default function App() {
           ...prev,
           { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
         ]);
-        if (costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+        // Prefetch TYLKO gdy mamy sensowne photo_query. W dwuprzebiegu struktura strumieniuje nazwy
+        // bez photo_query (puste) — wtedy NIE prefetchujemy po surowej nazwie (zły wynik by się
+        // „przykleił"); zdjęcia dociągnie fillDishPhotos po enrich z właściwym photo_query.
+        if (stub.photoQuery && stub.photoQuery.trim() && costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
           pfEnqueued++;
           pfQueue.push(stub);
           pumpPrefetch();
