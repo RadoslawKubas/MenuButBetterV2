@@ -907,6 +907,7 @@ export default function App() {
           description: stub.description || it.description,
           photo_query: stub.photoQuery || it.photo_query,
           branded: stub.branded ?? it.branded,
+          enriched: true, // pozycja wzbogacona → zdejmij spinner „tłumaczę…"
         };
       }),
     }));
@@ -932,7 +933,7 @@ export default function App() {
         items: s.items.map((it) => {
           const e = enrByName.get(it.original);
           if (!e) return it; // pozycja spoza enrichu (np. z padłej partii) — zostaw jak jest
-          return { ...e, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos };
+          return { ...e, enriched: true, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos };
         }),
       })),
       notes: (prev.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
@@ -2474,6 +2475,7 @@ export default function App() {
                     photoLoading={photoLoading}
                     onItemPress={onFreshItemPress}
                     onSearchMorePhotos={onFreshSearchMore}
+                    enriching={status === "scanning"}
                     nameFallback={freshRestaurant?.name}
                   />
                   {status === "done" && freshScanId ? (

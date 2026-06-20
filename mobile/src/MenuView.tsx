@@ -272,12 +272,15 @@ export function MenuView({
   photoLoading,
   onItemPress,
   onSearchMorePhotos,
+  enriching,
   nameFallback,
 }: {
   menu: Menu;
   infoLoading: Set<string>;
   photoLoading: Set<string>;
   onItemPress: (sectionIndex: number, itemIndex: number) => void;
+  /** Enrich leci w tle (wszedłeś do menu w trakcie skanu) → pozycje bez `enriched` dostają spinner „tłumaczę…". */
+  enriching?: boolean;
   /** #4: tap „więcej zdjęć" przy daniu → uruchom doszukiwanie lepszych (zamiast auto na rozwinięciu). */
   onSearchMorePhotos: (sectionIndex: number, itemIndex: number) => void;
   /** Nazwa z dopasowanego lokalu — gdy menu nie miało własnej nazwy. */
@@ -358,6 +361,12 @@ export function MenuView({
                       ) : null}
                     </View>
                     <Text style={styles.original}>{item.original}</Text>
+                    {enriching && !item.enriched ? (
+                      <View style={styles.pendingRow}>
+                        <ActivityIndicator size="small" color={colors.muted} />
+                        <Text style={styles.pendingText}>tłumaczę i opisuję…</Text>
+                      </View>
+                    ) : null}
                     {item.menu_description_translated && item.menu_description_translated.trim() ? (
                       <Text style={styles.menuDesc}>„{item.menu_description_translated.trim()}"</Text>
                     ) : null}
@@ -507,6 +516,8 @@ const styles = StyleSheet.create({
   // zawijają się do 2 linii zamiast spychać nazwę w wąską kolumnę). textAlign do prawej.
   price: { fontSize: 16, fontWeight: "700", color: colors.text, flexShrink: 0, maxWidth: 120, textAlign: "right" },
   original: { fontSize: 13, color: colors.muted, marginTop: 2, fontStyle: "italic" },
+  pendingRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  pendingText: { fontSize: 12, color: colors.muted, fontStyle: "italic" },
   menuDesc: { fontSize: 13, color: colors.text, marginTop: 4, lineHeight: 18, fontStyle: "italic" },
   sourceText: { fontSize: 11, color: colors.muted, marginTop: 3, lineHeight: 15, opacity: 0.85 },
   badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },

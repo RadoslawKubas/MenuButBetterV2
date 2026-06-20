@@ -37,6 +37,9 @@ export interface MenuItem {
   spice_level: 0 | 1 | 2 | 3;
   price: string | null;
   currency: string | null;
+  /** Czy pozycja przeszła już ENRICH (tłumaczenie/opis). false/undefined = surowa struktura — apka
+   *  pokazuje wtedy spinner „tłumaczę…" gdy enrich leci w tle. */
+  enriched?: boolean;
   /** Rozszerzony opis „więcej info" — dociągany na żądanie i cache'owany. */
   extraInfo?: string | null;
   /** Zdjęcia dania — dociągane (poglądowe w tle, prawdziwe na dotknięcie) i cache'owane. */
