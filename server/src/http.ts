@@ -169,6 +169,7 @@ app.post("/scan", async (c) => {
         locationHint: body.locationHint?.trim() || undefined,
         cuisineHint: body.cuisineHint?.trim() || undefined,
         model,
+        enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
         // Postęp odczytu na żywo: krok z licznikiem pozycji (gdy wzrośnie).
         onProgress: wantSteps
           ? (p) => {

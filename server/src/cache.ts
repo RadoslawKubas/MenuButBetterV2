@@ -16,6 +16,8 @@ export const CACHE_VERSION = {
   "dish-info": 1, // opis dania (tekst)
   "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
   "menu-scan": 1, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst
+  "menu-structure": 1, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (bez języka)
+  "item-enrich": 1, // przebieg 2: wzbogacenie jednej pozycji (tłumaczenie/opis/photo_query) per kraj/język
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
 
@@ -25,6 +27,8 @@ const TTL_DAYS: Record<CacheKind, number> = {
   "dish-info": 200,
   "vision-url": 45,
   "menu-scan": 120, // ten sam plik = ta sama treść; długo (a wersja klucza i tak chroni przy zmianach)
+  "menu-structure": 120,
+  "item-enrich": 200,
 };
 
 const DISABLED = process.env.CACHE_DISABLED === "1";

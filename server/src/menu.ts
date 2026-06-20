@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { MENU_SCHEMA, type Menu } from "./schema.ts";
-import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
+import { MENU_SCHEMA, STRUCTURE_SCHEMA, ENRICH_SCHEMA, DISH_CATEGORIES, type Menu, type MenuItem, type MenuStructure, type StructItem, type DishCategory } from "./schema.ts";
+import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 import { track, recordUsage, recordBytes } from "./apiLog.ts";
-import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, apiTag, type ModelId } from "./models.ts";
+import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, isOpenAiReasoning, apiTag, type ModelId } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
 
@@ -44,8 +44,10 @@ export interface ExtractOptions {
   locationHint?: string;
   /** Wstępnie rozpoznana kuchnia (z „szybkiego podglądu") — mocna wskazówka kontekstu. */
   cuisineHint?: string;
-  /** Model do użycia. Domyślnie Sonnet 4.6. */
+  /** Model przebiegu STRUKTURY (vision). Domyślnie Sonnet 4.6. */
   model?: ModelId;
+  /** Model przebiegu WZBOGACANIA (tekst). Domyślnie = model struktury. */
+  enrichModel?: ModelId;
   /** Postęp odczytu na żywo (Claude, streaming): ile pozycji już wypisał model i ile znaków.
    *  Pozwala apce pokazać „Odczytano N pozycji…" zamiast samego licznika czasu. */
   onProgress?: (p: { chars: number; items: number }) => void;
@@ -218,12 +220,12 @@ export function contextText(opts: ExtractOptions, n: number): string {
   );
 }
 
-/** Ścieżka OpenAI-compatible (OpenAI / Gemini): vision + structured outputs — ta sama schema co Claude. */
-async function extractMenuOpenAI(
+/** Przebieg 1 (OpenAI/Gemini): vision → STRUKTURA menu (bez tłumaczeń/opisów). */
+async function structureOpenAI(
   images: InputImage[],
   opts: ExtractOptions,
   model: ModelId,
-): Promise<{ menu: Menu; usage: Usage }> {
+): Promise<{ structure: MenuStructure; usage: Usage }> {
   const openai = getClientForModel(model);
   const tag = apiTag(model); // "openai" albo "google" — do diagnostyki
 
@@ -232,22 +234,22 @@ async function extractMenuOpenAI(
     parts.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
     parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } });
   });
-  parts.push({ type: "text", text: contextText(opts, images.length) });
+  parts.push({ type: "text", text: contextTextStructure(opts, images.length) });
 
-  // STREAMING — jak Claude: zbieramy tekst na bieżąco i liczymy pozycje (marker "original"),
-  // żeby apka pokazała „Odczytano N pozycji…". Usage (OpenAI) przychodzi w ostatnim chunku.
-  const { text, finishReason, usageRaw } = await track(tag, "scan-menu", async () => {
+  // STREAMING — zbieramy tekst na bieżąco i liczymy/emitujemy pozycje (marker "original"),
+  // żeby apka pokazała „Odczytano N pozycji…" i nazwy na żywo. Usage w ostatnim chunku.
+  const { text, finishReason, usageRaw } = await track(tag, "scan-structure", async () => {
     const stream = await openai.chat.completions.create({
       model,
       max_completion_tokens: MODELS[model].maxOutput,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: STRUCTURE_SYSTEM },
         { role: "user", content: parts },
       ],
       response_format: {
         // strict tylko dla OpenAI (gpt-5*); Gemini compat bez strict (bywa restrykcyjny).
         type: "json_schema",
-        json_schema: { name: "menu", strict: tag === "openai", schema: MENU_SCHEMA as unknown as Record<string, unknown> },
+        json_schema: { name: "structure", strict: tag === "openai", schema: STRUCTURE_SCHEMA as unknown as Record<string, unknown> },
       },
       stream: true,
       // usage w strumieniu (ostatni chunk). OpenAI i Gemini-compat to wspierają.
@@ -282,7 +284,7 @@ async function extractMenuOpenAI(
   recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   // Relay do API: wysłane ≈ base64 obrazów (dominują), odebrane ≈ długość odpowiedzi.
   recordBytes(tag, images.reduce((n, i) => n + i.base64.length, 0), text.length);
-  logUsage(`menu obrazów=${images.length} (${tag})`, model, usage);
+  logUsage(`struktura obrazów=${images.length} (${tag})`, model, usage);
 
   if (finishReason === "length") {
     throw new Error(
@@ -291,9 +293,9 @@ async function extractMenuOpenAI(
   }
   if (!text) throw new Error(`Brak odpowiedzi modelu OpenAI (finish=${finishReason ?? "?"}).`);
   try {
-    return { menu: JSON.parse(text) as Menu, usage };
+    return { structure: JSON.parse(text) as MenuStructure, usage };
   } catch {
-    throw new Error("Nie udało się odczytać menu (odpowiedź OpenAI niepełna).");
+    throw new Error("Nie udało się odczytać struktury menu (odpowiedź OpenAI niepełna).");
   }
 }
 
@@ -304,9 +306,20 @@ function imagesHash(images: InputImage[]): string {
   for (const img of images) { h.update(img.mediaType); h.update("|"); h.update(img.base64); h.update("\n"); }
   return h.digest("hex").slice(0, 32);
 }
-/** Klucz cache skanu: hash zestawu + KONTEKST wpływający na wynik (język/lokalizacja/kuchnia/lokal/model). */
-function scanCacheKey(images: InputImage[], opts: ExtractOptions, model: ModelId): string {
-  return cacheKey("menu-scan", imagesHash(images), opts.targetLang, opts.locationHint, opts.restaurantHint, opts.cuisineHint, model);
+/** Klucz cache skanu: hash zestawu + KONTEKST wpływający na wynik (język/lokalizacja/kuchnia/lokal/modele). */
+function scanCacheKey(images: InputImage[], opts: ExtractOptions, model: ModelId, enrichModel: ModelId): string {
+  return cacheKey("menu-scan", imagesHash(images), opts.targetLang, opts.locationHint, opts.restaurantHint, opts.cuisineHint, model, enrichModel);
+}
+
+// Kontekst dla PRZEBIEGU 1 (struktura) — bez instrukcji tłumaczenia; lokalizacja/kuchnia pomagają
+// poprawnie odczytać lokalne nazwy dań.
+function contextTextStructure(opts: ExtractOptions, n: number): string {
+  return (
+    `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+    (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
+    (opts.cuisineHint ? `Wstępnie rozpoznana kuchnia: ${opts.cuisineHint} (wskazówka — zweryfikuj z treścią).\n` : "") +
+    `Połącz powyższe ${n} zdjęć w JEDNĄ strukturę menu (transkrypcja).`
+  );
 }
 
 /**
@@ -319,86 +332,268 @@ export async function extractMenu(
 ): Promise<{ menu: Menu; usage: Usage; cached?: boolean }> {
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
+  const enrichModel: ModelId = opts.enrichModel && isModelId(opts.enrichModel) ? opts.enrichModel : model;
 
-  const ck = scanCacheKey(images, opts, model);
+  // FAST PATH — ten sam zestaw plików + ten sam kontekst i modele → gotowe menu (zero płatnych wywołań).
+  const ck = scanCacheKey(images, opts, model, enrichModel);
   if (!opts.noCache) {
     const hit = await cacheGet<Menu>("menu-scan", ck, { op: "scan" });
     if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true };
   }
-  const res = usesOpenAiApi(model) ? await extractMenuOpenAI(images, opts, model) : await extractMenuClaude(images, opts, model);
-  if (!opts.noCache && res.menu) void cacheSet("menu-scan", ck, res.menu, { lang: opts.targetLang });
-  return res;
+
+  let total: Usage = ZERO_USAGE;
+  // PRZEBIEG 1 — STRUKTURA (vision). Cache struktury per zestaw plików + model (BEZ języka/lokalizacji —
+  // transkrypcja jest od nich niezależna → reuse między językami). Streaming nazw przez onItem/onProgress.
+  const sck = cacheKey("menu-structure", imagesHash(images), model);
+  let structure = !opts.noCache ? await cacheGet<MenuStructure>("menu-structure", sck, { op: "scan" }) : null;
+  if (structure) {
+    replayStructureItems(structure, opts); // odtwórz licznik/nazwy z cache (apka pokaże pozycje)
+  } else {
+    const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
+    structure = s.structure;
+    total = addUsage(total, s.usage);
+    if (!opts.noCache) void cacheSet("menu-structure", sck, structure);
+  }
+
+  // PRZEBIEG 2 — WZBOGACANIE (tekst, z cache per pozycja) → pełne Menu.
+  const enriched = await enrichMenu(structure, opts, enrichModel);
+  total = addUsage(total, enriched.usage);
+
+  if (!opts.noCache) void cacheSet("menu-scan", ck, enriched.menu, { lang: opts.targetLang });
+  return { menu: enriched.menu, usage: total };
 }
 
-/** Ścieżka Claude: vision + structured outputs (streaming). */
-async function extractMenuClaude(
+/** Przebieg 1 (Claude): vision → STRUKTURA menu (streaming nazw). */
+async function structureClaude(
   images: InputImage[],
   opts: ExtractOptions,
   model: ModelId,
-): Promise<{ menu: Menu; usage: Usage }> {
-  // max_tokens = maksimum modelu (to tylko sufit; nie kosztuje, gdy model skończy wcześniej).
+): Promise<{ structure: MenuStructure; usage: Usage }> {
   const maxTokens = MODELS[model].maxOutput;
-
-  // Treść: dla każdego zdjęcia etykieta + obraz, na końcu instrukcja kontekstowa.
   const content: Anthropic.ContentBlockParam[] = [];
   images.forEach((img, i) => {
     content.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
-    content.push({
-      type: "image",
-      source: { type: "base64", media_type: img.mediaType, data: img.base64 },
-    });
+    content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.base64 } });
   });
-  content.push({ type: "text", text: contextText(opts, images.length) });
+  content.push({ type: "text", text: contextTextStructure(opts, images.length) });
 
-  // Streaming — duże wyjście nie wpada w timeout, a max_tokens = maksimum modelu zapobiega ucięciu.
   const stream = client.messages.stream({
     model,
     max_tokens: maxTokens,
-    system: SYSTEM,
+    system: STRUCTURE_SYSTEM,
     messages: [{ role: "user", content }],
-    output_config: { format: { type: "json_schema", schema: MENU_SCHEMA } },
+    output_config: { format: { type: "json_schema", schema: STRUCTURE_SCHEMA } },
   });
-  // Postęp na żywo: licznik pozycji (po markerze "original") + emisja KOMPLETNYCH pozycji (onItem).
   if (opts.onProgress || opts.onItem) {
     let lastItems = -1;
     const itemState = { emitted: 0 };
     stream.on("text", (_delta, snapshot) => {
       if (opts.onProgress) {
         const items = (snapshot.match(/"original"\s*:/g) || []).length;
-        if (items !== lastItems) {
-          lastItems = items;
-          opts.onProgress({ chars: snapshot.length, items });
-        }
+        if (items !== lastItems) { lastItems = items; opts.onProgress({ chars: snapshot.length, items }); }
       }
       if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem);
     });
   }
-  const response = await track("claude", "scan-menu", () => stream.finalMessage());
-
-  // Zużycie tokenów + koszt (do licznika w apce + diagnostyki).
+  const response = await track("claude", "scan-structure", () => stream.finalMessage());
   const usage = usageFrom(model, response.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   const claudeText = response.content.find((b) => b.type === "text");
   recordBytes("claude", images.reduce((n, i) => n + i.base64.length, 0), claudeText?.type === "text" ? claudeText.text.length : 0);
-  logUsage(`menu obrazów=${images.length} stop=${response.stop_reason}`, model, usage);
+  logUsage(`struktura obrazów=${images.length} stop=${response.stop_reason}`, model, usage);
 
   if (response.stop_reason === "max_tokens") {
-    throw new Error(
-      "Menu jest bardzo duże i przekroczyło limit jednego skanu. " +
-        "Spróbuj zeskanować mniej stron naraz (np. po 3–4).",
-    );
+    throw new Error("Menu jest bardzo duże i przekroczyło limit jednego skanu. Spróbuj zeskanować mniej stron naraz (np. po 3–4).");
+  }
+  if (!claudeText || claudeText.type !== "text") throw new Error(`Brak tekstowej odpowiedzi (stop_reason=${response.stop_reason}).`);
+  try {
+    return { structure: JSON.parse(claudeText.text) as MenuStructure, usage };
+  } catch {
+    throw new Error(`Nie udało się odczytać struktury menu (odpowiedź niepełna, stop=${response.stop_reason}).`);
+  }
+}
+
+// Odtwarza licznik pozycji i nazwy z gotowej struktury (cache) — apka pokazuje to samo, co przy
+// realnym odczycie. photoQuery puste → apka NIE prefetchuje (zrobi to po enrich z dobrym hasłem).
+function replayStructureItems(structure: MenuStructure, opts: ExtractOptions): void {
+  if (!opts.onProgress && !opts.onItem) return;
+  let n = 0;
+  for (const s of structure.sections) for (const it of s.items) {
+    n++;
+    opts.onItem?.({ original: it.original, translated: it.original, photoQuery: "", photoQueryLocal: "", branded: false, description: it.menu_description || "", price: it.price, currency: it.currency });
+  }
+  opts.onProgress?.({ chars: 0, items: n });
+}
+
+// Wzbogacenie pojedynczej pozycji (wynik przebiegu 2) — cache'owane per pozycja.
+interface ItemEnrich {
+  index: number;
+  translated: string;
+  photo_query: string;
+  photo_query_local: string;
+  branded: boolean;
+  description: string;
+  ingredients: string[];
+  allergens: string[];
+  category: string;
+  dietary: { vegetarian: boolean; vegan: boolean; gluten_free: boolean };
+  spice_level: number;
+}
+
+/** Kraj/region z „Miasto, Kraj" (ostatni człon) — do klucza cache enrich (szerszy reuse niż miasto). */
+function countryOf(loc?: string): string | undefined {
+  if (!loc) return undefined;
+  return loc.split(",").pop()?.trim() || loc;
+}
+
+/** Składa pozycję pełnego menu ze struktury (vision) + wzbogacenia (tekst), z bezpiecznymi fallbackami. */
+function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
+  const category: DishCategory = e && (DISH_CATEGORIES as readonly string[]).includes(e.category) ? (e.category as DishCategory) : "other";
+  const spice = (e && [0, 1, 2, 3].includes(e.spice_level) ? e.spice_level : 0) as 0 | 1 | 2 | 3;
+  return {
+    original: it.original,
+    translated: e?.translated || it.original,
+    photo_query: e?.photo_query || it.original,
+    photo_query_local: e?.photo_query_local || e?.photo_query || it.original,
+    branded: e?.branded ?? false,
+    description: e?.description || it.menu_description || "",
+    ingredients: e?.ingredients ?? [],
+    allergens: e?.allergens ?? [],
+    category,
+    dietary: e?.dietary ?? { vegetarian: false, vegan: false, gluten_free: false },
+    spice_level: spice,
+    price: it.price,
+    currency: it.currency,
+  };
+}
+
+interface EnrichResult { sections: { index: number; name_translated: string }[]; items: ItemEnrich[]; usage: Usage }
+
+/** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI) dla podanych sekcji i pozycji. */
+async function enrichCall(
+  model: ModelId,
+  opts: ExtractOptions,
+  cuisine: string,
+  country: string | undefined,
+  sects: { idx: number; name: string }[],
+  items: { gi: number; original: string; menu_description: string }[],
+): Promise<EnrichResult> {
+  const ctx =
+    `Kuchnia: ${cuisine}.\n` +
+    (country ? `Kraj/region lokalu: ${country}.\n` : "") +
+    (opts.locationHint ? `Lokalizacja: ${opts.locationHint}.\n` : "") +
+    (opts.restaurantHint ? `Lokal: ${opts.restaurantHint}.\n` : "") +
+    `Język docelowy: ${opts.targetLang}.\n\n`;
+  const sectsTxt = sects.length ? "SEKCJE (index → nazwa) do przetłumaczenia:\n" + sects.map((s) => `[${s.idx}] ${s.name}`).join("\n") + "\n\n" : "";
+  const itemsTxt = items.length ? "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n" + items.map((it) => `[${it.gi}] ${it.original}${it.menu_description ? ` | ${it.menu_description}` : ""}`).join("\n") : "";
+  const userText = ctx + sectsTxt + itemsTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji i pozycji), używając tych samych numerów index.";
+
+  if (usesOpenAiApi(model)) {
+    const openai = getClientForModel(model);
+    const tag = apiTag(model);
+    const params: import("openai").OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+      model,
+      max_completion_tokens: MODELS[model].maxOutput,
+      messages: [
+        { role: "system", content: ENRICH_SYSTEM },
+        { role: "user", content: userText },
+      ],
+      response_format: { type: "json_schema", json_schema: { name: "enrich", strict: tag === "openai", schema: ENRICH_SCHEMA as unknown as Record<string, unknown> } },
+    };
+    if (isOpenAiReasoning(model)) params.reasoning_effort = "minimal";
+    const resp = await track(tag, "enrich", () => openai.chat.completions.create(params));
+    const usage = usageFromOpenAI(model, resp.usage);
+    recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
+    logUsage(`enrich pozycji=${items.length} (${tag})`, model, usage);
+    const txt = resp.choices[0]?.message?.content;
+    const parsed = txt ? (JSON.parse(txt) as Partial<EnrichResult>) : {};
+    return { sections: parsed.sections ?? [], items: parsed.items ?? [], usage };
   }
 
-  // Przy output_config.format pierwszy blok tekstowy zawiera poprawny JSON.
-  const text = response.content.find((b) => b.type === "text");
-  if (!text || text.type !== "text") {
-    throw new Error(`Brak tekstowej odpowiedzi (stop_reason=${response.stop_reason}).`);
+  // Streaming — duże menu daje duże wyjście; non-stream przy wysokim max_tokens odpala guard SDK
+  // („Streaming is required…"). Strumień to omija (jak przebieg struktury).
+  const stream = client.messages.stream({
+    model,
+    max_tokens: MODELS[model].maxOutput,
+    system: [{ type: "text", text: ENRICH_SYSTEM, cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: userText }],
+    output_config: { format: { type: "json_schema", schema: ENRICH_SCHEMA } },
+  });
+  const resp = await track("claude", "enrich", () => stream.finalMessage());
+  const usage = usageFrom(model, resp.usage);
+  recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
+  logUsage(`enrich pozycji=${items.length}`, model, usage);
+  const t = resp.content.find((b) => b.type === "text");
+  const parsed = t && t.type === "text" ? (JSON.parse(t.text) as Partial<EnrichResult>) : {};
+  return { sections: parsed.sections ?? [], items: parsed.items ?? [], usage };
+}
+
+/**
+ * PRZEBIEG 2 — wzbogacenie struktury w pełne Menu (tłumaczenia, photo_query, opisy itd.). Cache per
+ * pozycja (`original+menu_desc + kuchnia + kraj + język + model`) i per nazwa sekcji — do modelu idą
+ * TYLKO niezcache'owane pozycje. Składa wynik z bezpiecznymi fallbackami.
+ */
+async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model: ModelId): Promise<{ menu: Menu; usage: Usage }> {
+  const targetLang = opts.targetLang;
+  const cuisine = structure.cuisine;
+  const country = countryOf(opts.locationHint);
+
+  const flat: { original: string; menu_description: string }[] = [];
+  for (const s of structure.sections) for (const it of s.items) flat.push({ original: it.original, menu_description: it.menu_description });
+
+  const itemKey = (original: string, md: string) => cacheKey("item-enrich", original, md, cuisine, country, targetLang, model);
+  const sectKey = (name: string) => cacheKey("item-enrich", "§sect", name, targetLang, model);
+
+  const enrichByGi = new Array<ItemEnrich | null>(flat.length).fill(null);
+  const sectTrans = new Array<string | null>(structure.sections.length).fill(null);
+  const needItems: { gi: number; original: string; menu_description: string }[] = [];
+  const needSects: { idx: number; name: string }[] = [];
+
+  if (!opts.noCache) {
+    await Promise.all(flat.map(async (f, gi) => {
+      const hit = await cacheGet<ItemEnrich>("item-enrich", itemKey(f.original, f.menu_description), { op: "enrich" });
+      if (hit) enrichByGi[gi] = hit; else needItems.push({ gi, original: f.original, menu_description: f.menu_description });
+    }));
+    await Promise.all(structure.sections.map(async (s, idx) => {
+      const hit = await cacheGet<string>("item-enrich", sectKey(s.name), { op: "enrich" });
+      if (hit != null) sectTrans[idx] = hit; else needSects.push({ idx, name: s.name });
+    }));
+  } else {
+    flat.forEach((f, gi) => needItems.push({ gi, original: f.original, menu_description: f.menu_description }));
+    structure.sections.forEach((s, idx) => needSects.push({ idx, name: s.name }));
   }
-  try {
-    return { menu: JSON.parse(text.text) as Menu, usage };
-  } catch {
-    throw new Error(`Nie udało się odczytać menu (odpowiedź niepełna, stop=${response.stop_reason}).`);
+
+  let usage = ZERO_USAGE;
+  if (needItems.length || needSects.length) {
+    const r = await enrichCall(model, opts, cuisine, country, needSects, needItems);
+    usage = r.usage;
+    for (const s of r.sections) {
+      if (s.index >= 0 && s.index < sectTrans.length) {
+        sectTrans[s.index] = s.name_translated;
+        if (!opts.noCache) void cacheSet("item-enrich", sectKey(structure.sections[s.index]!.name), s.name_translated, { lang: targetLang });
+      }
+    }
+    for (const it of r.items) {
+      if (it.index >= 0 && it.index < flat.length) {
+        enrichByGi[it.index] = it;
+        if (!opts.noCache) void cacheSet("item-enrich", itemKey(flat[it.index]!.original, flat[it.index]!.menu_description), it, { lang: targetLang });
+      }
+    }
   }
+
+  let gi = 0;
+  const menu: Menu = {
+    restaurant_name: structure.restaurant_name,
+    restaurant_address: structure.restaurant_address,
+    restaurant_language: structure.restaurant_language,
+    cuisine: structure.cuisine,
+    sections: structure.sections.map((s, si) => ({
+      name: s.name,
+      name_translated: sectTrans[si] ?? s.name,
+      items: s.items.map((it) => assembleItem(it, enrichByGi[gi++] ?? null)),
+    })),
+  };
+  return { menu, usage };
 }
 
 /** Wygoda dla CLI: jeden plik ze ścieżki. */
