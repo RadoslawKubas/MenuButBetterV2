@@ -223,8 +223,9 @@ export function SettingsView({
         </View>
         <Text style={styles.costLimitLabel}>Zdjęć na partię skanu struktury</Text>
         <Text style={styles.sub}>
-          1 = każda strona osobno (granularny postęp). Więcej = model widzi kartki RAZEM → lepsza ciągłość grup
-          ciągnących się przez strony. Enrich i tak leci osobno po całości.
+          „maks" (10) = całe menu skanowane RAZEM → model widzi kartki naraz i nie gubi grup ciągnących się
+          przez strony (zalecane). 1 = każda strona osobno (granularny postęp, ale grupy między kartkami się
+          psują). Sufit ~10: większe żądanie (zdjęcia ~1.8MB) przekroczyłoby limit API. Enrich i tak leci po całości.
         </Text>
         <View style={styles.chips}>
           {[1, 2, 3, 5, 10].map((n) => {
