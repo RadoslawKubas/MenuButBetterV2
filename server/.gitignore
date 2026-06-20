@@ -5,3 +5,4 @@ samples/
 lab/ground-truth.json
 lab/archived.json
 lab/library/
+lab/prices-override.json

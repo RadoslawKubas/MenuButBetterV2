@@ -42,6 +42,7 @@
   .modal .box { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; width:520px; max-width:100%; max-height:80vh; overflow:auto; }
   input[type=text] { width:100%; background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:8px 10px; }
   select { background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:6px 8px; font:inherit; }
+  input[type=number] { width:74px; background:var(--bg); border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:4px 6px; font:inherit; }
   .step { border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:8px; background:var(--bg); }
   .step .hd { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .cands { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
@@ -146,6 +147,30 @@
       <div id="simVenueBox"></div>
       <div id="simItems"></div>
     </div>
+
+    <div class="panel" id="costPanel">
+      <h3>💰 Koszty i ceny</h3>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <button class="primary" onclick="toggleCost()" id="costToggleBtn">Pokaż koszty</button>
+        <span class="mut small" id="costInfo"></span>
+      </div>
+      <div id="costBox" style="display:none; margin-top:10px">
+        <div class="chips" id="costPeriod"></div>
+        <div id="costAgg"></div>
+        <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center">
+          <span class="mut small">Log operacji (klik = rozbicie na co poszło):</span>
+          <button onclick="clearCostLog()" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 wyczyść log</button>
+        </div>
+        <div id="costLog"></div>
+        <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px; display:flex; gap:8px; align-items:center">
+          <b>Ceny używane</b>
+          <button onclick="loadPrices()" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
+          <span class="mut small">klik źródło → oficjalna strona; pola edytowalne (ręczna podmiana)</span>
+        </div>
+        <div id="pricesBox"></div>
+      </div>
+    </div>
+
     <div id="results"></div>
     <div class="panel" id="judgePanel" style="display:none">
       <h3>4 · Werdykt sędziego</h3>
@@ -649,6 +674,77 @@ async function simDish(i){
   }catch(e){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(e.message); }
   finally{ btn.disabled=false; }
 }
+
+/* ---- Koszty i ceny ---- */
+let COST_PERIOD='all', COST_OPEN=false, COST_ENTRIES=[];
+function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
+function fmtBytes(n){ n=n||0; if(n>=1073741824) return (n/1073741824).toFixed(2)+' GB'; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return (n/1024).toFixed(0)+' KB'; return n+' B'; }
+function fmtTokk(n){ n=n||0; return n>=1000 ? (n/1000).toFixed(1)+'k' : ''+n; }
+async function toggleCost(){
+  COST_OPEN=!COST_OPEN;
+  document.getElementById('costBox').style.display=COST_OPEN?'block':'none';
+  document.getElementById('costToggleBtn').textContent=COST_OPEN?'Ukryj':'Pokaż koszty';
+  if(COST_OPEN){ renderCostPeriod(); await loadCostLog(); await loadPrices(); }
+}
+function renderCostPeriod(){
+  const opts=[['today','Dziś'],['7d','7 dni'],['30d','30 dni'],['all','Wszystko']];
+  document.getElementById('costPeriod').innerHTML=opts.map(([k,l])=>`<div class="chip ${COST_PERIOD===k?'on':''}" onclick="setCostPeriod('${k}')">${l}</div>`).join('');
+}
+function setCostPeriod(k){ COST_PERIOD=k; renderCostPeriod(); loadCostLog(); }
+async function loadCostLog(){
+  const r=await api('/api/cost-log?period='+COST_PERIOD);
+  COST_ENTRIES=r.entries||[]; const a=r.agg||{};
+  document.getElementById('costInfo').textContent='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')';
+  document.getElementById('costAgg').innerHTML=`
+    <div class="step" style="margin-top:8px">
+      <div style="font-size:18px; font-weight:800; color:var(--acc)">Σ ${fmtUsd(a.totalCost)} <span class="mut small">(${a.count||0} operacji)</span></div>
+      <div class="mut small" style="margin-top:4px">tokeny: ${fmtUsd(a.tokenCost)} · transfer: ${fmtUsd(a.dataCost)} (egress $${r.egressUsdPerGB}/GB)</div>
+      <div class="mut small">tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out · wywołań API ${a.calls||0} · ⬆️ ${fmtBytes(a.bytesSent)} ⬇️ ${fmtBytes(a.bytesRecv)}</div>
+      ${Object.keys(r.byOp||{}).length?`<div class="mut small" style="margin-top:4px">${Object.entries(r.byOp).map(([op,o])=>esc(op)+': '+o.count+'× '+fmtUsd(o.totalCost)).join(' · ')}</div>`:''}
+    </div>`;
+  document.getElementById('costLog').innerHTML = COST_ENTRIES.length ? COST_ENTRIES.map((e,i)=>`
+    <div class="cand" onclick="toggleCostEntry(${i})">
+      <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(e.op)}</b> <b style="color:var(--acc)">${fmtUsd(e.totalCost)}</b></div>
+      <div class="mut small">${new Date(e.ts).toLocaleString()} · ${e.ms}ms · ${esc(JSON.stringify(e.meta).slice(0,70))}</div>
+      <div id="costE-${i}"></div>
+    </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak operacji w tym okresie</div>';
+}
+function toggleCostEntry(i){
+  const el=document.getElementById('costE-'+i); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  const e=COST_ENTRIES[i];
+  el.innerHTML=`<div style="margin-top:6px; border-top:1px solid var(--line); padding-top:6px">
+    <div class="mut small">koszt tokenów ${fmtUsd(e.tokenCost)} · transfer ${fmtUsd(e.dataCost)} · ⬆️ ${fmtBytes(e.bytesSent)} ⬇️ ${fmtBytes(e.bytesRecv)}</div>
+    <table style="margin-top:4px"><thead><tr><th>provider</th><th>wyw.</th><th>tok in/out</th><th>koszt</th><th>⬆️</th><th>⬇️</th></tr></thead><tbody>
+    ${(e.delta||[]).map(d=>`<tr><td><b>${esc(d.provider)}</b></td><td class="num">${d.calls}</td><td class="num">${fmtTokk(d.inTok)}/${fmtTokk(d.outTok)}</td><td class="num">${fmtUsd(d.costUsd)}</td><td class="num">${fmtBytes(d.bytesSent)}</td><td class="num">${fmtBytes(d.bytesRecv)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
+async function loadPrices(){
+  const r=await api('/api/prices');
+  const src=(u)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener">źródło ↗</a>`:'';
+  const mrows=(r.models||[]).map(m=>`<tr>
+    <td><b>${esc(m.label)}</b>${m.overridden?' <span class="badge venue">edyt.</span>':''}<br><span class="mut" style="font-size:10px">${src(m.source)}</span></td>
+    <td><input type="number" step="0.01" value="${m.in}" onchange="savePrice('${m.id}','model',this.value,null)"></td>
+    <td><input type="number" step="0.01" value="${m.out}" onchange="savePrice('${m.id}','model',null,this.value)"></td>
+    <td>${m.overridden?`<button onclick="resetPrice('${m.id}')" style="padding:2px 6px; font-size:11px">reset</button>`:''}</td>
+  </tr>`).join('');
+  const orows=(r.others||[]).map(o=>`<tr>
+    <td><b>${esc(o.label)}</b>${o.overridden?' <span class="badge venue">edyt.</span>':''}<br><span class="mut" style="font-size:10px">${esc(o.unit)} · ${src(o.source)}</span></td>
+    <td colspan="2"><input type="number" step="0.01" value="${o.value}" onchange="savePrice('${o.key}','other',this.value,null)"></td>
+    <td>${o.overridden?`<button onclick="resetPrice('${o.key}')" style="padding:2px 6px; font-size:11px">reset</button>`:''}</td>
+  </tr>`).join('');
+  document.getElementById('pricesBox').innerHTML=`
+    <table style="margin-top:6px"><thead><tr><th>model</th><th>$ in /MTok</th><th>$ out</th><th></th></tr></thead><tbody>${mrows}</tbody></table>
+    <table style="margin-top:8px"><thead><tr><th>inne API / transfer</th><th colspan="2">stawka</th><th></th></tr></thead><tbody>${orows}</tbody></table>`;
+}
+async function savePrice(key,kind,inV,outV){
+  const body={key};
+  if(kind==='model'){ if(inV!=null&&inV!=='') body.in=parseFloat(inV); if(outV!=null&&outV!=='') body.out=parseFloat(outV); }
+  else { if(inV!=null&&inV!=='') body.value=parseFloat(inV); }
+  await api('/api/prices',body); loadPrices(); if(COST_OPEN) loadCostLog();
+}
+async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(COST_OPEN) loadCostLog(); }
 
 loadState();
 </script>

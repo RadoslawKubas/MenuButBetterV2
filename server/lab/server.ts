@@ -12,7 +12,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
@@ -27,11 +27,115 @@ import { runDishPhotos } from "../src/dishPhotosPipeline.ts";
 import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
-import { MODELS, DEFAULT_MODEL, usesOpenAiApi, type ModelId } from "../src/models.ts";
+import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
+import { snapshot } from "../src/apiLog.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
 const RESULTS_DIR = join(HERE, "results");
+
+// ===== CENY + LOG KOSZTÓW (lab) ============================================================
+// Źródła cen — oficjalne strony (do ręcznej weryfikacji/aktualizacji, klikalne w UI).
+const PRICE_SOURCES: Record<string, string> = {
+  claude: "https://www.anthropic.com/pricing#api",
+  openai: "https://openai.com/api/pricing/",
+  google: "https://ai.google.dev/gemini-api/docs/pricing",
+  egress: "https://railway.com/pricing",
+  google_places: "https://mapsplatform.google.com/pricing/",
+  serper: "https://serper.dev/",
+  serpapi: "https://serpapi.com/pricing",
+  tripadvisor: "https://www.tripadvisor.com/developers",
+};
+// Inne API + transfer — stawki orientacyjne (jednostka), nadpisywalne.
+const OTHER_PRICES_DEFAULT: { key: string; label: string; unit: string; value: number; source: string }[] = [
+  { key: "egress", label: "Transfer (Railway egress)", unit: "$/GB (wysłane)", value: 0.1, source: PRICE_SOURCES.egress! },
+  { key: "google_places", label: "Google Places (details+photos)", unit: "$/1000 req", value: 17, source: PRICE_SOURCES.google_places! },
+  { key: "serper", label: "Serper.dev (Google Images)", unit: "$/1000 req", value: 0.6, source: PRICE_SOURCES.serper! },
+  { key: "serpapi", label: "SerpApi", unit: "$/1000 req", value: 10, source: PRICE_SOURCES.serpapi! },
+];
+
+const PRICES_FILE = join(HERE, "prices-override.json");
+function loadPriceOverrides(): Record<string, { in?: number; out?: number; value?: number }> {
+  try {
+    return JSON.parse(readFileSync(PRICES_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+function savePriceOverrides(o: Record<string, { in?: number; out?: number; value?: number }>): void {
+  writeFileSync(PRICES_FILE, JSON.stringify(o, null, 2));
+}
+/** Stawka „inna" (egress/api) z uwzględnieniem ręcznej podmiany. */
+function otherRate(key: string): number {
+  const ov = loadPriceOverrides()[key]?.value;
+  return ov ?? OTHER_PRICES_DEFAULT.find((p) => p.key === key)?.value ?? 0;
+}
+
+// Log kosztów: jedna linia (JSONL) na operację labu — delta zużycia z apiLog (źródło prawdy).
+const COSTLOG_FILE = join(RESULTS_DIR, "cost-log.jsonl");
+interface CostDelta {
+  provider: string;
+  calls: number;
+  inTok: number;
+  outTok: number;
+  costUsd: number; // koszt tokenów (realne ceny w chwili wywołania)
+  bytesSent: number;
+  bytesRecv: number;
+}
+interface CostEntry {
+  ts: number;
+  ms: number;
+  op: string; // np. "sim-scan", "sim-dish"
+  meta: Record<string, unknown>; // model, danie, lokal itp.
+  delta: CostDelta[];
+}
+function providerTotals(): Record<string, Omit<CostDelta, "provider">> {
+  const m: Record<string, Omit<CostDelta, "provider">> = {};
+  for (const r of snapshot()) {
+    m[r.provider] = { calls: r.total, inTok: r.inputTokens, outTok: r.outputTokens, costUsd: r.costUsd, bytesSent: r.bytesSent, bytesRecv: r.bytesRecv };
+  }
+  return m;
+}
+/** Liczy deltę zużycia (apiLog: snapshot `before` vs teraz) i dopisuje wpis do logu kosztów. */
+function recordCostDelta(op: string, meta: Record<string, unknown>, before: Record<string, Omit<CostDelta, "provider">>, t0: number): void {
+  const after = providerTotals();
+  const delta: CostDelta[] = [];
+  for (const [provider, a] of Object.entries(after)) {
+    const b = before[provider] ?? { calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 };
+    const d: CostDelta = {
+      provider,
+      calls: a.calls - b.calls,
+      inTok: a.inTok - b.inTok,
+      outTok: a.outTok - b.outTok,
+      costUsd: a.costUsd - b.costUsd,
+      bytesSent: a.bytesSent - b.bytesSent,
+      bytesRecv: a.bytesRecv - b.bytesRecv,
+    };
+    if (d.calls || d.inTok || d.outTok || d.bytesSent || d.bytesRecv) delta.push(d);
+  }
+  try {
+    if (!existsSync(RESULTS_DIR)) mkdirSync(RESULTS_DIR, { recursive: true });
+    appendFileSync(COSTLOG_FILE, JSON.stringify({ ts: Date.now(), ms: Date.now() - t0, op, meta, delta } satisfies CostEntry) + "\n");
+  } catch {
+    /* log kosztów to dodatek — nie blokuj operacji */
+  }
+}
+/** Owija operację: liczy DELTĘ zużycia (apiLog przed/po) i dopisuje do logu kosztów. */
+async function withCostLog<T>(op: string, meta: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  const before = providerTotals();
+  const t0 = Date.now();
+  const res = await fn();
+  recordCostDelta(op, meta, before, t0);
+  return res;
+}
+function readCostLog(): CostEntry[] {
+  try {
+    return readFileSync(COSTLOG_FILE, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as CostEntry);
+  } catch {
+    return [];
+  }
+}
+// ===========================================================================================
 
 // --- Centralna BIBLIOTEKA sampli (jedno miejsce, „czysto i ładnie") --------------------------
 //   lab/library/captures.json  — scalone metadane wszystkich migawek (dedup po sig),
@@ -596,6 +700,7 @@ app.post("/api/sim-scan", async (c) => {
   if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
   const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
   const t0 = Date.now();
+  const costBefore = providerTotals(); // do logu kosztów (peek + scan + namierzenie lokalu)
   // Peek (jak w apce) — z pierwszego zdjęcia; jego kuchnia trafia jako cuisineHint do skanu.
   let peek: any = null;
   if (withPeek !== false) {
@@ -658,6 +763,7 @@ app.post("/api/sim-scan", async (c) => {
     all[idx]!.labScan = labScan;
     saveMeta(all);
   }
+  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0);
   return c.json({ ms: Date.now() - t0, usage, cached: false, ...labScan });
   } catch (e) {
     console.error("sim-scan error:", e);
@@ -683,15 +789,17 @@ app.post("/api/sim-describe", async (c) => {
   if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
   try {
     const t0 = Date.now();
-    const { text, usage } = await describeDish({
-      name: b.dish,
-      description: b.description,
-      cuisine: b.cuisine,
-      location: b.location,
-      restaurant: b.restaurant,
-      targetLang: "polski",
-      model: (b.model && b.model in MODELS ? b.model : DEFAULT_MODEL) as ModelId,
-    });
+    const { text, usage } = await withCostLog("sim-describe", { dish: b.dish, model: b.model }, () =>
+      describeDish({
+        name: b.dish,
+        description: b.description,
+        cuisine: b.cuisine,
+        location: b.location,
+        restaurant: b.restaurant,
+        targetLang: "polski",
+        model: (b.model && b.model in MODELS ? b.model : DEFAULT_MODEL) as ModelId,
+      }),
+    );
     return c.json({ ms: Date.now() - t0, text, usage });
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500);
@@ -716,7 +824,8 @@ app.post("/api/sim-dish", async (c) => {
   }>();
   if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
   try {
-    const { photos, usage, debug } = await runDishPhotos({
+    const { photos, usage, debug } = await withCostLog("sim-dish", { dish: b.dish, model: b.verifyModel || "claude-sonnet-4-6", lokal: b.restaurantName }, () =>
+    runDishPhotos({
       dish: b.dish,
       photoQuery: b.photoQuery,
       photoQueryLocal: b.photoQueryLocal,
@@ -730,7 +839,7 @@ app.post("/api/sim-dish", async (c) => {
       num: b.num ?? 4,
       verify: b.verify !== false,
       verifyModel: b.verifyModel,
-    });
+    }));
     return c.json({ photos, usage, debug });
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500);
@@ -742,18 +851,99 @@ app.post("/api/sim-venue", async (c) => {
   const b = await c.req.json<{ dishes: string[]; cuisine?: string; photoNames?: string[]; taPhotos?: { url: string; caption: string | null }[]; model?: string; certain?: boolean }>();
   const t0 = Date.now();
   try {
-    const { matches, usage } = await matchVenuePhotos({
-      photoNames: b.photoNames ?? [],
-      taPhotos: b.taPhotos ?? [],
-      dishes: b.dishes ?? [],
-      cuisine: b.cuisine,
-      model: b.model,
-      certain: b.certain !== false,
-    });
+    const { matches, usage } = await withCostLog("sim-venue", { model: b.model, dishes: (b.dishes ?? []).length }, () =>
+      matchVenuePhotos({
+        photoNames: b.photoNames ?? [],
+        taPhotos: b.taPhotos ?? [],
+        dishes: b.dishes ?? [],
+        cuisine: b.cuisine,
+        model: b.model,
+        certain: b.certain !== false,
+      }),
+    );
     return c.json({ ms: Date.now() - t0, usage, pool: (b.photoNames?.length ?? 0) + (b.taPhotos?.length ?? 0), matches });
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500);
   }
+});
+
+// --- KOSZTY: log operacji (z rozbiciem) + statystyki łączne (okres) ------------------------
+app.get("/api/cost-log", (c) => {
+  const period = c.req.query("period") || "all";
+  const now = Date.now();
+  const cutoff = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
+  const egress = otherRate("egress");
+  const sumD = (e: CostEntry, f: keyof CostDelta) => e.delta.reduce((n, d) => n + (d[f] as number), 0);
+  const enrich = (e: CostEntry) => {
+    const tokenCost = sumD(e, "costUsd");
+    const bytesSent = sumD(e, "bytesSent");
+    const bytesRecv = sumD(e, "bytesRecv");
+    const dataCost = (bytesSent / 1e9) * egress;
+    return { ...e, tokenCost, bytesSent, bytesRecv, inTok: sumD(e, "inTok"), outTok: sumD(e, "outTok"), calls: sumD(e, "calls"), dataCost, totalCost: tokenCost + dataCost };
+  };
+  const entries = readCostLog().filter((e) => e.ts >= cutoff).map(enrich).reverse();
+  const agg = entries.reduce(
+    (a, e) => ({
+      count: a.count + 1, calls: a.calls + e.calls, inTok: a.inTok + e.inTok, outTok: a.outTok + e.outTok,
+      tokenCost: a.tokenCost + e.tokenCost, bytesSent: a.bytesSent + e.bytesSent, bytesRecv: a.bytesRecv + e.bytesRecv,
+      dataCost: a.dataCost + e.dataCost, totalCost: a.totalCost + e.totalCost,
+    }),
+    { count: 0, calls: 0, inTok: 0, outTok: 0, tokenCost: 0, bytesSent: 0, bytesRecv: 0, dataCost: 0, totalCost: 0 },
+  );
+  // Rozbicie po typie operacji (do podsumowania).
+  const byOp: Record<string, { count: number; totalCost: number }> = {};
+  for (const e of entries) {
+    byOp[e.op] = byOp[e.op] || { count: 0, totalCost: 0 };
+    byOp[e.op]!.count++;
+    byOp[e.op]!.totalCost += e.totalCost;
+  }
+  return c.json({ period, egressUsdPerGB: egress, entries: entries.slice(0, 300), agg, byOp });
+});
+
+app.post("/api/cost-log-clear", (c) => {
+  try {
+    if (existsSync(COSTLOG_FILE)) unlinkSync(COSTLOG_FILE);
+  } catch {
+    /* brak */
+  }
+  return c.json({ ok: true });
+});
+
+// --- CENY: lista wszystkich (modele + inne API + transfer) ze źródłami + ręczna podmiana ----
+app.get("/api/prices", (c) => {
+  const ov = loadPriceOverrides();
+  const models = Object.entries(MODELS).map(([id, def]) => {
+    const o = ov[id] ?? {};
+    return {
+      id,
+      label: def.label,
+      provider: def.provider,
+      in: o.in ?? def.price.in,
+      out: o.out ?? def.price.out,
+      baseIn: def.price.in,
+      baseOut: def.price.out,
+      overridden: o.in != null || o.out != null,
+      source: PRICE_SOURCES[apiTag(id)] ?? null,
+    };
+  });
+  const others = OTHER_PRICES_DEFAULT.map((p) => ({ ...p, value: ov[p.key]?.value ?? p.value, base: p.value, overridden: ov[p.key]?.value != null }));
+  return c.json({ models, others });
+});
+
+// Ręczna podmiana ceny (model: in/out; inne: value). reset=true → przywróć domyślną.
+app.post("/api/prices", async (c) => {
+  const b = await c.req.json<{ key: string; in?: number; out?: number; value?: number; reset?: boolean }>();
+  if (!b.key) return c.json({ error: "brak key" }, 400);
+  const ov = loadPriceOverrides();
+  if (b.reset) delete ov[b.key];
+  else {
+    ov[b.key] = ov[b.key] ?? {};
+    if (b.in != null) ov[b.key]!.in = b.in;
+    if (b.out != null) ov[b.key]!.out = b.out;
+    if (b.value != null) ov[b.key]!.value = b.value;
+  }
+  savePriceOverrides(ov);
+  return c.json({ ok: true });
 });
 
 // --- Zadania: długie eksperymenty w TLE (postęp / pauza / wznowienie / przerwanie) --------
