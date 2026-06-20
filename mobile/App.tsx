@@ -192,6 +192,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [targetLang, setTargetLang] = useState("polski");
   const [hint, setHint] = useState("");
+  // Replay z migawki: wymusza DOKŁADNIE zapisaną lokalizację (eksperyment na starej próbce — aktualna
+  // pozycja nie ma sensu). Czyszczone przy nowych zdjęciach / resecie → wraca do lokalizacji na żywo.
+  const [replayLocation, setReplayLocation] = useState<{ location: GeoPoint | null; locationSource: LocationSource; locationHint?: string } | null>(null);
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
   const [showOptions, setShowOptions] = useState(false); // zwijane „Opcje skanu" (lokal + lokalizacja)
@@ -304,6 +307,7 @@ export default function App() {
   async function onSerialCapture(uri: string, exif?: Record<string, unknown> | null) {
     try {
       const img = await prepareCameraPhoto(uri, exif);
+      setReplayLocation(null); // nowe zdjęcie z aparatu → przestajemy wymuszać lokalizację z migawki
       setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, img]));
       if (peekEnabled) void runPeek(img); // szybki podgląd w tle dla każdego zatrzymanego kadru
     } catch {
@@ -334,6 +338,7 @@ export default function App() {
 
   function addImages(toAdd: PreparedImage[]) {
     if (toAdd.length === 0) return;
+    setReplayLocation(null); // ręcznie dodane zdjęcia → lokalizacja na żywo (to już nie czysty replay)
     setImages((prev) => [...prev, ...toAdd].slice(0, MAX_IMAGES));
   }
 
@@ -372,8 +377,10 @@ export default function App() {
   }
 
   // Skan przy bieżących ustawieniach ekranu (przycisk „Przetłumacz menu").
+  // Replay z migawki → wymuszamy zapisaną lokalizację (fixedLocation), żeby eksperyment szedł na
+  // IDENTYCZNYM wejściu co kiedyś, a nie na aktualnej pozycji użytkownika.
   async function doScan() {
-    await runScan({ images, targetLang, models, hint, useExifLocation, useDeviceLocation });
+    await runScan({ images, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined });
   }
 
   // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
@@ -750,10 +757,13 @@ export default function App() {
     setHint(c.restaurantHint ?? "");
     setUseExifLocation(c.useExifLocation);
     setUseDeviceLocation(c.useDeviceLocation);
+    // Wymuś lokalizację z migawki przy ponownym skanie (eksperyment 1:1 na starej próbce).
+    setReplayLocation({ location: c.location, locationSource: c.locationSource, locationHint: c.locationHint });
   }
 
   function resetScan() {
     setImages([]);
+    setReplayLocation(null);
     setMenu(null);
     setError(null);
     setStatus("idle");
@@ -1891,6 +1901,11 @@ export default function App() {
                         style={styles.input}
                       />
                       <Text style={styles.label}>Lokalizacja (pomaga namierzyć lokal)</Text>
+                      {replayLocation ? (
+                        <Text style={styles.replayLocNote}>
+                          🔁 Replay z migawki — lokalizacja wymuszona z próbki: {replayLocation.locationHint || replayLocation.locationSource || "zapisana"} (poniższe przełączniki pominięte)
+                        </Text>
+                      ) : null}
                       <View style={styles.switchRow}>
                         <View style={styles.switchTextWrap}>
                           <Text style={styles.switchTitle}>📷 Z EXIF zdjęć</Text>
@@ -2181,6 +2196,7 @@ const styles = StyleSheet.create({
   optionsChevron: { fontSize: 18, color: colors.muted },
   optionsBody: { marginBottom: 6 },
   label: { fontSize: 13, fontWeight: "700", color: colors.muted, marginBottom: 8, marginTop: 8 },
+  replayLocNote: { fontSize: 12, color: colors.accent, backgroundColor: colors.accent + "14", borderRadius: 8, padding: 8, marginBottom: 8, lineHeight: 16 },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.badgeBg },
   chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
