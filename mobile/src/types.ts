@@ -94,7 +94,7 @@ export interface MenuSection {
   items: MenuItem[];
 }
 
-export const NOTE_KINDS = ["wait", "fee", "tax", "tip", "hours", "info"] as const;
+export const NOTE_KINDS = ["set", "included", "wait", "fee", "tax", "tip", "hours", "info"] as const;
 export type NoteKind = (typeof NOTE_KINDS)[number];
 export interface MenuNote {
   /** Treść adnotacji w oryginale. */

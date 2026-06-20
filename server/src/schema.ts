@@ -19,8 +19,9 @@ export const DISH_CATEGORIES = [
 
 export type DishCategory = (typeof DISH_CATEGORIES)[number];
 
-// Adnotacje menu, które NIE są daniami (czas oczekiwania, dopłaty, VAT, napiwek, godziny itp.).
-export const NOTE_KINDS = ["wait", "fee", "tax", "tip", "hours", "info"] as const;
+// Adnotacje menu, które NIE są daniami (czas oczekiwania, dopłaty, VAT, napiwek, godziny, zestawy,
+// to-co-wliczone-w-grupie itp.).
+export const NOTE_KINDS = ["set", "included", "wait", "fee", "tax", "tip", "hours", "info"] as const;
 export type NoteKind = (typeof NOTE_KINDS)[number];
 export interface StructNote {
   /** Treść adnotacji w oryginale (jak na menu). */
@@ -45,11 +46,11 @@ const NOTE_SCHEMA_ITEM = {
     text: { type: "string", description: "Treść adnotacji DOKŁADNIE jak na menu (oryginał)." },
     scope: { type: "string", enum: ["menu", "section"], description: "'menu' = dotyczy całego menu; 'section' = dotyczy KONKRETNEJ sekcji." },
     section_index: { type: ["integer", "null"], description: "Indeks sekcji (kolejność w 'sections', licząc od 0), gdy scope='section'. Inaczej null." },
-    kind: { type: "string", enum: [...NOTE_KINDS], description: "Typ: wait=czas oczekiwania, fee=dopłata/serwis/cover/taras, tax=VAT/podatek, tip=napiwek, hours=godziny, info=inne (np. ceny zawierają/nie zawierają, minimalne zamówienie, alergeny)." },
+    kind: { type: "string", enum: [...NOTE_KINDS], description: "Typ: set=ZESTAW/menu dnia (cena zestawu + co wliczone + co do wyboru), included=co dochodzi/jest wliczone do dań tej grupy (np. 'do każdego dania sałatka', 'w cenie pieczywo'), wait=czas oczekiwania, fee=dopłata/serwis/cover/taras, tax=VAT/podatek, tip=napiwek, hours=godziny, info=inne (np. 'ryż min. dla 2 osób', minimalne zamówienie, alergeny)." },
   },
   required: ["text", "scope", "section_index", "kind"],
 } as const;
-const NOTES_SCHEMA_DESC = "Adnotacje menu, które NIE są daniami: czas oczekiwania, dopłaty (taras/serwis/cover), VAT/podatek, napiwek, godziny otwarcia, minimalne zamówienie, 'ceny zawierają/nie zawierają', ogólne uwagi o alergenach. NIE umieszczaj ich jako pozycje (dania) — tu jest ich miejsce. Gdy brak — pusta tablica.";
+const NOTES_SCHEMA_DESC = "Adnotacje menu, które NIE są daniami: ZESTAWY/menu dnia (cena + skład + do wyboru), to co WLICZONE/dochodzi do dań danej grupy ('do każdego dania sałatka', 'w cenie pieczywo'), info o porcjach ('ryż min. dla 2 osób'), czas oczekiwania, dopłaty (taras/serwis/cover), VAT/podatek, napiwek, godziny, minimalne zamówienie, ogólne uwagi o alergenach. Gdy dotyczą KONKRETNEJ grupy/sekcji — ustaw scope='section' + section_index, żeby pokazać je pod nazwą tej grupy. NIE umieszczaj ich jako pozycje (dania). Gdy brak — pusta tablica.";
 
 export interface MenuItem {
   original: string;

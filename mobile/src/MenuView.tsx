@@ -215,7 +215,7 @@ function InfoFooter({
   );
 }
 
-const NOTE_ICON: Record<string, string> = { wait: "⏱", fee: "➕", tax: "🧾", tip: "💶", hours: "🕒", info: "ℹ️" };
+const NOTE_ICON: Record<string, string> = { set: "🎫", included: "🍽", wait: "⏱", fee: "➕", tax: "🧾", tip: "💶", hours: "🕒", info: "ℹ️" };
 
 /** Adnotacje menu (czas oczekiwania, dopłaty, VAT…) — osobny blok, nie dania. */
 function NotesBlock({ notes, title }: { notes: MenuNote[]; title?: string }) {
