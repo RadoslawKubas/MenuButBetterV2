@@ -489,11 +489,30 @@ export default function App() {
         .map((im, i) => ({ im, i }))
         .sort((a, b) => (a.im.takenAt ?? Infinity) - (b.im.takenAt ?? Infinity) || a.i - b.i)
         .map((x) => x.im);
-      // Skan PARTIAMI po `batchSize` zdjęć (domyślnie 1 = per strona). Większy batch = lepsza ciągłość
-      // grup ciągnących się przez kartki (model widzi je razem). Wyniki scalane z deduplikacją.
-      const BATCH = Math.max(1, Math.round(costPrefs.batchSize || 1));
+      // Partie skanu struktury. batchSize: liczba ≥1 = sztywno tyle zdjęć/partię; 0 = „maks" DYNAMICZNIE
+      // — pakuj ile się ZMIEŚCI pod budżet rozmiaru żądania (zapas pod limit API ~32MB), z twardym sufitem.
+      // Większy batch = model widzi kartki RAZEM → grupy ciągnące się przez strony nie pękają.
+      const SIZE_BUDGET = 22 * 1024 * 1024; // ~22MB base64/partię (zapas: JSON+prompt+margines < 32MB API)
+      const MAX_PER_BATCH = 12; // twardy sufit (gdyby zdjęcia były malutkie — nie pakuj wszystkich 40 naraz)
+      const fixed = Math.max(0, Math.round(costPrefs.batchSize || 0));
       const batches: PreparedImage[][] = [];
-      for (let i = 0; i < ordered.length; i += BATCH) batches.push(ordered.slice(i, i + BATCH));
+      if (fixed >= 1) {
+        for (let i = 0; i < ordered.length; i += fixed) batches.push(ordered.slice(i, i + fixed));
+      } else {
+        let cur: PreparedImage[] = [];
+        let curBytes = 0;
+        for (const im of ordered) {
+          const b = im.base64.length;
+          if (cur.length > 0 && (curBytes + b > SIZE_BUDGET || cur.length >= MAX_PER_BATCH)) {
+            batches.push(cur);
+            cur = [];
+            curBytes = 0;
+          }
+          cur.push(im);
+          curBytes += b;
+        }
+        if (cur.length > 0) batches.push(cur);
+      }
 
       let merged: Menu | null = null;
       let scanId: string | null = null;

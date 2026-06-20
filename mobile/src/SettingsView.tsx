@@ -223,20 +223,20 @@ export function SettingsView({
         </View>
         <Text style={styles.costLimitLabel}>Zdjęć na partię skanu struktury</Text>
         <Text style={styles.sub}>
-          „maks" (10) = całe menu skanowane RAZEM → model widzi kartki naraz i nie gubi grup ciągnących się
-          przez strony (zalecane). 1 = każda strona osobno (granularny postęp, ale grupy między kartkami się
-          psują). Sufit ~10: większe żądanie (zdjęcia ~1.8MB) przekroczyłoby limit API. Enrich i tak leci po całości.
+          „maks" (zalecane) = pakuje ile się zmieści w jedno żądanie (dynamicznie, wg rozmiaru zdjęć, z zapasem
+          pod limit API) → model widzi kartki RAZEM i nie gubi grup ciągnących się przez strony. 1 = każda strona
+          osobno (granularny postęp, ale grupy między kartkami się psują). Enrich i tak leci po całości.
         </Text>
         <View style={styles.chips}>
-          {[1, 2, 3, 5, 10].map((n) => {
-            const active = (costPrefs.batchSize || 1) === n;
+          {[1, 2, 3, 5, 0].map((n) => {
+            const active = (costPrefs.batchSize || 0) === n;
             return (
               <Pressable
                 key={n}
                 onPress={() => onChangeCostPrefs({ ...costPrefs, batchSize: n })}
                 style={[styles.chip, active && styles.chipActive]}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{n === 10 ? "maks" : n}</Text>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{n === 0 ? "maks" : n}</Text>
               </Pressable>
             );
           })}
