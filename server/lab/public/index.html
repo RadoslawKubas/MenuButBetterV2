@@ -306,6 +306,17 @@
   </div>
 </div>
 
+<div class="modal" id="mapModal" onclick="if(event.target===this)closeMapModal()">
+  <div class="box" style="width:min(680px,94vw)">
+    <h3 style="margin-top:0" id="mapModalTitle">🗺 Mapa migawki</h3>
+    <div class="mut small" id="mapModalLegend" style="margin-bottom:8px"></div>
+    <div id="sampleMap" style="height:380px; border-radius:8px; overflow:hidden; background:#0a0a0a"></div>
+    <div style="margin-top:12px; display:flex; gap:8px; justify-content:flex-end">
+      <button onclick="closeMapModal()">Zamknij</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const MODEL_OPS = ['peek','scan','describe','verify','venuePhotos'];
 let STATE = null, SELECTED = new Set(), PICKED_MODELS = new Set(), PICKED_OPS = new Set(['peek','scan']);
@@ -323,6 +334,7 @@ async function loadState() {
   document.getElementById('dir').textContent = (STATE.libraryDir||'') + ' · ' + STATE.captures.length + ' migawek';
   if (!PICKED_MODELS.size) ['claude-sonnet-4-6','gpt-5-nano','gemini-2.5-flash-lite'].forEach(m => MODELS_HAS(m) && PICKED_MODELS.add(m));
   renderModels(); renderOps(); renderCaptures(); renderMap(); renderSimSelects();
+  if(document.getElementById('localSamplesList')) renderLocalSamples(); // zakładka Sample też aktualna
 }
 function MODELS_HAS(id){ return STATE.models.some(m=>m.id===id); }
 async function refreshState(btn){
@@ -473,6 +485,30 @@ async function annSearch(){ const c=STATE.captures.find(x=>x.id===ANN_ID); const
 function annPickIdx(i){ if(ANN_CANDS[i]) annPick(ANN_CANDS[i]); }
 async function annPick(p){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:{name:p.name, placeId:p.placeId, lat:p.lat, lng:p.lng, address:p.address}}); closeModal(); await loadState(); }
 async function annClear(){ await api('/api/annotate',{captureId:ANN_ID, groundTruth:null}); closeModal(); await loadState(); }
+
+/* ---- Mapa migawki: lokal (ground-truth) + pozycja skanu + pozycje zdjęć (EXIF) ---- */
+let SAMPLE_MAP=null, SAMPLE_MARKERS=[];
+function closeMapModal(){ document.getElementById('mapModal').style.display='none'; }
+function openGtMaps(id){ const c=(STATE?.captures||[]).find(x=>x.id===id); if(c&&c.groundTruth&&(c.groundTruth.placeId||c.groundTruth.lat!=null)) window.open(mapsUrl(c.groundTruth),'_blank','noopener'); }
+function captureHasGeo(c){ return !!(c && (c.location || (c.groundTruth&&c.groundTruth.lat!=null) || (c.exifLocations||[]).some(p=>p&&p.lat!=null))); }
+function openSampleMap(id){
+  const c=(STATE?.captures||[]).find(x=>x.id===id); if(!c) return;
+  document.getElementById('mapModalTitle').textContent='🗺 '+(c.name||(c.result&&c.result.restaurantName)||'Migawka');
+  document.getElementById('mapModal').style.display='flex';
+  setTimeout(()=>{ // Leaflet potrzebuje WIDOCZNEGO kontenera → init po pokazaniu modalu
+    if(!SAMPLE_MAP){ SAMPLE_MAP=L.map('sampleMap'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM'}).addTo(SAMPLE_MAP); }
+    SAMPLE_MARKERS.forEach(m=>SAMPLE_MAP.removeLayer(m)); SAMPLE_MARKERS=[];
+    const pts=[], legend=[];
+    const add=(lat,lng,color,label)=>{ const m=L.circleMarker([lat,lng],{radius:8,color,fillColor:color,fillOpacity:.85,weight:2}).addTo(SAMPLE_MAP).bindPopup(label); SAMPLE_MARKERS.push(m); pts.push([lat,lng]); };
+    if(c.groundTruth && c.groundTruth.lat!=null){ add(c.groundTruth.lat,c.groundTruth.lng,'#d33','📍 lokal: '+esc(c.groundTruth.name||'')); legend.push('🔴 lokal'); }
+    if(c.location){ add(c.location.lat,c.location.lng,'#2a6fdb','pozycja skanu ('+esc(c.locationSource||'?')+')'); legend.push('🔵 pozycja skanu'); }
+    let anyExif=false; (c.exifLocations||[]).forEach((p,i)=>{ if(p&&p.lat!=null){ add(p.lat,p.lng,'#1a9850','📷 zdjęcie '+(i+1)); anyExif=true; } });
+    if(anyExif) legend.push('🟢 pozycje zdjęć (EXIF)');
+    document.getElementById('mapModalLegend').innerHTML = pts.length ? legend.join(' · ') : 'Brak współrzędnych dla tej migawki.';
+    SAMPLE_MAP.invalidateSize();
+    if(pts.length>1) SAMPLE_MAP.fitBounds(pts,{padding:[30,30]}); else if(pts.length===1) SAMPLE_MAP.setView(pts[0],16); else SAMPLE_MAP.setView([52,19],4);
+  }, 70);
+}
 
 /* ---- Run ---- */
 let POLL=null;
@@ -1041,10 +1077,14 @@ function sampleCard(c, archived){
       <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
       ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
       <div class="mut small">wynik: ${esc(res)}</div>
-      ${c.groundTruth?`<div class="small" style="color:var(--ok)">✓ poprawiony lokal: ${esc(c.groundTruth.name)}${c.groundTruth.address?` · ${esc(c.groundTruth.address)}`:''}</div>`:''}
+      ${c.groundTruth
+        ? `<div class="small" style="color:var(--ok); cursor:pointer" title="otwórz w Mapach Google (potwierdź lokal)" onclick="openGtMaps('${c.id}')">✓ lokal: ${esc(c.groundTruth.name)}${c.groundTruth.address?` · ${esc(c.groundTruth.address)}`:''} 🗺</div>`
+        : `<div class="mut small" style="opacity:.7">✗ brak przypisanego lokalu</div>`}
       ${c.labScan?`<div class="small" style="color:var(--acc)">💾 skan: ${esc(c.labScan.scanModel||'')} · ${c.labScan.itemCount||0} poz.${c.labScan.hasVenue?' · +lokal':''}</div>`:''}
       <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
         <button onclick="editSampleName('${c.id}')" style="padding:3px 8px; font-size:12px">✏️ nazwa</button>
+        <button onclick="openAnnotate('${c.id}')" style="padding:3px 8px; font-size:12px">📍 ${c.groundTruth?'zmień lokal':'przypisz lokal'}</button>
+        ${captureHasGeo(c)?`<button onclick="openSampleMap('${c.id}')" style="padding:3px 8px; font-size:12px">🗺 mapa</button>`:''}
         ${archived
           ? `<button onclick="archiveFromTab('${c.id}',false)" style="padding:3px 8px; font-size:12px">♻︎ Przywróć</button><button onclick="deletePermanent('${c.id}')" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 Usuń na stałe</button>`
           : `<button onclick="archiveFromTab('${c.id}',true)" style="padding:3px 8px; font-size:12px">🗄 Archiwizuj</button>`}
