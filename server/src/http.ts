@@ -16,7 +16,8 @@ import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
-import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize } from "./cache.ts";
+import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { createHash } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
@@ -110,6 +111,11 @@ interface ScanBody {
 // użycia (40 zdjęć po ~0.5 MB = ~27M znaków base64, mieści się).
 const MAX_TOTAL_BASE64 = 36_000_000;
 
+/** Hash pojedynczego zdjęcia (z base64) — klucz rejestru „złych kadrów" + identyfikacja dla apki. */
+function photoHash(base64: string): string {
+  return createHash("sha256").update(base64).digest("hex").slice(0, 32);
+}
+
 /** Komunikat o przekroczeniu dziennego budżetu (twardy hamulec). */
 function budgetMsg(): string {
   return `Dzienny budżet ($${dailyBudgetUsd()}) przekroczony — AI wstrzymane do jutra. Zmień DAILY_BUDGET_USD na serwerze lub poczekaj.`;
@@ -155,6 +161,20 @@ app.post("/scan", async (c) => {
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400);
   }
+
+  // Backstop „złych kadrów": odrzuć zdjęcia, które peek wcześniej uznał za za słabej jakości
+  // (apka i tak ich nie wysyła — to obrona przed marnowaniem drogiego skanu). Wszystkie złe → błąd.
+  try {
+    const checked = await Promise.all(images.map(async (img) => ({
+      img,
+      bad: !!(await cacheGet("bad-photo", cacheKey("bad-photo", photoHash(img.base64)), { op: "scan" })),
+    })));
+    const kept = checked.filter((x) => !x.bad).map((x) => x.img);
+    if (kept.length === 0) {
+      return c.json({ error: "Wszystkie zdjęcia odrzucone — za słaba jakość, nie da się nic odczytać. Zrób ostrzejsze/jaśniejsze zdjęcie." }, 422);
+    }
+    images = kept;
+  } catch { /* rejestr niedostępny → skanuj normalnie */ }
 
   if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
 
@@ -283,15 +303,23 @@ app.post("/dish-info", async (c) => {
 
 // „Szybki podgląd" — lekka ocena 1 zdjęcia na żywo z aparatu (kuchnia / nazwa / czy to menu).
 app.post("/quick-peek", async (c) => {
-  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   try {
     const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string };
     if (!body.image?.base64) return c.json({ error: "Brak zdjęcia." }, 400);
+    const imageHash = photoHash(body.image.base64);
+    // Znany „zły kadr" (za słaba jakość) → werdykt od razu, BEZ wołania modelu (oszczędność);
+    // apka i tak zablokuje wysyłkę. To realizuje „nie skanuj/nie wysyłaj ponownie".
+    const known = await cacheGet<{ reason?: string }>("bad-photo", cacheKey("bad-photo", imageHash), { op: "quick-peek" });
+    if (known) return c.json({ isMenu: false, cuisine: "", restaurantName: "", readable: false, bad: true, badReason: known.reason ?? "za słaba jakość", imageHash, usage: ZERO_USAGE });
+    if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
     const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
     const { result, usage } = await quickPeek(
       { base64: body.image.base64, mediaType: body.image.mediaType || "image/jpeg" },
       model,
     );
+    // „Nic sensownego do odczytania" → zapamiętaj hash jako zły (serwer wie + nie skanuje ponownie).
+    const bad = !result.readable;
+    if (bad) void cacheSet("bad-photo", cacheKey("bad-photo", imageHash), { reason: "peek: zdjęcie nieczytelne / za słaba jakość", at: Date.now() });
     logEvent({
       type: "ai",
       op: "quick-peek",
@@ -300,9 +328,9 @@ app.post("/quick-peek", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { isMenu: result.isMenu, cuisine: result.cuisine },
+      data: { isMenu: result.isMenu, cuisine: result.cuisine, readable: result.readable, bad },
     });
-    return c.json({ ...result, usage });
+    return c.json({ ...result, bad, imageHash, usage });
   } catch (e) {
     return c.json({ error: `Podgląd nie powiódł się: ${(e as Error).message}` }, 502);
   }

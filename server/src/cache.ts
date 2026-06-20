@@ -18,6 +18,7 @@ export const CACHE_VERSION = {
   "menu-scan": 3, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst (v3: notes/adnotacje)
   "menu-structure": 3, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (v3: notes/adnotacje)
   "item-enrich": 2, // przebieg 2: wzbogacenie pozycji (v2: tłumaczenie opisu z karty menu_description_translated)
+  "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
 
@@ -29,6 +30,7 @@ const TTL_DAYS: Record<CacheKind, number> = {
   "menu-scan": 120, // ten sam plik = ta sama treść; długo (a wersja klucza i tak chroni przy zmianach)
   "menu-structure": 120,
   "item-enrich": 200,
+  "bad-photo": 365, // złe zdjęcie raczej nie „naprawi się" samo — pamiętaj długo
 };
 
 const DISABLED = process.env.CACHE_DISABLED === "1";

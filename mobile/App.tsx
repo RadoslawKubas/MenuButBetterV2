@@ -380,7 +380,16 @@ export default function App() {
   // Replay z migawki → wymuszamy zapisaną lokalizację (fixedLocation), żeby eksperyment szedł na
   // IDENTYCZNYM wejściu co kiedyś, a nie na aktualnej pozycji użytkownika.
   async function doScan() {
-    await runScan({ images, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined });
+    // Wyklucz „złe kadry" — zdjęcia, które peek uznał za za słabej jakości (nie da się nic odczytać).
+    const good = images.filter((img) => !peekByUri[img.uri]?.bad);
+    if (good.length === 0) {
+      Alert.alert("Za słaba jakość", "Wszystkie zdjęcia są zbyt słabej jakości, by cokolwiek odczytać. Zrób ostrzejsze/jaśniejsze zdjęcia menu.");
+      return;
+    }
+    if (good.length < images.length) {
+      Alert.alert("Pominięto słabe zdjęcia", `${images.length - good.length} zdjęć było za słabej jakości — zeskanuję tylko ${good.length} czytelnych.`);
+    }
+    await runScan({ images: good, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined });
   }
 
   // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
@@ -1841,11 +1850,16 @@ export default function App() {
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbRow}>
                         {images.map((img, i) => (
                           <View key={img.uri} style={styles.thumbWrap}>
-                            <Image source={{ uri: img.uri }} style={styles.thumb} />
+                            <Image source={{ uri: img.uri }} style={[styles.thumb, peekByUri[img.uri]?.bad && styles.thumbBadDim]} />
                             <Pressable style={styles.thumbRemove} onPress={() => removeImage(i)}>
                               <Text style={styles.thumbRemoveText}>×</Text>
                             </Pressable>
                             <Text style={styles.thumbIndex}>{i + 1}</Text>
+                            {peekByUri[img.uri]?.bad ? (
+                              <View style={styles.thumbBad}>
+                                <Text style={styles.thumbBadText}>⚠️ słaba jakość</Text>
+                              </View>
+                            ) : null}
                           </View>
                         ))}
                       </ScrollView>
@@ -2247,6 +2261,9 @@ const styles = StyleSheet.create({
   thumbRow: { flexDirection: "row", marginBottom: 16 },
   thumbWrap: { marginRight: 10, position: "relative" },
   thumb: { width: 80, height: 100, borderRadius: 8, backgroundColor: colors.badgeBg },
+  thumbBadDim: { opacity: 0.45 },
+  thumbBad: { position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "rgba(160,30,30,0.92)", paddingVertical: 2, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
+  thumbBadText: { color: "#fff", fontSize: 9, fontWeight: "800", textAlign: "center" },
   thumbRemove: {
     position: "absolute",
     top: 3,

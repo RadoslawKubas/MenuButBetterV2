@@ -14,6 +14,8 @@ export interface PeekResult {
   isMenu: boolean;
   cuisine: string;
   restaurantName: string;
+  /** Czy ze zdjęcia da się COKOLWIEK sensownie odczytać (ostre/czytelne). false = za słaba jakość. */
+  readable: boolean;
 }
 
 type ImgMedia = "image/jpeg" | "image/png" | "image/webp";
@@ -25,8 +27,9 @@ const SCHEMA = {
     is_menu: { type: "boolean", description: "Czy zdjęcie przedstawia menu / kartę dań." },
     cuisine: { type: "string", description: "Rodzaj kuchni (np. włoska, indyjska) albo '' gdy nieznana." },
     restaurant_name: { type: "string", description: "Nazwa lokalu jeśli widoczna (szyld/nagłówek/stopka), albo ''." },
+    readable: { type: "boolean", description: "Czy zdjęcie jest dość OSTRE i CZYTELNE, by odczytać z niego tekst/treść. false = rozmazane, za ciemne, prześwietlone, ucięte albo przypadkowe (nic sensownego do odczytania)." },
   },
-  required: ["is_menu", "cuisine", "restaurant_name"],
+  required: ["is_menu", "cuisine", "restaurant_name", "readable"],
 } as const;
 
 export const SYSTEM =
@@ -35,18 +38,21 @@ export const SYSTEM =
   "nagłówku lub w stopce. Jeśli czegoś nie wiesz, zostaw puste ('').";
 
 export const INSTRUCTION =
-  "Oceń to zdjęcie: is_menu (czy to menu), cuisine (rodzaj kuchni) i restaurant_name (nazwa lokalu, jeśli widoczna).";
+  "Oceń to zdjęcie: is_menu (czy to menu), cuisine (rodzaj kuchni), restaurant_name (nazwa lokalu, jeśli widoczna) " +
+  "oraz readable (czy zdjęcie jest dość ostre i czytelne, by cokolwiek z niego odczytać — false dla rozmazanych, " +
+  "za ciemnych, prześwietlonych, uciętych albo przypadkowych zdjęć bez sensownej treści).";
 
 function parse(json: string | null): PeekResult {
   try {
-    const p = JSON.parse(json ?? "") as { is_menu?: boolean; cuisine?: string; restaurant_name?: string };
+    const p = JSON.parse(json ?? "") as { is_menu?: boolean; cuisine?: string; restaurant_name?: string; readable?: boolean };
     return {
       isMenu: !!p.is_menu,
       cuisine: (p.cuisine ?? "").trim(),
       restaurantName: (p.restaurant_name ?? "").trim(),
+      readable: p.readable !== false, // brak pola → traktuj jako czytelne (nie blokuj bez sygnału)
     };
   } catch {
-    return { isMenu: false, cuisine: "", restaurantName: "" };
+    return { isMenu: false, cuisine: "", restaurantName: "", readable: true };
   }
 }
 
@@ -98,6 +104,6 @@ export async function quickPeek(
     const text = resp.content.find((b) => b.type === "text");
     return { result: parse(text && text.type === "text" ? text.text : null), usage };
   } catch {
-    return { result: { isMenu: false, cuisine: "", restaurantName: "" }, usage: ZERO_USAGE };
+    return { result: { isMenu: false, cuisine: "", restaurantName: "", readable: true }, usage: ZERO_USAGE };
   }
 }

@@ -348,6 +348,12 @@ export interface PeekResult {
   isMenu: boolean;
   cuisine: string;
   restaurantName: string;
+  /** Czy ze zdjęcia da się cokolwiek odczytać. false = za słaba jakość. */
+  readable: boolean;
+  /** Serwer uznał kadr za zły (za słaba jakość) — nie warto skanować/wysyłać. */
+  bad: boolean;
+  /** Hash zdjęcia (z serwera) — identyfikacja „złego kadru". */
+  imageHash?: string;
 }
 
 /** „Szybki podgląd" — lekka ocena 1 zdjęcia (kuchnia / nazwa / czy to menu). Tani model. */
@@ -366,6 +372,9 @@ export async function quickPeek(
     isMenu: !!json.isMenu,
     cuisine: json.cuisine ?? "",
     restaurantName: json.restaurantName ?? "",
+    readable: json.readable !== false,
+    bad: json.bad === true,
+    imageHash: json.imageHash,
   };
 }
 
