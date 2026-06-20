@@ -28,7 +28,8 @@ import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
-import { snapshot } from "../src/apiLog.ts";
+import { snapshot, cacheHitsSnapshot } from "../src/apiLog.ts";
+import { cacheStats, cacheClear, initCache, type CacheKind } from "../src/cache.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
@@ -88,6 +89,7 @@ interface CostEntry {
   op: string; // np. "sim-scan", "sim-dish"
   meta: Record<string, unknown>; // model, danie, lokal itp.
   delta: CostDelta[];
+  cacheHits?: number; // ile operacji obsłużono z CACHE (zero płatnego wywołania, tylko koszt bazy)
 }
 function providerTotals(): Record<string, Omit<CostDelta, "provider">> {
   const m: Record<string, Omit<CostDelta, "provider">> = {};
@@ -97,8 +99,9 @@ function providerTotals(): Record<string, Omit<CostDelta, "provider">> {
   return m;
 }
 /** Liczy deltę zużycia (apiLog: snapshot `before` vs teraz) i dopisuje wpis do logu kosztów. */
-function recordCostDelta(op: string, meta: Record<string, unknown>, before: Record<string, Omit<CostDelta, "provider">>, t0: number): void {
+function recordCostDelta(op: string, meta: Record<string, unknown>, before: Record<string, Omit<CostDelta, "provider">>, t0: number, cacheBefore = 0): void {
   const after = providerTotals();
+  const cacheHits = cacheHitsSnapshot().total - cacheBefore;
   const delta: CostDelta[] = [];
   for (const [provider, a] of Object.entries(after)) {
     const b = before[provider] ?? { calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 };
@@ -115,7 +118,7 @@ function recordCostDelta(op: string, meta: Record<string, unknown>, before: Reco
   }
   try {
     if (!existsSync(RESULTS_DIR)) mkdirSync(RESULTS_DIR, { recursive: true });
-    appendFileSync(COSTLOG_FILE, JSON.stringify({ ts: Date.now(), ms: Date.now() - t0, op, meta, delta } satisfies CostEntry) + "\n");
+    appendFileSync(COSTLOG_FILE, JSON.stringify({ ts: Date.now(), ms: Date.now() - t0, op, meta, delta, cacheHits } satisfies CostEntry) + "\n");
   } catch {
     /* log kosztów to dodatek — nie blokuj operacji */
   }
@@ -123,9 +126,10 @@ function recordCostDelta(op: string, meta: Record<string, unknown>, before: Reco
 /** Owija operację: liczy DELTĘ zużycia (apiLog przed/po) i dopisuje do logu kosztów. */
 async function withCostLog<T>(op: string, meta: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
   const before = providerTotals();
+  const cacheBefore = cacheHitsSnapshot().total;
   const t0 = Date.now();
   const res = await fn();
-  recordCostDelta(op, meta, before, t0);
+  recordCostDelta(op, meta, before, t0, cacheBefore);
   return res;
 }
 function readCostLog(): CostEntry[] {
@@ -701,6 +705,7 @@ app.post("/api/sim-scan", async (c) => {
   const model = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
   const t0 = Date.now();
   const costBefore = providerTotals(); // do logu kosztów (peek + scan + namierzenie lokalu)
+  const cacheBefore = cacheHitsSnapshot().total;
   // Peek (jak w apce) — z pierwszego zdjęcia; jego kuchnia trafia jako cuisineHint do skanu.
   let peek: any = null;
   if (withPeek !== false) {
@@ -763,7 +768,7 @@ app.post("/api/sim-scan", async (c) => {
     all[idx]!.labScan = labScan;
     saveMeta(all);
   }
-  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0);
+  recordCostDelta("sim-scan", { model, captureId, withVenue: !!withVenue }, costBefore, t0, cacheBefore);
   return c.json({ ms: Date.now() - t0, usage, cached: false, ...labScan });
   } catch (e) {
     console.error("sim-scan error:", e);
@@ -822,10 +827,11 @@ app.post("/api/sim-dish", async (c) => {
     num?: number;
     verify?: boolean;
     captureId?: string;
+    useCache?: boolean; // domyślnie LAB OMIJA cache (uczciwy koszt); toggle „użyj cache (jak apka)"
   }>();
   if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
   try {
-    const { photos, usage, debug } = await withCostLog("sim-dish", { dish: b.dish, model: b.verifyModel || "claude-sonnet-4-6", lokal: b.restaurantName, captureId: b.captureId }, () =>
+    const { photos, usage, debug } = await withCostLog("sim-dish", { dish: b.dish, model: b.verifyModel || "claude-sonnet-4-6", lokal: b.restaurantName, captureId: b.captureId, useCache: !!b.useCache }, () =>
     runDishPhotos({
       dish: b.dish,
       photoQuery: b.photoQuery,
@@ -840,6 +846,7 @@ app.post("/api/sim-dish", async (c) => {
       num: b.num ?? 4,
       verify: b.verify !== false,
       verifyModel: b.verifyModel,
+      noCache: !b.useCache, // bez toggla LAB nie korzysta z cache (i nie zafałszowuje kosztu modelu)
     }));
     return c.json({ photos, usage, debug });
   } catch (e) {
@@ -935,6 +942,17 @@ app.post("/api/cost-log-clear", (c) => {
   } catch {
     /* brak */
   }
+  return c.json({ ok: true });
+});
+
+// --- CACHE treści: statystyki (ile wpisów/trafień per rodzaj) + czyszczenie. -----------------
+app.get("/api/cache-stats", async (c) => {
+  const stats = await cacheStats();
+  return c.json({ ...stats, sessionHits: cacheHitsSnapshot() });
+});
+app.post("/api/cache-clear", async (c) => {
+  const b = await c.req.json<{ kind?: string }>().catch(() => ({}) as { kind?: string });
+  await cacheClear(b.kind as CacheKind | undefined);
   return c.json({ ok: true });
 });
 
@@ -1228,6 +1246,7 @@ async function migrateSamplesIfEmpty(): Promise<void> {
 await migrateSamplesIfEmpty();
 
 const PORT = Number(process.env.LAB_PORT ?? 8799);
+void initCache(); // cache treści (L1 w pamięci; L2 Postgres gdy DATABASE_URL) — do testów cache w labie
 serve({ fetch: app.fetch, port: PORT });
 console.log(`\n🔬 LAB modeli: http://localhost:${PORT}`);
 console.log(`   biblioteka: ${LIBRARY} (${loadMeta().length} migawek)\n`);

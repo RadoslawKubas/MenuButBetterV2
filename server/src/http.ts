@@ -10,18 +10,21 @@ import { extractMenu, isModelId, MODELS, type InputImage, type MediaType } from 
 import { describeDish } from "./dishInfo.ts";
 import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantInfo } from "./places.ts";
 import { findTripAdvisor } from "./tripadvisor.ts";
-import { runDishPhotos } from "./dishPhotosPipeline.ts";
+import { runDishPhotos, reprPhotoCacheKey } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, logEvent, getStats, getRecentEvents, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initCache, cacheDelete } from "./cache.ts";
 import { DEFAULT_MODEL, apiTag } from "./models.ts";
 
 const app = new Hono();
 
 // Trwałe logi (Postgres) — inicjalizacja na starcie; bez DATABASE_URL to no‑op.
 void initDb();
+// Cache treści (Postgres + LRU) — obniża koszt powtórek; bez DATABASE_URL działa tylko L1.
+void initCache();
 
 // CORS — żeby appka (Expo web / urządzenie) mogła wołać endpoint w devie.
 app.use("/*", cors());
@@ -231,7 +234,7 @@ app.post("/dish-info", async (c) => {
 
   try {
     const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
-    const { text: info, usage } = await describeDish({
+    const { text: info, usage, cached } = await describeDish({
       name: body.name.trim(),
       description: body.description?.trim() || undefined,
       restaurant: body.restaurant?.trim() || undefined,
@@ -248,9 +251,9 @@ app.post("/dish-info", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dish: body.name.trim() },
+      data: { dish: body.name.trim(), cached: !!cached },
     });
-    return c.json({ info, usage });
+    return c.json({ info, usage, cached: !!cached });
   } catch (e) {
     console.error("dish-info error:", e);
     return c.json({ error: `Nie udało się pobrać informacji: ${(e as Error).message}` }, 502);
@@ -417,6 +420,62 @@ app.post("/dish-photos", async (c) => {
   } catch (e) {
     console.error("dish-photos error:", e);
     return c.json({ error: `Wyszukiwanie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
+  }
+});
+
+/** Czy URL obrazu jest MARTWY (serwer nie pobiera go jako obrazu). Chroni samonaprawę przed
+ *  wymuszaniem drogich przeszukań: dopiero potwierdzona śmierć URL-a pozwala szukać od nowa. */
+async function isImageDead(url: string): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    let res = await fetch(url, { method: "HEAD", signal: ctrl.signal }).catch(() => null);
+    if (!res || (!res.ok && res.status !== 405)) {
+      res = await fetch(url, { method: "GET", signal: ctrl.signal }).catch(() => null); // HEAD bywa blokowany
+    }
+    if (!res || !res.ok) return true;
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    return ct ? !ct.startsWith("image/") : false; // HTML/strona błędu zamiast obrazu = martwy
+  } catch {
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// SAMONAPRAWA cache zdjęć poglądowych: apka, gdy CACHE’owane zdjęcie się nie wczyta, prosi o
+// odświeżenie. Serwer NAJPIERW sam sprawdza, czy URL faktycznie martwy (anty‑oszustwo) — i tylko
+// wtedy unieważnia wpis, szuka świeżych (płatne) i aktualizuje cache. Żywy URL → bez ponownych kosztów.
+app.post("/dish-photo-refresh", async (c) => {
+  let b: DishPhotosBody & { deadUrl?: string };
+  try {
+    b = await c.req.json();
+  } catch {
+    return c.json({ error: "Nieprawidłowy JSON." }, 400);
+  }
+  if (!b.dish?.trim() || !b.deadUrl) return c.json({ error: "Brak dish/deadUrl." }, 400);
+
+  if (!(await isImageDead(b.deadUrl))) {
+    return c.json({ refreshed: false, reason: "URL żyje (serwer pobrał obraz) — bez ponownego szukania.", photos: null });
+  }
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
+
+  const verifyModel = b.verifyModel?.trim() || "claude-sonnet-4-6";
+  try {
+    await cacheDelete(reprPhotoCacheKey({ dish: b.dish.trim(), photoQuery: b.photoQuery, cuisine: b.cuisine, verifyModel, num: b.num, verify: b.verify }));
+    const { photos, usage, debug } = await runDishPhotos({
+      dish: b.dish.trim(), photoQuery: b.photoQuery, photoQueryLocal: b.photoQueryLocal,
+      cuisine: b.cuisine, num: b.num, verify: b.verify, verifyModel, representativeOnly: true,
+    });
+    logEvent({
+      type: "ai", op: "dish-photo-refresh", model: verifyModel, provider: apiTag(verifyModel),
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd,
+      data: { dish: b.dish.trim(), resultCount: photos.length, deadUrl: b.deadUrl.slice(0, 200) },
+    });
+    return c.json({ refreshed: true, photos, usage, debug });
+  } catch (e) {
+    console.error("dish-photo-refresh error:", e);
+    return c.json({ error: `Odświeżenie zdjęć nie powiodło się: ${(e as Error).message}` }, 502);
   }
 });
 

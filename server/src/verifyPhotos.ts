@@ -8,6 +8,7 @@ import { usageFrom, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
 import { usesOpenAiApi, apiTag } from "./models.ts";
+import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model weryfikacji (gdy nie podano innego)
@@ -82,6 +83,8 @@ export interface ScoreOptions {
   cuisine?: string;
   /** Model weryfikacji (Claude lub GPT). Domyślnie Sonnet. */
   model?: string;
+  /** Pomiń cache werdyktów (LAB / porównania modeli). */
+  noCache?: boolean;
 }
 
 type ImgMedia = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
@@ -123,10 +126,28 @@ export async function scoreDishPhotos(
   const scores = new Array<number>(urls.length).fill(0);
   const textOverlay = new Array<boolean>(urls.length).fill(false);
 
-  // Pobierz wszystkie miniaturki równolegle (base64). Nieudane pomijamy — zostaną z oceną 0.
-  const imgs = await Promise.all(urls.map((u) => fetchImageB64(u)));
-  const valid = urls.map((_, i) => i).filter((i) => imgs[i]);
+  // ③ CACHE werdyktów vision per (termin, URL): to samo zdjęcie ocenione już dla tego dania/kuchni/
+  // modelu → bierzemy z cache i NIE wysyłamy go do modelu (oszczędza vision — główny koszt).
+  const useCache = !opts.noCache;
+  const vck = (u: string) => cacheKey("vision-url", dish, opts.cuisine, model, u);
+  const need: number[] = [];
+  if (useCache) {
+    await Promise.all(urls.map(async (u, i) => {
+      const hit = await cacheGet<{ m: number; t: boolean }>("vision-url", vck(u), { op: "verify-photos" });
+      if (hit) { scores[i] = hit.m; textOverlay[i] = !!hit.t; } else need.push(i);
+    }));
+  } else {
+    for (let i = 0; i < urls.length; i++) need.push(i);
+  }
+  if (need.length === 0) return { scores, textOverlay, usage: ZERO_USAGE }; // całość z cache
+
+  // Pobierz TYLKO niezcache’owane miniaturki (base64). Nieudane pomijamy — zostaną z oceną 0.
+  const imgs = new Array<{ media_type: ImgMedia; data: string } | null>(urls.length).fill(null);
+  await Promise.all(need.map(async (i) => { imgs[i] = await fetchImageB64(urls[i]!); }));
+  const valid = need.filter((i) => imgs[i]);
   if (valid.length === 0) return { scores, textOverlay, usage: ZERO_USAGE };
+  // Zapis ocen do cache (po udanej weryfikacji) — woła się przed zwrotem.
+  const persist = () => { if (useCache) for (const i of valid) void cacheSet("vision-url", vck(urls[i]!), { m: scores[i]!, t: textOverlay[i]! }); };
 
   // Ruch: pobranie zdjęć z sieci (recv) + relay tych zdjęć do AI (sent ≈ base64).
   const sentBytes = valid.reduce((n, i) => n + imgs[i]!.data.length, 0);
@@ -154,6 +175,7 @@ export async function scoreDishPhotos(
         schema: SCHEMA as unknown as Record<string, unknown>,
       });
       if (json) applyScores(json, scores, textOverlay);
+      persist();
       return { scores, textOverlay, usage };
     }
 
@@ -168,7 +190,8 @@ export async function scoreDishPhotos(
       client.messages.create({
         model,
         max_tokens: 800,
-        system,
+        // ⑤ Prompt caching SYSTEM (Anthropic) — taniej input przy seriach weryfikacji w 5 min.
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content }],
         output_config: { format: { type: "json_schema", schema: SCHEMA } },
       }),
@@ -177,6 +200,7 @@ export async function scoreDishPhotos(
     recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
     const text = resp.content.find((b) => b.type === "text");
     if (text && text.type === "text") applyScores(text.text, scores, textOverlay);
+    persist();
     return { scores, textOverlay, usage };
   } catch {
     // Błąd weryfikacji → zera: nic nie przejdzie progu, więc spadniemy na zdjęcia

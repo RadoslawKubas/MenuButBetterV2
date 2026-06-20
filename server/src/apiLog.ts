@@ -67,6 +67,20 @@ export function bodyBytes(body: unknown): number {
 const MAX = 40; // ostatnich wpisów na providera
 const store = new Map<Provider, State>();
 
+// Trafienia cache TREŚCI — operacje obsłużone z cache (zero płatnego wywołania, tylko koszt
+// bazy). Liczone osobno, by w logach/diagnostyce zaznaczyć „z cache" i policzyć oszczędności.
+const cacheHitsByOp = new Map<string, number>();
+let cacheHitsTotal = 0;
+/** Notuje trafienie cache dla danej operacji (woła cache.ts przy odczycie z cache). */
+export function recordCacheHit(op: string): void {
+  cacheHitsByOp.set(op, (cacheHitsByOp.get(op) ?? 0) + 1);
+  cacheHitsTotal++;
+}
+/** Zrzut liczników trafień cache (LAB diffuje przed/po operacji; diagnostyka sumuje). */
+export function cacheHitsSnapshot(): { total: number; byOp: Record<string, number> } {
+  return { total: cacheHitsTotal, byOp: Object.fromEntries(cacheHitsByOp) };
+}
+
 export function record(provider: Provider, op: string, ok: boolean, ms: number, detail?: string): void {
   const s = getState(provider);
   s.total++;

@@ -149,6 +149,7 @@
       <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
         <span class="chip" id="simPeekChip" onclick="toggleSimPeek()">👁 peek przy skanie</span>
         <span class="chip" id="simVenueChip" onclick="toggleSimVenue()">+ lokal (Places/TA)</span>
+        <span class="chip" id="simCacheChip" onclick="toggleSimCache()" title="domyślnie LAB omija cache (uczciwy koszt). Włącz, by testować zachowanie jak w apce">🗄 użyj cache</span>
       </div>
       <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
         <button class="primary" id="simScanBtn" onclick="simScan(false)">1) Skanuj menu</button>
@@ -193,6 +194,18 @@
       <button onclick="clearCostLog()" style="padding:3px 8px; font-size:12px; color:var(--err); white-space:nowrap">🗑 wyczyść log</button>
     </div>
     <div id="costLog"></div>
+  </div>
+  <div class="panel">
+    <h3>🗄 Cache treści — obniża koszt powtórek</h3>
+    <div class="mut small" style="margin-bottom:6px">Zdjęcia poglądowe / opisy dań / werdykty vision są zapamiętywane (klucz wersjonowany, niezależny od lokalu). Trafienie = bez płatnego wywołania, tylko koszt bazy. Operacje z cache są oznaczone „🗄 z cache" w logu wyżej.</div>
+    <div id="cacheStats"></div>
+    <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap">
+      <button onclick="loadCacheStats(this)" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
+      <button onclick="clearCache('repr-photos')" style="padding:3px 8px; font-size:12px">🗑 zdjęcia</button>
+      <button onclick="clearCache('dish-info')" style="padding:3px 8px; font-size:12px">🗑 opisy</button>
+      <button onclick="clearCache('vision-url')" style="padding:3px 8px; font-size:12px">🗑 werdykty</button>
+      <button onclick="clearCache()" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 wszystko</button>
+    </div>
   </div>
 </div>
 
@@ -545,6 +558,8 @@ function showLeaderboard(){
 let SIM = null, SIM_VENUE = false, SIM_PEEK = true;
 function toggleSimVenue(){ SIM_VENUE=!SIM_VENUE; document.getElementById('simVenueChip').className='chip'+(SIM_VENUE?' on':''); }
 function toggleSimPeek(){ SIM_PEEK=!SIM_PEEK; document.getElementById('simPeekChip').className='chip'+(SIM_PEEK?' on':''); }
+let SIM_CACHE=false;
+function toggleSimCache(){ SIM_CACHE=!SIM_CACHE; document.getElementById('simCacheChip').className='chip'+(SIM_CACHE?' on':''); }
 // Domyślne modele per rola — jak DEFAULT_MODELS w apce (peek=nano, reszta=Sonnet).
 const SIM_DEFAULTS = { simPeekModel:'gpt-5-nano', simScanModel:'claude-sonnet-4-6', simDescribeModel:'claude-sonnet-4-6', simVerifyModel:'claude-sonnet-4-6', simVenueModel:'claude-sonnet-4-6' };
 function renderSimSelects(){
@@ -679,7 +694,7 @@ async function simDish(i){
     const r=await api('/api/sim-dish',{
       dish:it.original, photoQuery:it.photoQuery, photoQueryLocal:it.photoQueryLocal, cuisine:SIM.cuisine,
       restaurantName:SIM.restaurantName, city:SIM.venue?.city, taLocationId:SIM.venue?.taLocationId, branded:it.branded, website:SIM.venue?.website,
-      verifyModel:document.getElementById('simVerifyModel').value, num:4, captureId:SIM.captureId,
+      verifyModel:document.getElementById('simVerifyModel').value, num:4, captureId:SIM.captureId, useCache:SIM_CACHE,
     });
     if(r.error) throw new Error(r.error);
     const finalThumbs=(r.photos||[]).map(p=>{
@@ -703,7 +718,7 @@ function switchTab(name){
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
-  if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
+  if(name==='logs'){ renderCostPeriod(); loadCostLog(); loadCacheStats(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
 }
@@ -739,8 +754,8 @@ function toggleCostGroup(gi){
   const provRows=(g.byProvider||[]).map(p=>{ const dc=p.bytesSent/1e9*EGRESS_RATE; return `<tr><td><b>${esc(p.provider)}</b></td><td class="num">${p.calls}</td><td class="num">${fmtTokk(p.inTok)}/${fmtTokk(p.outTok)}</td><td class="num">${fmtUsd(p.costUsd+dc)}</td><td class="num">${fmtBytes(p.bytesSent)}</td></tr>`; }).join('');
   const opRows=(g.entries||[]).map((e,ei)=>`
     <div class="cand" style="margin-top:4px" onclick="event.stopPropagation(); toggleGroupEntry(${gi},${ei})">
-      <div style="display:flex; justify-content:space-between; gap:8px"><span><b>${esc(e.op)}</b> <span class="mut small">${esc((e.meta&&(e.meta.dish||e.meta.model||''))||'')}</span></span> <b>${fmtUsd(e.totalCost)}</b></div>
-      <div class="mut small">${new Date(e.ts).toLocaleTimeString()} · ${e.ms}ms</div>
+      <div style="display:flex; justify-content:space-between; gap:8px"><span><b>${esc(e.op)}</b> ${e.cacheHits?'<span class="badge pass" title="obsłużone z cache — bez płatnego wywołania, tylko koszt bazy">🗄 z cache ×'+e.cacheHits+'</span>':''} <span class="mut small">${esc((e.meta&&(e.meta.dish||e.meta.model||''))||'')}</span></span> <b style="${e.cacheHits&&e.totalCost<0.0001?'color:var(--ok)':''}">${fmtUsd(e.totalCost)}</b></div>
+      <div class="mut small">${new Date(e.ts).toLocaleTimeString()} · ${e.ms}ms${e.cacheHits?' · 🗄 z cache (tylko koszt bazy)':''}</div>
       <div id="costGE-${gi}-${ei}"></div>
     </div>`).join('');
   el.innerHTML=`<div style="margin-top:6px; border-top:1px solid var(--line); padding-top:6px">
@@ -758,6 +773,23 @@ function toggleGroupEntry(gi,ei){
     </tbody></table>`;
 }
 async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
+const CACHE_LABELS={'repr-photos':'zdjęcia poglądowe','dish-info':'opisy dań','vision-url':'werdykty vision'};
+async function loadCacheStats(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
+  const r=await api('/api/cache-stats');
+  const sh=r.sessionHits||{total:0,byOp:{}};
+  const rows=(r.rows||[]);
+  const totEntries=rows.reduce((a,x)=>a+x.entries,0), totHits=rows.reduce((a,x)=>a+x.hits,0);
+  const body = rows.length ? `<table style="margin-top:6px"><thead><tr><th>rodzaj</th><th>wpisów</th><th>trafień</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(CACHE_LABELS[x.kind]||x.kind)}</b></td><td class="num">${x.entries}</td><td class="num">${x.hits}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="mut small" style="margin-top:4px">Brak trwałego cache (Postgres) — działa tylko L1 w pamięci (${r.l1||0} wpisów). Na produkcji (DATABASE_URL) cache jest trwały.</div>`;
+  document.getElementById('cacheStats').innerHTML=`
+    <div class="step">
+      <div><b>${r.enabled?'Postgres + pamięć':'tylko pamięć (L1)'}</b> · trafień w tej sesji: <b style="color:var(--ok)">${sh.total}</b> ${Object.keys(sh.byOp||{}).length?'('+Object.entries(sh.byOp).map(([k,v])=>esc(k)+' '+v).join(', ')+')':''}</div>
+      ${rows.length?`<div class="mut small" style="margin-top:2px">Σ ${totEntries} wpisów · ${totHits} trafień (trwałe)</div>`:''}
+      ${body}
+    </div>`;
+}
+async function clearCache(kind){ if(!confirm('Wyczyścić cache '+(kind?CACHE_LABELS[kind]:'WSZYSTKO')+'?')) return; await api('/api/cache-clear',kind?{kind}:{}); loadCacheStats(); }
 async function refreshPrices(btn){
   btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
   try{ await loadPrices(); btn.textContent='✓ odświeżono '+new Date().toLocaleTimeString(); }

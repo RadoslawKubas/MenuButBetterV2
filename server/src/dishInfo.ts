@@ -3,8 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "./menu.ts";
 import { usesOpenAiApi, isOpenAiReasoning, apiTag } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
-import { usageFrom, usageFromOpenAI, logUsage, type Usage } from "./usage.ts";
+import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
+import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 
@@ -16,6 +17,8 @@ export interface DishInfoInput {
   location?: string; // kraj/miasto, np. "Badalona, Hiszpania"
   targetLang: string;
   model?: ModelId;
+  /** Pomiń cache (LAB / porównania modeli). */
+  noCache?: boolean;
 }
 
 export const SYSTEM = [
@@ -34,8 +37,21 @@ export const SYSTEM = [
 
 export async function describeDish(
   input: DishInfoInput,
-): Promise<{ text: string; usage: Usage }> {
+): Promise<{ text: string; usage: Usage; cached?: boolean }> {
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
+
+  // ② CACHE opisu — opis jest „jak podaje się to w TEJ kuchni i regionie", więc niezależny od
+  // konkretnego lokalu. Klucz: danie + kuchnia + KRAJ (z location) + język + model. Gdy menu niesie
+  // WŁASNY krótki opis (możliwy wariant, np. „tost z awokado") — NIE cache’ujemy: generujemy świeżo,
+  // żeby nie zgubić tej informacji (bezstratnie).
+  const country = input.location ? input.location.split(",").pop()?.trim() || input.location : undefined;
+  const hasMenuDesc = !!input.description?.trim();
+  const useCache = !input.noCache && !hasMenuDesc;
+  const ck = cacheKey("dish-info", input.name, input.cuisine, country, input.targetLang, model);
+  if (useCache) {
+    const hit = await cacheGet<string>("dish-info", ck, { op: "dish-info" });
+    if (hit) return { text: hit, usage: ZERO_USAGE, cached: true };
+  }
 
   // Treść zapytania (ta sama dla obu providerów).
   const userText =
@@ -68,6 +84,7 @@ export async function describeDish(
     const usage = usageFromOpenAI(model, resp.usage);
     recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd);
     logUsage(`dish-info (${tag})`, model, usage);
+    if (useCache) void cacheSet("dish-info", ck, out, { lang: input.targetLang });
     return { text: out, usage };
   }
 
@@ -75,7 +92,9 @@ export async function describeDish(
     client.messages.create({
       model,
       max_tokens: 1500,
-      system: SYSTEM,
+      // ⑤ Prompt caching: długi SYSTEM cache’owany po stronie Anthropic (~90% taniej input przy
+      // powtórkach w 5 min). usage.ts już czyta cache_read/creation tokeny.
+      system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: userText }],
     }),
   );
@@ -87,5 +106,6 @@ export async function describeDish(
   const usage = usageFrom(model, response.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd);
   logUsage("dish-info", model, usage);
+  if (useCache) void cacheSet("dish-info", ck, text.text, { lang: input.targetLang });
   return { text: text.text, usage };
 }
