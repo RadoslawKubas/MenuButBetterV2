@@ -425,13 +425,13 @@ async function deletePermanent(id){ if(!confirm('Usunąć ten sample NA STAŁE z
 async function importZip(input){ const f=input.files[0]; if(!f) return; const info=document.getElementById('impInfo'); info.textContent='importuję ZIP… ('+f.name+')';
   const fd=new FormData(); fd.append('file', f);
   try{ const r=await fetch('/api/import-zip',{method:'POST', body:fd}).then(x=>x.json());
-    info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
+    info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated} (nowy wynik)`:''}, pominięto ${r.skipped}`;
     if(!r.error) await afterImport(r.added);
   }catch(e){ info.textContent='błąd: '+e.message; } finally { input.value=''; }
 }
 async function importPath(){ const p=document.getElementById('impPath').value.trim(); const info=document.getElementById('impInfo'); if(!p){ info.textContent='⚠️ Podaj ścieżkę folderu z metadata.json lub pliku .zip (albo użyj „📥 Importuj ZIP").'; return; } info.textContent='importuję…';
   const r=await api('/api/import-path',{path:p});
-  info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}, pominięto ${r.skipped} (duplikaty)`;
+  info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated} (nowy wynik)`:''}, pominięto ${r.skipped}`;
   if(!r.error){ document.getElementById('impPath').value=''; await afterImport(r.added); }
 }
 // Po każdym imporcie: odśwież dane i listę Sample lokalnych (najnowsze na górze, oznaczone NEW).

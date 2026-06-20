@@ -111,8 +111,15 @@ export function CapturesView({
         Alert.alert("Wysyłka nieudana", r.error ?? "Spróbuj ponownie.");
         return;
       }
+      // Po update sampel jest „świeży" (pending) → status onServer, NIE imported (lab go re-importuje).
       setSampleStatus((prev) => ({ ...prev, [c.sig || c.id]: { onServer: true, imported: false } }));
-      Alert.alert(r.status === "exists" ? "Już na serwerze" : "Wysłano", "Migawka jest na serwerze — zaimportuj ją w labie.");
+      const title = r.status === "updated" ? "Zaktualizowano" : r.status === "exists" ? "Już na serwerze" : "Wysłano";
+      const body = r.status === "updated"
+        ? "Zmodyfikowany sampel (nowy wynik) zastąpił poprzedni — zaimportuj ponownie w labie, podmieni wynik."
+        : r.status === "exists"
+          ? "Identyczny sampel już jest na serwerze (bez zmian)."
+          : "Migawka jest na serwerze — zaimportuj ją w labie.";
+      Alert.alert(title, body);
     } catch (e) {
       reportError((e as Error)?.message ?? String(e), { stack: (e as Error)?.stack, label: "sample-upload-throw", context: { id: c.id } });
       Alert.alert("Wysyłka nieudana", (e as Error)?.message ?? "Spróbuj ponownie.");
@@ -254,15 +261,17 @@ export function CapturesView({
                       ) : (
                         <Text style={styles.sampleDim}>nie wysłano</Text>
                       )}
-                      {!st?.onServer && !st?.imported ? (
-                        <Pressable
-                          style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
-                          disabled={uploading === c.id}
-                          onPress={() => void uploadOne(c)}
-                        >
-                          <Text style={styles.sampleBtnText}>{uploading === c.id ? "wysyłam…" : "☁ Wyślij na serwer"}</Text>
-                        </Pressable>
-                      ) : null}
+                      {/* Zawsze można wysłać; gdy już na serwerze/zaimportowany → „Aktualizuj"
+                          (re-skan w apce zapisał nowy wynik → nadpisujemy sampel na serwerze). */}
+                      <Pressable
+                        style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
+                        disabled={uploading === c.id}
+                        onPress={() => void uploadOne(c)}
+                      >
+                        <Text style={styles.sampleBtnText}>
+                          {uploading === c.id ? "wysyłam…" : (st?.onServer || st?.imported ? "☁ Aktualizuj na serwerze" : "☁ Wyślij na serwer")}
+                        </Text>
+                      </Pressable>
                     </View>
                   );
                 })()}

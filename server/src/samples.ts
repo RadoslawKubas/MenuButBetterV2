@@ -53,11 +53,13 @@ export async function initSamples(): Promise<void> {
         path TEXT,
         bytes INTEGER NOT NULL DEFAULT 0,
         install_id TEXT,
+        content_hash TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         imported_at TIMESTAMPTZ
       );
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS path TEXT;
       ALTER TABLE samples ADD COLUMN IF NOT EXISTS install_id TEXT;
+      ALTER TABLE samples ADD COLUMN IF NOT EXISTS content_hash TEXT;
       CREATE INDEX IF NOT EXISTS samples_imported_idx ON samples (imported_at);
     `);
     storeDir = resolveStoreDir();
@@ -90,20 +92,39 @@ export interface SampleRow {
   hasZip: boolean;
 }
 
-/** Zapisuje sampel (dedup po hashu). Zip → plik (gdy mamy katalog) albo BYTEA. Tag instancji apki. */
-export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer, installId?: string): Promise<{ ok: boolean; status: "created" | "exists" | "disabled"; id?: number }> {
+/**
+ * Zapisuje sampel. Tożsamość po `hash` (sygnatura WEJŚCIA = zdjęcia). Gdy sampel o tym hashu już jest:
+ *  • identyczna TREŚĆ (ten sam content_hash zipa) → "exists" (no-op),
+ *  • inna treść (np. apka zapisała NOWY wynik po re-skanie) → AKTUALIZUJ zip+meta i ustaw pending
+ *    (imported_at=NULL), żeby lab re-importował i podmienił wynik → "updated".
+ * Zip → plik (gdy mamy katalog) albo BYTEA. Tag instancji apki.
+ */
+export async function saveSample(hash: string, meta: Record<string, unknown>, zip: Buffer, installId?: string): Promise<{ ok: boolean; status: "created" | "updated" | "exists" | "disabled"; id?: number }> {
   const p = getPool();
   if (!p || !ready) return { ok: false, status: "disabled" };
-  const existing = await p.query(`SELECT id FROM samples WHERE hash = $1`, [hash]);
-  if (existing.rows.length) return { ok: true, status: "exists", id: existing.rows[0].id };
+  const contentHash = createHash("sha256").update(zip).digest("hex");
+  const existing = await p.query(`SELECT id, content_hash FROM samples WHERE hash = $1`, [hash]);
+  if (existing.rows.length) {
+    const row = existing.rows[0];
+    if (row.content_hash === contentHash) return { ok: true, status: "exists", id: row.id };
+    // Zmodyfikowany sampel (nowa treść) → nadpisz i oznacz jako świeży do (ponownego) importu.
+    if (storeDir) {
+      const fname = safeFileName(hash);
+      await writeFile(join(storeDir, fname), zip);
+      await p.query(`UPDATE samples SET meta=$2, path=$3, zip=NULL, bytes=$4, install_id=COALESCE($5,install_id), content_hash=$6, imported_at=NULL WHERE id=$1`, [row.id, JSON.stringify(meta), fname, zip.length, installId ?? null, contentHash]);
+    } else {
+      await p.query(`UPDATE samples SET meta=$2, zip=$3, path=NULL, bytes=$4, install_id=COALESCE($5,install_id), content_hash=$6, imported_at=NULL WHERE id=$1`, [row.id, JSON.stringify(meta), zip, zip.length, installId ?? null, contentHash]);
+    }
+    return { ok: true, status: "updated", id: row.id };
+  }
 
   if (storeDir) {
     const fname = safeFileName(hash);
     await writeFile(join(storeDir, fname), zip);
-    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes, install_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length, installId ?? null]);
+    const r = await p.query(`INSERT INTO samples (hash, meta, path, bytes, install_id, content_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [hash, JSON.stringify(meta), fname, zip.length, installId ?? null, contentHash]);
     return { ok: true, status: "created", id: r.rows[0].id };
   }
-  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes, install_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length, installId ?? null]);
+  const r = await p.query(`INSERT INTO samples (hash, meta, zip, bytes, install_id, content_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [hash, JSON.stringify(meta), zip, zip.length, installId ?? null, contentHash]);
   return { ok: true, status: "created", id: r.rows[0].id };
 }
 

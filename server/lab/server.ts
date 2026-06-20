@@ -224,17 +224,28 @@ function saveMeta(caps: MetaCapture[]): void {
   writeFileSync(LIB_META, JSON.stringify(caps, null, 2));
 }
 
-// Doimportowanie migawek do biblioteki (dedup po sig||id; kopiuje zdjęcia do library/images/).
+// Doimportowanie migawek do biblioteki (tożsamość po sig||id). Nowa → dodaj (kopiuj zdjęcia).
+// Istniejąca (re-import zmodyfikowanego sampla) → PODMIEŃ wynik + kontekst wejścia, zachowaj lab-owe
+// pola (nazwa, ground-truth osobno, labScan) i nie kopiuj zdjęć ponownie. Bump importedAt.
 async function ingest(captures: MetaCapture[], readImage: (file: string) => Promise<Buffer | null>) {
   ensureLibrary();
   const existing = loadMeta();
-  const keys = new Set(existing.map((c) => c.sig || c.id));
   let added = 0,
-    skipped = 0;
+    skipped = 0,
+    updated = 0;
   for (const cap of captures) {
     const key = cap.sig || cap.id;
-    if (keys.has(key)) {
-      skipped++;
+    const ex = existing.find((c) => (c.sig || c.id) === key);
+    if (ex) {
+      // Podmień to, co pochodzi z apki (wynik + wejście); NIE ruszaj nazwy (lab mógł poprawić) ani labScan.
+      const changed = JSON.stringify(ex.result ?? null) !== JSON.stringify(cap.result ?? null);
+      ex.result = cap.result ?? ex.result;
+      if (cap.restaurantHint !== undefined) ex.restaurantHint = cap.restaurantHint;
+      if (cap.locationHint !== undefined) ex.locationHint = cap.locationHint;
+      if (cap.location !== undefined) ex.location = cap.location;
+      if (cap.installId !== undefined) ex.installId = cap.installId;
+      ex.importedAt = Date.now();
+      if (changed) updated++; else skipped++;
       continue;
     }
     const newImages: MetaImage[] = [];
@@ -246,11 +257,10 @@ async function ingest(captures: MetaCapture[], readImage: (file: string) => Prom
       newImages.push({ ...im, file: `images/${base}` });
     }
     existing.push({ ...cap, images: newImages, importedAt: Date.now() });
-    keys.add(key);
     added++;
   }
   saveMeta(existing);
-  return { added, skipped };
+  return { added, skipped, updated };
 }
 
 async function ingestFolder(dir: string) {
