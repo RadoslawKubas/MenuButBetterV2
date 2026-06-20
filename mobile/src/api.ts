@@ -211,6 +211,7 @@ export function scanMenu(
   params: ScanParams,
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
+  onEnrichItem?: (item: ScanItemStub) => void,
 ): Promise<{ menu: Menu; usage: Usage; cached: boolean }> {
   const t0 = Date.now();
   const body = JSON.stringify({
@@ -252,6 +253,17 @@ export function scanMenu(
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
           else if (ev.phase === "item")
             onItem?.({
+              original: ev.original,
+              translated: ev.translated,
+              photoQuery: ev.photoQuery,
+              photoQueryLocal: ev.photoQueryLocal,
+              branded: !!ev.branded,
+              description: ev.description ?? "",
+              price: ev.price ?? null,
+              currency: ev.currency ?? null,
+            });
+          else if (ev.phase === "enrich-item")
+            onEnrichItem?.({
               original: ev.original,
               translated: ev.translated,
               photoQuery: ev.photoQuery,

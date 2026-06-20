@@ -54,6 +54,9 @@ export interface ExtractOptions {
   /** Każda sparsowana pozycja (nazwa + photo_query) NA ŻYWO ze strumienia — apka pokazuje nazwy
    *  i od razu dociąga dla nich tanie zdjęcia poglądowe (gotowe, zanim skan się skończy). */
   onItem?: (item: ScanItemStub) => void;
+  /** Wzbogacona pozycja NA ŻYWO z przebiegu enrich (tłumaczenie + photo_query + opis) — apka
+   *  sukcesywnie uzupełnia mini-karty (opis) i dociąga zdjęcie po photo_query. */
+  onEnrichItem?: (item: ScanItemStub) => void;
   /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
 }
@@ -470,6 +473,53 @@ function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
   };
 }
 
+// Wyłuskuje KOMPLETNE obiekty wzbogacenia ze strumienia enrich (marker "photo_query") i emituje je
+// jako pozycje (mapując index→original) — apka uzupełnia mini-karty opisem i dociąga zdjęcie na żywo.
+function emitEnrichItems(text: string, state: { emitted: number }, items: { gi: number; original: string }[], onItem: (i: ScanItemStub) => void): void {
+  let found = 0;
+  let i = 0;
+  while (true) {
+    const k = text.indexOf('"photo_query"', i);
+    if (k < 0) break;
+    const start = text.lastIndexOf("{", k);
+    if (start < 0) { i = k + 13; continue; }
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let p = start; p < text.length; p++) {
+      const ch = text[p]!;
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}") { depth--; if (depth === 0) { end = p; break; } }
+    }
+    if (end < 0) break;
+    found++;
+    if (found > state.emitted) {
+      try {
+        const o = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+        if (typeof o.index === "number" && typeof o.photo_query === "string") {
+          const orig = items.find((x) => x.gi === o.index)?.original;
+          if (orig) {
+            onItem({
+              original: orig,
+              translated: typeof o.translated === "string" ? o.translated : orig,
+              photoQuery: o.photo_query,
+              photoQueryLocal: typeof o.photo_query_local === "string" ? o.photo_query_local : "",
+              branded: o.branded === true,
+              description: typeof o.description === "string" ? o.description : "",
+              price: null,
+              currency: null,
+            });
+            state.emitted = found;
+          }
+        }
+      } catch { /* niepełny fragment — doczyta się później */ }
+    }
+    i = end + 1;
+  }
+}
+
 interface EnrichResult { sections: { index: number; name_translated: string }[]; items: ItemEnrich[]; usage: Usage }
 
 /** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI) dla podanych sekcji i pozycji. */
@@ -522,6 +572,10 @@ async function enrichCall(
     messages: [{ role: "user", content: userText }],
     output_config: { format: { type: "json_schema", schema: ENRICH_SCHEMA } },
   });
+  if (opts.onEnrichItem) {
+    const est = { emitted: 0 };
+    stream.on("text", (_d, snap) => emitEnrichItems(snap, est, items, opts.onEnrichItem!));
+  }
   const resp = await track("claude", "enrich", () => stream.finalMessage());
   const usage = usageFrom(model, resp.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
@@ -564,6 +618,14 @@ async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model:
   } else {
     flat.forEach((f, gi) => needItems.push({ gi, original: f.original, menu_description: f.menu_description }));
     structure.sections.forEach((s, idx) => needSects.push({ idx, name: s.name }));
+  }
+
+  // Pozycje z CACHE → wyemituj od razu (apka wypełnia karty), reszta dojdzie ze strumienia enrich.
+  if (opts.onEnrichItem) {
+    flat.forEach((f, gi) => {
+      const e = enrichByGi[gi];
+      if (e) opts.onEnrichItem!({ original: f.original, translated: e.translated || f.original, photoQuery: e.photo_query || "", photoQueryLocal: e.photo_query_local || "", branded: e.branded === true, description: e.description || "", price: null, currency: null });
+    });
   }
 
   let usage = ZERO_USAGE;

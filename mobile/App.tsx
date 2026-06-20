@@ -513,6 +513,17 @@ export default function App() {
           pumpPrefetch();
         }
       };
+      // Enrich NA ŻYWO: gdy dla pozycji dojdzie opis + photo_query → uzupełnij kartę i dociągnij zdjęcie.
+      const onEnrichItem = (stub: ScanItemStub) => {
+        setScanItems((prev) => prev.map((x) => (x.original === stub.original
+          ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description }
+          : x)));
+        if (stub.photoQuery && stub.photoQuery.trim() && costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+          pfEnqueued++;
+          pfQueue.push(stub);
+          pumpPrefetch();
+        }
+      };
       if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
 
       for (let bi = 0; bi < batches.length; bi++) {
@@ -536,6 +547,7 @@ export default function App() {
             },
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
+            onEnrichItem,
           ));
         } catch {
           // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
@@ -1953,7 +1965,9 @@ export default function App() {
                   ) : null}
                   {scanItems.length > 0 ? (
                     <>
-                      <Text style={styles.scanItemsHdr}>📖 Podgląd menu na żywo — {scanItems.length} pozycji (możesz przewijać)</Text>
+                      <Text style={styles.scanItemsHdr}>
+                        📖 {scanItems.length} pozycji · 📝 {scanItems.filter((x) => x.description && x.description.trim()).length} opisów · 🖼 {scanItems.filter((x) => x.photo).length} zdjęć
+                      </Text>
                       <ScrollView style={styles.scanItemsBox} contentContainerStyle={{ paddingVertical: 4 }}>
                         {scanItems.map((it, i) => (
                           <View key={i} style={styles.scanCard}>

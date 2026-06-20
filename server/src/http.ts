@@ -193,6 +193,12 @@ app.post("/scan", async (c) => {
               s.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {});
             }
           : undefined,
+        // Wzbogacona pozycja NA ŻYWO (opis + photo_query) — apka uzupełnia kartę i dociąga zdjęcie.
+        onEnrichItem: wantSteps
+          ? (it) => {
+              s.write(JSON.stringify({ phase: "enrich-item", ...it }) + "\n").catch(() => {});
+            }
+          : undefined,
       });
       // Trwały log skanu — do statystyk „ile menu / dań / koszt per model".
       const items = menu.sections.reduce((n, sec) => n + sec.items.length, 0);
