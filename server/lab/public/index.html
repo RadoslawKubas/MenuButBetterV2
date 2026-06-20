@@ -232,10 +232,13 @@
   <div class="panel">
     <h3>🐞 Błędy z aplikacji</h3>
     <div class="mut small" style="margin-bottom:6px">Każdy błąd w apce jest zgłaszany na serwer (komunikat + stack + kontekst + wersja/platforma). Tu widzisz ostatnie — do analizy.</div>
-    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center">
+    <div style="display:flex; gap:8px; margin-bottom:6px; flex-wrap:wrap; align-items:center">
       <button onclick="loadClientErrors(this)" style="padding:4px 10px">↻ odśwież</button>
+      <span class="chip" id="errClosedChip" onclick="toggleErrClosed()" title="pokaż też zamknięte/zarchiwizowane bugi">🗄 pokaż zamknięte</span>
       <span class="mut small" id="errInfo"></span>
     </div>
+    <div class="mut small" style="margin-bottom:2px">Wersja apki (build):</div>
+    <div class="chips" id="errBuilds" style="margin-bottom:8px"></div>
     <div id="errList"></div>
   </div>
 </div>
@@ -1018,35 +1021,59 @@ function renderLocalSamples(){
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
 async function archiveFromTab(id,on){ await api('/api/archive',{captureId:id, archived:on}); await loadState(); renderLocalSamples(); }
-/* ---- Błędy z apki — grupowane PER INSTANCJA (GUID instalacji) ---- */
-let ERR_GROUPS=[];
+/* ---- Błędy z apki — filtr buildu (domyślnie najnowszy) + grupy per instancja + zamykanie bugów ---- */
+let ERR_RAW=[], ERR_GROUPS=[], ERR_CLOSED=new Set(), ERR_BUILD='', ERR_SHOW_CLOSED=false;
+function errSig(e){ const d=e.data||{}; return (d.message||'')+'¦'+(d.label||e.op||''); }
+function buildOf(e){ const v=(e.data||{}).appVersion||''; const m=v.match(/build\s*(\d+)/i); return m?m[1]:(v||'?'); }
+function errBuildsList(){ return [...new Set(ERR_RAW.map(buildOf))].sort((a,b)=>(parseInt(b)||0)-(parseInt(a)||0)); }
 async function loadClientErrors(btn){
   if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
   const info=document.getElementById('errInfo'), box=document.getElementById('errList');
   if(!info||!box) return; info.textContent='pobieram…';
   let r; try{ r=await api('/api/client-errors'); }catch(e){ info.textContent='błąd połączenia'; return; }
   if(r.error){ info.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); box.innerHTML=''; return; }
-  const errs=r.errors||[];
+  ERR_RAW=r.errors||[];
+  const cr=await api('/api/error-closed').catch(()=>({closed:[]})); ERR_CLOSED=new Set(cr.closed||[]);
+  const builds=errBuildsList();
+  if(!builds.includes(ERR_BUILD)) ERR_BUILD = builds[0]||''; // domyślnie NAJNOWSZY build
+  document.getElementById('errClosedChip').className='chip'+(ERR_SHOW_CLOSED?' on':'');
+  renderErrBuilds(); renderErrList();
+}
+function renderErrBuilds(){
+  const opts=[['','wszystkie'], ...errBuildsList().map(b=>[b, b==='?'?'(brak buildu)':'build '+b])];
+  document.getElementById('errBuilds').innerHTML=opts.map(([k,l])=>`<div class="chip ${ERR_BUILD===k?'on':''}" onclick="setErrBuild('${esc(k)}')">${esc(l)}</div>`).join('');
+}
+function setErrBuild(b){ ERR_BUILD=b; renderErrBuilds(); renderErrList(); }
+function toggleErrClosed(){ ERR_SHOW_CLOSED=!ERR_SHOW_CLOSED; document.getElementById('errClosedChip').className='chip'+(ERR_SHOW_CLOSED?' on':''); renderErrList(); }
+function renderErrList(){
+  const box=document.getElementById('errList'), info=document.getElementById('errInfo');
+  let errs=ERR_RAW.filter(e=> !ERR_BUILD || buildOf(e)===ERR_BUILD);
+  if(!ERR_SHOW_CLOSED) errs=errs.filter(e=>!ERR_CLOSED.has(errSig(e)));
   const map={};
   for(const e of errs){ const id=e.installId||'(brak GUID)'; const g=(map[id]=map[id]||{id, errors:[], build:null, platform:null, last:0}); g.errors.push(e); const d=e.data||{}; if(d.appVersion)g.build=d.appVersion; if(d.platform)g.platform=d.platform; g.last=Math.max(g.last,new Date(e.at).getTime()); }
   ERR_GROUPS=Object.values(map).sort((a,b)=>b.last-a.last);
-  info.textContent=`${errs.length} błędów · ${ERR_GROUPS.length} instancji apki`;
+  const closedN=ERR_RAW.filter(e=>ERR_CLOSED.has(errSig(e))).length;
+  info.textContent=`${errs.length} błędów · ${ERR_GROUPS.length} instancji${ERR_BUILD?' · build '+ERR_BUILD:' (wszystkie buildy)'}${closedN?' · '+closedN+' zamkniętych':''}`;
   box.innerHTML = ERR_GROUPS.length ? ERR_GROUPS.map((g,gi)=>`
     <div class="cand">
       <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-        <b>📱 ${esc(g.id.slice(0,20))}${g.build?' · build '+esc(g.build):''}${g.platform?' · '+esc(g.platform):''}</b>
-        <span style="display:flex; gap:6px; white-space:nowrap"><span class="badge fail">${g.errors.length} błędów</span><button onclick="loadInstallActivity('${esc(g.id)}',${gi})" style="padding:2px 7px; font-size:11px">📋 aktywność</button></span>
+        <b>📱 ${esc(g.id.slice(0,20))}${g.build?' · '+esc(g.build):''}${g.platform?' · '+esc(g.platform):''}</b>
+        <span style="display:flex; gap:6px; white-space:nowrap"><span class="badge fail">${g.errors.length}</span><button onclick="loadInstallActivity('${esc(g.id)}',${gi})" style="padding:2px 7px; font-size:11px">📋 aktywność</button></span>
       </div>
       <div class="mut small">ostatni: ${new Date(g.last).toLocaleString()}</div>
       <div id="act-${gi}"></div>
       <div style="margin-top:6px">${g.errors.map((e,ei)=>errRow(gi,ei,e)).join('')}</div>
-    </div>`).join('') : '<div class="mut small">Brak zgłoszonych błędów 🎉</div>';
+    </div>`).join('') : '<div class="mut small">Brak błędów (dla tego filtra) 🎉</div>';
 }
-function errRow(gi,ei,e){ const d=e.data||{};
-  return `<div class="cand" style="margin-top:4px" onclick="toggleErr(${gi},${ei})">
-    <div style="display:flex; justify-content:space-between; gap:8px"><span style="color:var(--err)">${esc((d.message||'(brak)').slice(0,100))}</span><span class="mut small" style="white-space:nowrap">${esc(e.op||'')}</span></div>
-    <div class="mut small">${new Date(e.at).toLocaleString()}</div><div id="err-${gi}-${ei}"></div></div>`;
+function errRow(gi,ei,e){ const d=e.data||{}; const sig=errSig(e); const closed=ERR_CLOSED.has(sig);
+  return `<div class="cand" style="margin-top:4px${closed?'; opacity:.55':''}">
+    <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+      <span style="color:var(--err); cursor:pointer; flex:1; min-width:0" onclick="toggleErr(${gi},${ei})">${closed?'🗄 ':''}${esc((d.message||'(brak)').slice(0,90))}</span>
+      <span style="display:flex; gap:6px; white-space:nowrap; align-items:center"><span class="mut small">${esc(e.op||'')}</span><button onclick="event.stopPropagation();closeErr('${encodeURIComponent(sig)}',${!closed})" style="padding:1px 7px; font-size:11px">${closed?'↩ otwórz':'✓ zamknij'}</button></span>
+    </div>
+    <div class="mut small" style="cursor:pointer" onclick="toggleErr(${gi},${ei})">${new Date(e.at).toLocaleString()}</div><div id="err-${gi}-${ei}"></div></div>`;
 }
+async function closeErr(encSig, closed){ const sig=decodeURIComponent(encSig); await api('/api/error-closed',{sig, closed}); if(closed) ERR_CLOSED.add(sig); else ERR_CLOSED.delete(sig); renderErrList(); }
 function toggleErr(gi,ei){
   const el=document.getElementById('err-'+gi+'-'+ei); if(!el) return;
   if(el.innerHTML){ el.innerHTML=''; return; }

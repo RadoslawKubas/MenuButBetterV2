@@ -732,6 +732,25 @@ app.get("/api/client-errors", async (c) => {
   }
 });
 
+// Zamykanie/archiwizowanie bugów (po sygnaturze message+label) — stan lokalny w labie.
+const ERR_CLOSED_FILE = join(HERE, "error-closed.json");
+function loadClosedSigs(): string[] {
+  try { return JSON.parse(readFileSync(ERR_CLOSED_FILE, "utf8")); } catch { return []; }
+}
+function saveClosedSigs(s: string[]): void {
+  writeFileSync(ERR_CLOSED_FILE, JSON.stringify([...new Set(s)], null, 2));
+}
+app.get("/api/error-closed", (c) => c.json({ closed: loadClosedSigs() }));
+app.post("/api/error-closed", async (c) => {
+  const { sig, closed } = await c.req.json<{ sig: string; closed: boolean }>();
+  if (!sig) return c.json({ error: "brak sig" }, 400);
+  let list = loadClosedSigs();
+  if (closed) list.push(sig);
+  else list = list.filter((x) => x !== sig);
+  saveClosedSigs(list);
+  return c.json({ ok: true });
+});
+
 app.get("/api/install-activity", async (c) => {
   const installId = c.req.query("installId") || "";
   try {
