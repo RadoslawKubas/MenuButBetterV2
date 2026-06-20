@@ -547,47 +547,11 @@ export default function App() {
 
       // PREFETCH zdjęć poglądowych NA ŻYWO: gdy model wypisze pozycję, od razu dociągamy dla niej
       // tanie zdjęcie (Serper) — gotowe, zanim skan się skończy; potem reużyte (bez ponownego szukania).
-      prefetchedPhotos.current.clear();
       setScanItems([]);
       setScanFoundName(null);
-      const eff = opts.models;
-      const pfQueue: ScanItemStub[] = [];
-      let pfActive = 0;
-      let pfEnqueued = 0; // szanuje limit auto-dociągania (Koszty)
-      const pumpPrefetch = () => {
-        // Łagodnie (2 równolegle) — żeby prefetch nie dociążał strumienia skanu (ryzyko urwania).
-        while (pfActive < 2 && pfQueue.length > 0) {
-          const stub = pfQueue.shift()!;
-          pfActive++;
-          void (async () => {
-            try {
-              const { photos } = await fetchDishPhotos(stub.original, undefined, {
-                representativeOnly: true,
-                num: 1,
-                photoQuery: stub.photoQuery,
-                verifyModel: eff.verify,
-              });
-              if (photos.length > 0) {
-                const cached = await cachePhotos(photos);
-                prefetchedPhotos.current.set(stub.original, cached);
-                const thumb = cached[0]?.url;
-                setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, photo: thumb } : x)));
-                // Jeśli menu już jest (kolejne partie) — wstaw od razu, z guardem (nie nadpisuj lepszych).
-                setMenu((prev) => (prev ? attachPhotosByName(prev, stub.original, cached) : prev));
-              }
-            } catch {
-              /* ciche — fillDishPhotos po skanie dociągnie brakujące */
-            } finally {
-              pfActive--;
-              pumpPrefetch();
-            }
-          })();
-        }
-      };
       const onScanItem = (stub: ScanItemStub) => {
-        // Nazwy pokazujemy zawsze (za darmo); zdjęcia prefetchujemy gdy auto-zdjęcia włączone i w
-        // ramach limitu z „Kosztów". Markowe też (Coca-Cola itp.) — dostają czysty generyk produktowy,
-        // żeby w podglądzie na żywo nie zostawały bez miniatury.
+        // Nazwa do mini-listy (za darmo). Zdjęcia poglądowe dociąga POMPA, gdy rolling da photo_query
+        // (struktura strumieniuje nazwy bez photo_query — nie szukamy po surowej nazwie).
         setScanItems((prev) => [
           ...prev,
           { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
@@ -595,25 +559,12 @@ export default function App() {
         // Rolling enrich: danie do kolejki; flush co ~8 (enrich startuje w trakcie struktury).
         enrichQueue.push(stub);
         if (enrichQueue.length >= ENRICH_FLUSH) flushEnrich();
-        // Prefetch TYLKO gdy mamy sensowne photo_query. W dwuprzebiegu struktura strumieniuje nazwy
-        // bez photo_query (puste) — wtedy NIE prefetchujemy po surowej nazwie (zły wynik by się
-        // „przykleił"); zdjęcia dociągnie fillDishPhotos po enrich z właściwym photo_query.
-        if (stub.photoQuery && stub.photoQuery.trim() && costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
-          pfEnqueued++;
-          pfQueue.push(stub);
-          pumpPrefetch();
-        }
       };
-      // Enrich NA ŻYWO: gdy dla pozycji dojdzie opis + photo_query → uzupełnij kartę i dociągnij zdjęcie.
+      // (martwe w dwufazowym — server structureOnly nie emituje enrich-item; zostaje dla zgodności sygnatury)
       const onEnrichItem = (stub: ScanItemStub) => {
         setScanItems((prev) => prev.map((x) => (x.original === stub.original
           ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description }
           : x)));
-        if (stub.photoQuery && stub.photoQuery.trim() && costPrefs.autoPhotos && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
-          pfEnqueued++;
-          pfQueue.push(stub);
-          pumpPrefetch();
-        }
       };
       if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
 
@@ -643,6 +594,39 @@ export default function App() {
       // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
       let enrichUsage: Usage = ZERO_USAGE;
       let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
+      // POGLĄDOWE W TRAKCIE: gdy rolling da photo_query, od razu dociągamy tanie poglądowe (Serper/Wiki),
+      // żeby zdjęcia pojawiały się WCZEŚNIE (jak dawny prefetch), a nie w finale. attachPhotosByName jest
+      // no-op gdy pozycji jeszcze nie ma w menu (w trakcie struktury) → trzymamy w previewAcc i dokładamy
+      // przy structureReady/compose. previewStartedRef → ★ z lokalu dopiero po poglądowych.
+      const previewAcc = new Map<string, DishPhotoLite[]>();
+      const pfQueue: { original: string; photoQuery: string }[] = [];
+      let pfActive = 0;
+      let pfEnqueued = 0;
+      const pumpPreview = () => {
+        while (pfActive < 4 && pfQueue.length > 0) {
+          const job = pfQueue.shift()!;
+          pfActive++;
+          void (async () => {
+            try {
+              const { photos } = await fetchDishPhotos(job.original, undefined, {
+                representativeOnly: true, num: 1, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify,
+              });
+              if (photos.length > 0) {
+                const cached = await cachePhotos(photos);
+                previewAcc.set(job.original, cached);
+                previewStartedRef.current = true;
+                setMenu((prev) => (prev ? attachPhotosByName(prev, job.original, cached) : prev));
+                maybeUpgradeVenue();
+              }
+            } catch {
+              /* ciche — brak poglądowego dla tego dania */
+            } finally {
+              pfActive--;
+              pumpPreview();
+            }
+          })();
+        }
+      };
       const enrichQueue: ScanItemStub[] = [];
       const ENRICH_FLUSH = 8;
       const stubToItem = (s: ScanItemStub): MenuItem => ({
@@ -675,7 +659,15 @@ export default function App() {
             );
             // Zbierz wyniki LOKALNIE — rolling w trakcie struktury nie mógł zapatchować menu (pozycji
             // jeszcze w nim nie było); po wszystkich partiach złożymy menu z tego, bez redundantnego finału.
-            enriched.sections.forEach((s) => s.items.forEach((it) => enrichedAcc.set(it.original, { ...it, enriched: true })));
+            enriched.sections.forEach((s) => s.items.forEach((it) => {
+              enrichedAcc.set(it.original, { ...it, enriched: true });
+              // od razu kolejkuj tanie poglądowe (limit z „Kosztów"); apply pojawi się gdy pozycja jest w menu
+              if (costPrefs.autoPhotos && it.photo_query && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+                pfEnqueued++;
+                pfQueue.push({ original: it.original, photoQuery: it.photo_query });
+                pumpPreview();
+              }
+            }));
             setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
             enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj (scanId może jeszcze nie istnieć)
           } catch {
@@ -809,7 +801,15 @@ export default function App() {
       // merged jest przypisywane w domknięciach (równoległe partie) — CFA tego nie śledzi, więc
       // po guardzie traktuje je jako never. Runtime jest poprawny (guard realnie sprawdza); asercja.
       const structureMenu = merged as Menu;
-      setMenu(structureMenu);
+      // Dołącz poglądowe dociągnięte JUŻ w trakcie struktury (rolling dał photo_query, pompa pobrała,
+      // ale apply był no-op bo pozycji nie było w menu) — teraz pozycje są, więc je wstaw.
+      const withPreviews = (m: Menu): Menu => {
+        if (previewAcc.size === 0) return m;
+        let out = m;
+        for (const [orig, ph] of previewAcc) out = attachPhotosByName(out, orig, ph);
+        return out;
+      };
+      setMenu(withPreviews(structureMenu));
       if (scanId) void updateScanMenu(scanId, structureMenu);
       setStructureReady(true); // struktura kompletna → ekran skanu pokaże „Otwórz menu" + kartę lokalu
       structureFrozenRef.current = true; // #2a: od teraz wolno robić upgrade ★ (struktura niezmienna)
@@ -881,17 +881,19 @@ export default function App() {
             name_translated: sectTrans.get(s.name) ?? s.name_translated,
             items: s.items.map((it) => {
               const e = enrichedAcc.get(it.original);
-              return e ? { ...e, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos, enriched: true } : it;
+              // zachowaj zdjęcia z żywego menu (★/poglądowe); inaczej dołóż poglądowe z pompy (previewAcc).
+              const photos = it.photos && it.photos.length > 0 ? it.photos : previewAcc.get(it.original) ?? e?.photos;
+              return e ? { ...e, photos, enriched: true } : photos ? { ...it, photos } : it;
             }),
           })),
           notes: (base.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
         });
-        const finalMenu = compose(structureMenu); // jawnie (poprawny photo_query do fillDishPhotos)
+        const finalMenu = compose(structureMenu); // jawnie (z poglądowymi z pompy)
         setMenu((prev) => (prev ? compose(prev) : finalMenu)); // na żywym menu — zachowaj dociągnięte zdjęcia
         if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich raz
         if (scanId) void updateScanMenu(scanId, finalMenu);
         setScans(await listScans());
-        if (costPrefs.autoPhotos) void fillDishPhotos(finalMenu, scanId!, finalMenu.restaurant_name ?? undefined, setMenu);
+        // (poglądowe lecą POMPĄ w trakcie rollingu — nie wołamy fillDishPhotos tutaj)
         if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
         // Poglądowe ruszyły → teraz wolno podmieniać ★ z lokalu (jeśli lokal już znaleziony; inaczej
         // zrobi to finalizeVenue gdy lookup wróci). Dzięki temu tanie poglądowe pojawiają się PIERWSZE.
