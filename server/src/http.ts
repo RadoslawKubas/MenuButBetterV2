@@ -195,7 +195,7 @@ app.post("/scan", async (c) => {
     }, wantSteps ? 2000 : 5000);
     try {
       const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
-      const { menu, usage, cached } = await extractMenu(images, {
+      const { menu, usage, cached, readable } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
@@ -242,7 +242,13 @@ app.post("/scan", async (c) => {
           cuisine: menu.cuisine ?? null,
         },
       });
-      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached }));
+      // Model skanujący stwierdził „za słaba jakość" (np. mimo że peek przepuścił) → zapamiętaj złe
+      // kadry (nie marnuj modelu ponownie) i daj apce sygnał, by ostrzec usera i nie wysyłać tego znów.
+      const lowQuality = readable === false;
+      if (lowQuality) {
+        for (const img of images) void cacheSet("bad-photo", cacheKey("bad-photo", photoHash(img.base64)), { reason: "skan: model nie odczytał menu (za słaba jakość)", at: Date.now() });
+      }
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached, lowQuality }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached, lowQuality }));
     } catch (e) {
       console.error("scan error:", e);
       const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;

@@ -111,6 +111,8 @@ export interface MenuStructure {
   cuisine: string;
   sections: StructSection[];
   notes: StructNote[];
+  /** Czy ze zdjęć dało się cokolwiek odczytać. false = za słaba jakość (rozmazane/ciemne/ucięte). */
+  readable: boolean;
 }
 
 export const STRUCTURE_SCHEMA = {
@@ -148,8 +150,9 @@ export const STRUCTURE_SCHEMA = {
       },
     },
     notes: { type: "array", description: NOTES_SCHEMA_DESC, items: NOTE_SCHEMA_ITEM },
+    readable: { type: "boolean", description: "Czy zdjęcia są dość czytelne, by odczytać menu. false = za słaba jakość (rozmazane, za ciemne, prześwietlone, ucięte) i nie da się sensownie nic transkrybować — wtedy zostaw sections puste." },
   },
-  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections", "notes"],
+  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections", "notes", "readable"],
 } as const;
 
 // Przebieg 2 (TEKST, wsadowo po nazwach): wzbogaca pozycje o pola, które NIE wymagają obrazu —

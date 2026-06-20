@@ -192,6 +192,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [targetLang, setTargetLang] = useState("polski");
   const [hint, setHint] = useState("");
+  // Czy „Lokal" wpisał użytkownik (true) czy auto-uzupełnił peek (false). Auto-lokal czyścimy przy
+  // starcie nowego skanu (puste zdjęcia) — żeby NIE przeciekał z poprzedniego skanu do nowej migawki.
+  const [hintManual, setHintManual] = useState(false);
   // Replay z migawki: wymusza DOKŁADNIE zapisaną lokalizację (eksperyment na starej próbce — aktualna
   // pozycja nie ma sensu). Czyszczone przy nowych zdjęciach / resecie → wraca do lokalizacji na żywo.
   const [replayLocation, setReplayLocation] = useState<{ location: GeoPoint | null; locationSource: LocationSource; locationHint?: string } | null>(null);
@@ -361,13 +364,23 @@ export default function App() {
     }
   }
 
+  // Po zejściu do 0 zdjęć (start nowego skanu) porzuć AUTO-uzupełniony „Lokal" — żeby nie przeciekł
+  // z poprzedniego skanu. Ręcznie wpisany lokal zostaje (intencja użytkownika).
+  function clearAutoHintIfEmpty(remaining: number) {
+    if (remaining === 0 && !hintManual) { setHint(""); setPeekInfo(null); }
+  }
+
   function removeImage(index: number) {
-    setImages((prev) => prev.filter((_, i) => i !== index));
+    const next = images.filter((_, i) => i !== index);
+    setImages(next);
+    clearAutoHintIfEmpty(next.length);
   }
 
   // Usuwa zdjęcie po uri (z galerii aparatu) + sprząta jego ocenę peek.
   function removeImageByUri(uri: string) {
-    setImages((prev) => prev.filter((i) => i.uri !== uri));
+    const next = images.filter((i) => i.uri !== uri);
+    setImages(next);
+    clearAutoHintIfEmpty(next.length);
     setPeekByUri((prev) => {
       const n = { ...prev };
       delete n[uri];
@@ -473,6 +486,7 @@ export default function App() {
       // tylko te, nie od początku). Plus znacznik, czy coś wróciło z cache (oszczędność).
       const failedBatches: { idx: number; images: PreparedImage[] }[] = [];
       let anyCached = false;
+      let lowQualityCount = 0; // ile fotek model odrzucił jako za słabej jakości (do ostrzeżenia)
       setScanIncomplete(null);
       setScanFromCache(false);
 
@@ -551,9 +565,9 @@ export default function App() {
         const batchHint = merged
           ? [merged.restaurant_name, merged.cuisine].filter(Boolean).join(" ") || undefined
           : opts.hint.trim() || undefined;
-        let incoming: Menu, usage: Usage, cached: boolean;
+        let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean;
         try {
-          ({ menu: incoming, usage, cached } = await scanMenu(
+          ({ menu: incoming, usage, cached, lowQuality } = await scanMenu(
             {
               images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
               targetLang: opts.targetLang,
@@ -572,6 +586,16 @@ export default function App() {
           // (tylko tę partię) i jedź dalej. Cache skanu sprawi, że jeśli serwer policzył a odpowiedź
           // zginęła — ponowienie tej partii jest darmowe.
           failedBatches.push({ idx: bi, images: batch });
+          continue;
+        }
+        if (lowQuality) {
+          // Model skanujący nie odczytał tej fotki (za słaba jakość) — serwer zapamiętał ją jako złą.
+          // Oznacz w UI (badge) i pomiń (nie scalamy pustego wyniku, nie wysyłaj jej ponownie).
+          for (const img of batch) {
+            setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "" }), readable: false, bad: true } }));
+          }
+          lowQualityCount += batch.length;
+          if (batches.length > 1) setScanProgress({ done: Math.min((bi + 1) * SCAN_BATCH, opts.images.length), total: opts.images.length });
           continue;
         }
         if (cached) anyCached = true;
@@ -608,6 +632,9 @@ export default function App() {
 
       // Żadna partia nie przeszła → realny błąd (nie ma czego pokazać).
       if (!merged || !scanId) {
+        if (lowQualityCount > 0 && failedBatches.length === 0) {
+          throw new Error("Zdjęcia są za słabej jakości — model nie odczytał z nich menu. Zrób ostrzejsze/jaśniejsze zdjęcia.");
+        }
         throw new Error("Odczyt menu nie powiódł się (żadna partia nie przeszła) — spróbuj ponownie.");
       }
 
@@ -617,6 +644,9 @@ export default function App() {
       setStatus("done");
       setVenueConfirmed(false); // pokaż krok potwierdzenia lokalu
       setVenueQuery("");
+      if (lowQualityCount > 0) {
+        Alert.alert("Pominięto słabe zdjęcia", `${lowQualityCount} zdjęć było za słabej jakości — model nie odczytał z nich menu, więc je pominąłem (są oznaczone).`);
+      }
       const result = merged;
 
       // REUŻYCIE prefetchu: dołącz do menu zdjęcia poglądowe dociągnięte już w trakcie skanu —
@@ -764,6 +794,7 @@ export default function App() {
     // Wstaw dane migawki do formularza skanu (bez startu — czekamy na klik użytkownika).
     setImages(imgs);
     setHint(c.restaurantHint ?? "");
+    setHintManual(!!(c.restaurantHint && c.restaurantHint.trim())); // lokal z migawki traktuj jak ustalony
     setUseExifLocation(c.useExifLocation);
     setUseDeviceLocation(c.useDeviceLocation);
     // Wymuś lokalizację z migawki przy ponownym skanie (eksperyment 1:1 na starej próbce).
@@ -773,6 +804,8 @@ export default function App() {
   function resetScan() {
     setImages([]);
     setReplayLocation(null);
+    setHint("");
+    setHintManual(false);
     setMenu(null);
     setError(null);
     setStatus("idle");
@@ -1909,7 +1942,7 @@ export default function App() {
                       <Text style={styles.label}>Lokal (opcjonalnie)</Text>
                       <TextInput
                         value={hint}
-                        onChangeText={setHint}
+                        onChangeText={(t) => { setHint(t); setHintManual(t.trim().length > 0); }}
                         placeholder="np. Trattoria da Marco, Florencja"
                         placeholderTextColor={colors.muted}
                         style={styles.input}

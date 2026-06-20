@@ -193,6 +193,8 @@ export const STRUCTURE_SYSTEM = [
   "alergenach) NIE mogą trafić jako pozycje (dania). Wydziel je do tablicy `notes`: `text` (oryginał),",
   "`scope` ('menu' = całe menu, 'section' = konkretna sekcja), `section_index` (indeks sekcji od 0 gdy",
   "scope='section', inaczej null) i `kind` (wait/fee/tax/tip/hours/info). Gdy brak adnotacji — `notes` puste.",
+  "Ustaw `readable=false`, gdy zdjęcia są ZA SŁABEJ JAKOŚCI, by cokolwiek odczytać (mocno rozmazane, za ciemne,",
+  "prześwietlone, ucięte, albo to nie menu) — wtedy zostaw `sections` puste. W zwykłym przypadku `readable=true`.",
   "Nie wymyślaj pozycji, których nie ma na zdjęciach.",
 ].join(" ");
 
@@ -343,7 +345,7 @@ function contextTextStructure(opts: ExtractOptions, n: number): string {
 export async function extractMenu(
   images: InputImage[],
   opts: ExtractOptions,
-): Promise<{ menu: Menu; usage: Usage; cached?: boolean }> {
+): Promise<{ menu: Menu; usage: Usage; cached?: boolean; readable?: boolean }> {
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
   const enrichModel: ModelId = opts.enrichModel && isModelId(opts.enrichModel) ? opts.enrichModel : model;
@@ -352,7 +354,7 @@ export async function extractMenu(
   const ck = scanCacheKey(images, opts, model, enrichModel);
   if (!opts.noCache) {
     const hit = await cacheGet<Menu>("menu-scan", ck, { op: "scan" });
-    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true };
+    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true, readable: true };
   }
 
   let total: Usage = ZERO_USAGE;
@@ -373,8 +375,9 @@ export async function extractMenu(
   const enriched = await enrichMenu(structure, opts, enrichModel);
   total = addUsage(total, enriched.usage);
 
+  const readable = structure.readable !== false; // brak pola → traktuj jako czytelne
   if (!opts.noCache) void cacheSet("menu-scan", ck, enriched.menu, { lang: opts.targetLang });
-  return { menu: enriched.menu, usage: total };
+  return { menu: enriched.menu, usage: total, readable };
 }
 
 /** Przebieg 1 (Claude): vision → STRUKTURA menu (streaming nazw). */
