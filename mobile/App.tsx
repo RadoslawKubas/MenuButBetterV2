@@ -47,6 +47,7 @@ import {
   deleteScan,
   updateScanItem,
   updateScanMenu,
+  setScanSourcePhotos,
   updateScanRestaurant,
   addScanUsage,
   renameScan,
@@ -69,9 +70,12 @@ import {
   addCaptureRun,
   captureImageBase64,
   resolveCaptureUri,
+  persistScanImages,
+  deleteScanImages,
   type ScanCapture,
 } from "./src/captures";
 import { MenuView } from "./src/MenuView";
+import { Lightbox, type LightboxState } from "./src/Lightbox";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
 import { CapturesView } from "./src/CapturesView";
@@ -164,6 +168,7 @@ function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
 export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
+  const [sourceLb, setSourceLb] = useState<LightboxState | null>(null); // podgląd zdjęć źródłowych skanu
   const [showDiag, setShowDiag] = useState(false);
   const [showCaptures, setShowCaptures] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -819,6 +824,16 @@ export default function App() {
       // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
       if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
 
+      // Zapisz ZDJĘCIA ŹRÓDŁOWE (te, z których powstało menu) do podglądu w historii.
+      if (scanId) {
+        try {
+          const sp = persistScanImages(scanId, ordered);
+          if (sp.length > 0) void setScanSourcePhotos(scanId, sp);
+        } catch {
+          /* zapis zdjęć źródłowych best-effort — nie blokuje skanu */
+        }
+      }
+
       // Lokal na ZAMROŻONEJ strukturze. #2a: kartę mógł już pokazać wczesny lookup (onMeta) — NIE resetujemy
       // freshRestaurant. Kontekst karty (wybór/szukanie) z prawdziwym scanId + zamrożonym menu.
       setRestaurantCtx({
@@ -1409,6 +1424,8 @@ export default function App() {
   }
 
   async function removeSaved(id: string) {
+    const sp = scans.find((s) => s.id === id)?.sourcePhotos;
+    if (sp && sp.length > 0) deleteScanImages(sp); // posprzątaj pliki zdjęć źródłowych
     await deleteScan(id);
     setScans(await listScans());
     if (openScan?.id === id) setOpenScan(null);
@@ -2079,9 +2096,9 @@ export default function App() {
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
-              {/* „Nowy skan" PRZYKLEJONY w pasku zakładek (nie na scrollu) — gdy patrzysz na wynik skanu. */}
-              {tab === "scan" && status === "done" && menu ? (
-                <Pressable onPress={resetScan} style={styles.tabsNewScan}>
+              {/* „Nowy skan" PRZYKLEJONY w pasku — gdy patrzysz na wynik skanu LUB jesteś w Historii. */}
+              {tab === "history" || (tab === "scan" && status === "done" && menu) ? (
+                <Pressable onPress={() => { resetScan(); setTab("scan"); }} style={styles.tabsNewScan}>
                   <Text style={styles.navText}>＋ Nowy skan</Text>
                 </Pressable>
               ) : null}
@@ -2162,6 +2179,19 @@ export default function App() {
                 </Text>
               )}
               {renderScanMeta(openScan)}
+              {openScan.sourcePhotos && openScan.sourcePhotos.length > 0 ? (
+                <Pressable
+                  style={styles.sourcePhotosBtn}
+                  onPress={() =>
+                    setSourceLb({
+                      photos: openScan.sourcePhotos!.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })),
+                      index: 0,
+                    })
+                  }
+                >
+                  <Text style={styles.sourcePhotosText}>📷 Zdjęcia źródłowe menu ({openScan.sourcePhotos.length})</Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 style={[styles.button, styles.secondary, appending && styles.disabled]}
                 disabled={appending}
@@ -2609,6 +2639,7 @@ export default function App() {
           onRemoveShot={removeImageByUri}
         />
         <ApiErrorToast />
+        <Lightbox state={sourceLb} onClose={() => setSourceLb(null)} />
         <RenameModal
           visible={!!renameTarget}
           initialValue={renameTarget?.restaurantName ?? renameTarget?.restaurant?.name ?? ""}
@@ -2835,6 +2866,8 @@ const styles = StyleSheet.create({
   scanBannerTitle: { fontSize: 14, fontWeight: "800", color: colors.accent },
   scanBannerSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   geo: { fontSize: 13, color: colors.muted, marginTop: 12 },
+  sourcePhotosBtn: { marginTop: 12, alignSelf: "flex-start", paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.badgeBg, borderRadius: 999 },
+  sourcePhotosText: { color: colors.accent, fontWeight: "700", fontSize: 14 },
   metaCard: {
     backgroundColor: colors.card,
     borderRadius: 12,

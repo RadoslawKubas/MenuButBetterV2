@@ -130,6 +130,32 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
   return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
 }
 
+/** Trwale zapisuje zdjęcia ŹRÓDŁOWE skanu (te, z których powstało menu) — do podglądu w historii.
+ *  Reużywa tego samego katalogu/co migawki (resolveCaptureUri rozwiązuje ścieżkę). ownerId = scanId. */
+export function persistScanImages(ownerId: string, images: PreparedImage[]): CaptureImage[] {
+  const out: CaptureImage[] = [];
+  images.forEach((img, i) => {
+    try {
+      out.push(persistImage(ownerId, i, img));
+    } catch {
+      // pojedynczy plik się nie zapisał — pomiń, reszta i tak się przyda
+    }
+  });
+  return out;
+}
+
+/** Usuwa pliki zdjęć źródłowych skanu (przy kasowaniu skanu z historii) — sprzątanie miejsca. */
+export function deleteScanImages(photos: { path: string }[]): void {
+  for (const p of photos) {
+    try {
+      const f = fileFor(p.path);
+      if (f?.exists) f.delete();
+    } catch {
+      // ignorujemy — best effort
+    }
+  }
+}
+
 export async function saveCapture(input: {
   images: PreparedImage[];
   restaurantHint?: string;

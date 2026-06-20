@@ -37,6 +37,8 @@ export interface SavedScan {
   restaurant?: RestaurantInfo | null;
   /** Łączny koszt tego skanu (skan + weryfikacje zdjęć + opisy). */
   usage?: Usage;
+  /** Zdjęcia ŹRÓDŁOWE skanu (te, z których powstało menu) — do podglądu w historii (resolveCaptureUri). */
+  sourcePhotos?: { path: string; mediaType: string }[];
 }
 
 const KEY = "mbb.scans.v1";
@@ -217,6 +219,14 @@ export async function updateScanMenu(id: string, menu: Menu): Promise<void> {
   const scan = all.find((s) => s.id === id);
   if (!scan) return;
   scan.menu = menu;
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+}
+
+export async function setScanSourcePhotos(id: string, photos: { path: string; mediaType: string }[]): Promise<void> {
+  const all = await listScans();
+  const scan = all.find((s) => s.id === id);
+  if (!scan) return;
+  scan.sourcePhotos = photos;
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
 }
 
