@@ -57,8 +57,9 @@ export interface ExtractOptions {
   /** Wzbogacona pozycja NA ŻYWO z przebiegu enrich (tłumaczenie + photo_query + opis) — apka
    *  sukcesywnie uzupełnia mini-karty (opis) i dociąga zdjęcie po photo_query. */
   onEnrichItem?: (item: ScanItemStub) => void;
-  /** Nazwa lokalu NA ŻYWO — gdy tylko model ją ustali (z szyldu/okładki), nie czekając na koniec. */
-  onMeta?: (m: { restaurantName?: string }) => void;
+  /** Nazwa lokalu + KUCHNIA NA ŻYWO — gdy tylko model je ustali (kuchnia jest w JSON przed daniami),
+   *  nie czekając na koniec. Apka używa kuchni do wczesnego, spójnego enrichu (klucz cache). */
+  onMeta?: (m: { restaurantName?: string; cuisine?: string }) => void;
   /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
   /** Tylko STRUKTURA (vision) — bez enrichu. Zwraca Menu z oryginalnymi nazwami; enrich robi /enrich. */
@@ -119,7 +120,9 @@ function emitNewItems(text: string, state: { emitted: number }, onItem: (i: Scan
             photoQuery: typeof o.photo_query === "string" ? o.photo_query : "",
             photoQueryLocal: typeof o.photo_query_local === "string" ? o.photo_query_local : "",
             branded: o.branded === true,
-            description: typeof o.description === "string" ? o.description : "",
+            // Strumień STRUKTURY niesie menu_description (opis z karty) — potrzebny do spójnego klucza
+            // cache enrichu (rolling per ~8 dań w apce musi mieć ten sam md co finał). Enrich-stream ma description.
+            description: typeof o.menu_description === "string" ? o.menu_description : typeof o.description === "string" ? o.description : "",
             price: typeof o.price === "string" ? o.price : null,
             currency: typeof o.currency === "string" ? o.currency : null,
           });
@@ -443,6 +446,7 @@ async function structureClaude(
     let lastItems = -1;
     const itemState = { emitted: 0 };
     let nameSent = false;
+    let cuisineSent = false;
     stream.on("text", (_delta, snapshot) => {
       if (opts.onProgress) {
         const items = (snapshot.match(/"original"\s*:/g) || []).length;
@@ -451,6 +455,10 @@ async function structureClaude(
       if (opts.onMeta && !nameSent) {
         const m = snapshot.match(/"restaurant_name"\s*:\s*"([^"]+)"/); // nazwa pojawia się wcześnie w JSON
         if (m && m[1]!.trim()) { nameSent = true; opts.onMeta({ restaurantName: m[1] }); }
+      }
+      if (opts.onMeta && !cuisineSent) {
+        const cm = snapshot.match(/"cuisine"\s*:\s*"([^"]+)"/); // kuchnia jest w JSON przed sekcjami/daniami
+        if (cm && cm[1]!.trim()) { cuisineSent = true; opts.onMeta({ cuisine: cm[1] }); }
       }
       if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem);
     });
@@ -689,12 +697,15 @@ export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions,
   const targetLang = opts.targetLang;
   const cuisine = structure.cuisine;
   const country = countryOf(opts.locationHint);
+  // Klucz cache enrichu: lokalizacja na poziomie MIASTA/REGIONU (pełny locationHint), nie tylko kraju —
+  // dokładniejsze regionalnie (np. inna paella), kosztem węższego reużycia. Fallback: kraj → "".
+  const locKey = opts.locationHint?.trim() || country || "";
 
   const flat: { original: string; menu_description: string }[] = [];
   for (const s of structure.sections) for (const it of s.items) flat.push({ original: it.original, menu_description: it.menu_description });
 
   const notes = structure.notes ?? [];
-  const itemKey = (original: string, md: string) => cacheKey("item-enrich", original, md, cuisine, country, targetLang, model);
+  const itemKey = (original: string, md: string) => cacheKey("item-enrich", original, md, cuisine, locKey, targetLang, model);
   const sectKey = (name: string) => cacheKey("item-enrich", "§sect", name, targetLang, model);
   const noteKey = (text: string) => cacheKey("item-enrich", "§note", text, targetLang, model);
 

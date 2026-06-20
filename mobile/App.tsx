@@ -92,6 +92,7 @@ import {
   type GeoPoint,
   type LocationSource,
   type Menu,
+  type MenuItem,
   type ModelId,
   type ModelRole,
   type PhotoDebug,
@@ -587,6 +588,9 @@ export default function App() {
           ...prev,
           { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
         ]);
+        // Rolling enrich: danie do kolejki; flush co ~8 (enrich startuje w trakcie struktury).
+        enrichQueue.push(stub);
+        if (enrichQueue.length >= ENRICH_FLUSH) flushEnrich();
         // Prefetch TYLKO gdy mamy sensowne photo_query. W dwuprzebiegu struktura strumieniuje nazwy
         // bez photo_query (puste) — wtedy NIE prefetchujemy po surowej nazwie (zły wynik by się
         // „przykleił"); zdjęcia dociągnie fillDishPhotos po enrich z właściwym photo_query.
@@ -624,10 +628,31 @@ export default function App() {
         if (opts.images.length > 1) setScanProgress({ done: Math.min(doneImages, opts.images.length), total: opts.images.length });
       };
 
-      // ENRICH PER‑PARTIA (#2b): gdy partia skończy STRUKTURĘ, od razu ją enrichujemy — nakłada się na
-      // strukturę kolejnych partii (nie czekamy aż cała struktura przejdzie). Patch W MIEJSCU po nazwie.
+      // ENRICH STRUMIENIOWY (rolling po ~8 dań): dania spływają ze STRUKTURY (onScanItem) → kolejka →
+      // flush paczkami do /enrich. Startuje WCZEŚNIE (po ustaleniu kuchni z onMeta/peeku) i nakłada się
+      // na trwającą strukturę, ale robi ~N/8 wywołań zamiast jednego na danie. Patch W MIEJSCU po nazwie.
+      // Spójność klucza cache: ta sama kuchnia (scanCuisine) + locationHint + menu_description (ze strumienia)
+      // co finałowy enrich → finał trafia w cache, nic się nie marnuje.
       const enrichJobs: Promise<void>[] = [];
-      const enrichBatch = (batchMenu: Menu) => {
+      let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
+      const enrichQueue: ScanItemStub[] = [];
+      const ENRICH_FLUSH = 8;
+      const stubToItem = (s: ScanItemStub): MenuItem => ({
+        original: s.original, translated: s.original, source_text: s.original,
+        menu_description: s.description || "", description: "",
+        ingredients: [], allergens: [], category: "other",
+        dietary: { vegetarian: false, vegan: false, gluten_free: false }, spice_level: 0,
+        price: s.price, currency: s.currency,
+      });
+      const flushEnrich = () => {
+        if (enrichQueue.length === 0) return;
+        const batch = enrichQueue.splice(0, enrichQueue.length);
+        const partial: Menu = {
+          restaurant_name: null, restaurant_address: null, restaurant_language: "",
+          cuisine: scanCuisine,
+          sections: [{ name: "", name_translated: "", items: batch.map(stubToItem) }],
+          notes: [],
+        };
         enrichJobs.push((async () => {
           try {
             const onEnrich = (stub: ScanItemStub) => {
@@ -635,15 +660,15 @@ export default function App() {
               setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description } : x)));
             };
             const { menu: enriched, usage } = await enrichMenuOnServer(
-              batchMenu,
-              { targetLang: opts.targetLang, locationHint, cuisineHint: pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-              (p) => setScanPhase(scanPhaseLabel(p)),
+              partial,
+              { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+              undefined,
               onEnrich,
             );
             setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
             if (scanId) void addScanUsage(scanId, usage);
           } catch {
-            // enrich tej partii padł — pozycje zostają z oryginalnymi nazwami (reszta i tak działa)
+            // paczka enrich padła — pozycje zostają z oryginałem; finałowy enrich i tak dopina
           }
         })());
       };
@@ -668,12 +693,13 @@ export default function App() {
             (p) => setScanPhase(scanPhaseLabel(p)),
             onScanItem,
             onEnrichItem,
-            (m) => { // nazwa lokalu na żywo + #2a: read-only lookup JUŻ w trakcie struktury
+            (m) => { // nazwa lokalu + KUCHNIA na żywo (kuchnia ze struktury → spójny klucz enrichu) + #2a
+              if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
               if (!m.restaurantName) return;
               setScanFoundName(m.restaurantName);
               if (!earlyVenueRef.current) {
                 earlyVenueRef.current = true;
-                const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: pickPeekCuisine() || "", sections: [], notes: [] };
+                const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
                 void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
               }
             },
@@ -732,7 +758,7 @@ export default function App() {
           setScans(await listScans());
         });
         bumpProgress(batch.length);
-        enrichBatch(incoming); // #2b: enrich tej partii od razu (nakłada się na strukturę kolejnych)
+        // (enrich leci rolling z onScanItem — patrz flushEnrich; tu już nie wołamy per-partia)
       };
 
       // Partia 0 OSOBNO — ustala bazowe menu + nazwę/kuchnię (kontekst dla pozostałych). Potem
@@ -807,14 +833,29 @@ export default function App() {
       }
       // (jeśli earlyVenueRef ustawiony, ale wynik jeszcze nie doszedł → applyEarlyVenue domknie sam, gdy wróci)
 
-      // === FAZA B (#2b): enrich już LECI per‑partia (ruszył w runBatch, nakłada się na strukturę). Tu
-      // czekamy aż wszystkie się wzbogacą → finalny zapis + zdjęcia/opisy + „done". ===
+      // === FAZA B: enrich leci ROLLING (po ~8 dań, ruszył już w trakcie struktury). Tu domykamy ostatnią
+      // paczkę, czekamy na rolling, robimy FINAŁOWY enrich na KOMPLETNEJ strukturze (tłumaczy SEKCJE,
+      // których rolling nie ruszał, i dopina pominięte) — dania z rollingu = trafienia cache → szybko. ===
       void (async () => {
         setScanPhase({ label: "Tłumaczę i opisuję dania…" });
+        flushEnrich(); // domknij ostatnią paczkę (<8 dań)
         try {
           await Promise.all(enrichJobs);
         } catch {
-          /* pojedyncza partia mogła paść — finalizujemy z tym, co jest */
+          /* część paczek mogła paść — finalizujemy z tym, co jest */
+        }
+        // Finał na komplecie: sekcje + ewentualne pominięte pozycje (dania z rollingu trafiają w cache).
+        try {
+          const { menu: enriched, usage } = await enrichMenuOnServer(
+            structureMenu,
+            { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
+            (p) => setScanPhase(scanPhaseLabel(p)),
+            (stub) => setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev)),
+          );
+          setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
+          if (scanId) void addScanUsage(scanId, usage);
+        } catch {
+          /* finał padł — rolling i tak dał większość; zostaje co jest */
         }
         // Odczyt aktualnego (wzbogaconego w miejscu) menu — updater setState liczy się synchronicznie.
         let finalMenu: Menu = structureMenu;
