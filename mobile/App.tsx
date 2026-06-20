@@ -2363,14 +2363,24 @@ export default function App() {
                       </ScrollView>
                     </>
                   ) : null}
-                  {structureReady ? (
-                    // Struktura gotowa (zamrożona) → wejdź do menu; enrich/zdjęcia lecą w tle.
-                    <View style={styles.scanReadyBox}>
-                      <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
-                        <Text style={styles.enterMenuText}>📖 Otwórz menu →</Text>
-                      </Pressable>
-                      <Text style={styles.scanReadySub}>Struktura gotowa. Tłumaczenia i zdjęcia dochodzą w tle.</Text>
-                    </View>
+                  {structureReady && menu ? (
+                    // Struktura gotowa (zamrożona) → total dań stały; pasek dopełnia się z enrichem.
+                    (() => {
+                      const total = menu.sections.reduce((n, s) => n + s.items.length, 0);
+                      const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
+                      const pct = total > 0 ? Math.min(1, enriched / total) : 0;
+                      return (
+                        <View style={styles.scanReadyBox}>
+                          <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
+                            <Text style={styles.enterMenuText}>📖 Otwórz menu →</Text>
+                          </Pressable>
+                          <View style={[styles.progressTrack, { marginTop: 10, marginHorizontal: 16, alignSelf: "stretch" }]}>
+                            <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` }]} />
+                          </View>
+                          <Text style={styles.scanReadySub}>Tłumaczę dania {enriched}/{total} — reszta dochodzi w tle.</Text>
+                        </View>
+                      );
+                    })()
                   ) : null}
                 </View>
               ) : null}
@@ -2388,18 +2398,31 @@ export default function App() {
               {(status === "done" || (status === "scanning" && browseEarly)) && menu ? (
                 <View>
                   {status === "scanning" ? (
-                    // Przeglądanie w trakcie skanu: kompaktowy baner postępu zamiast „Zapisano".
-                    <View style={styles.scanBanner}>
-                      <ActivityIndicator size="small" color={colors.accent} />
-                      <View style={{ flex: 1, marginLeft: 10 }}>
-                        <Text style={styles.scanBannerTitle}>
-                          {scanProgress ? `⏳ Skanuję ${scanProgress.done}/${scanProgress.total} stron…` : scanPhase?.label ? `⏳ ${scanPhase.label}` : "⏳ Doczytuję w tle…"}
-                        </Text>
-                        <Text style={styles.scanBannerSub} numberOfLines={2}>
-                          📖 {menu.sections.reduce((n, s) => n + s.items.length, 0)} pozycji — czytaj, reszta dojdzie sama{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
-                        </Text>
-                      </View>
-                    </View>
+                    // Przeglądanie w trakcie skanu: baner z paskiem postępu DAŃ. Total rośnie w trakcie
+                    // struktury (meta „ucieka"), a po jej zamrożeniu (structureReady) jest stały i pasek
+                    // dopełnia się z każdym wzbogaconym daniem.
+                    (() => {
+                      const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
+                      const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
+                      const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
+                      const pct = total > 0 ? Math.min(1, enriched / total) : 0;
+                      return (
+                        <View style={styles.scanBanner}>
+                          <ActivityIndicator size="small" color={colors.accent} />
+                          <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={styles.scanBannerTitle}>
+                              {structureReady ? `⏳ Tłumaczę dania ${enriched}/${total}…` : scanProgress ? `⏳ Czytam strony ${scanProgress.done}/${scanProgress.total} · ${total} dań…` : `⏳ Czytam menu · ${total} dań…`}
+                            </Text>
+                            <View style={styles.progressTrack}>
+                              <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` }]} />
+                            </View>
+                            <Text style={styles.scanBannerSub} numberOfLines={1}>
+                              {structureReady ? "Struktura gotowa — reszta dochodzi w miejscu." : "Liczba dań jeszcze rośnie…"}{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })()
                   ) : (
                     <View style={styles.savedRow}>
                       <Text style={styles.savedNote}>✓ Zapisano w historii</Text>
