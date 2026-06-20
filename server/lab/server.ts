@@ -785,11 +785,11 @@ app.post("/api/sim-scan-clear", async (c) => {
 
 // 1b) Opis dania (rola „describe") — jak /dish-info w apce.
 app.post("/api/sim-describe", async (c) => {
-  const b = await c.req.json<{ dish: string; description?: string; cuisine?: string; location?: string; restaurant?: string; model?: ModelId }>();
+  const b = await c.req.json<{ dish: string; description?: string; cuisine?: string; location?: string; restaurant?: string; model?: ModelId; captureId?: string }>();
   if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
   try {
     const t0 = Date.now();
-    const { text, usage } = await withCostLog("sim-describe", { dish: b.dish, model: b.model }, () =>
+    const { text, usage } = await withCostLog("sim-describe", { dish: b.dish, model: b.model, lokal: b.restaurant, captureId: b.captureId }, () =>
       describeDish({
         name: b.dish,
         description: b.description,
@@ -821,10 +821,11 @@ app.post("/api/sim-dish", async (c) => {
     verifyModel?: string;
     num?: number;
     verify?: boolean;
+    captureId?: string;
   }>();
   if (!b.dish?.trim()) return c.json({ error: "brak nazwy dania" }, 400);
   try {
-    const { photos, usage, debug } = await withCostLog("sim-dish", { dish: b.dish, model: b.verifyModel || "claude-sonnet-4-6", lokal: b.restaurantName }, () =>
+    const { photos, usage, debug } = await withCostLog("sim-dish", { dish: b.dish, model: b.verifyModel || "claude-sonnet-4-6", lokal: b.restaurantName, captureId: b.captureId }, () =>
     runDishPhotos({
       dish: b.dish,
       photoQuery: b.photoQuery,
@@ -848,10 +849,10 @@ app.post("/api/sim-dish", async (c) => {
 
 // 3) Tier 0 — dopasowanie puli zdjęć lokalu (Google Places + TripAdvisor) do dań.
 app.post("/api/sim-venue", async (c) => {
-  const b = await c.req.json<{ dishes: string[]; cuisine?: string; photoNames?: string[]; taPhotos?: { url: string; caption: string | null }[]; model?: string; certain?: boolean }>();
+  const b = await c.req.json<{ dishes: string[]; cuisine?: string; photoNames?: string[]; taPhotos?: { url: string; caption: string | null }[]; model?: string; certain?: boolean; captureId?: string; restaurantName?: string }>();
   const t0 = Date.now();
   try {
-    const { matches, usage } = await withCostLog("sim-venue", { model: b.model, dishes: (b.dishes ?? []).length }, () =>
+    const { matches, usage } = await withCostLog("sim-venue", { model: b.model, dishes: (b.dishes ?? []).length, lokal: b.restaurantName, captureId: b.captureId }, () =>
       matchVenuePhotos({
         photoNames: b.photoNames ?? [],
         taPhotos: b.taPhotos ?? [],
@@ -890,14 +891,42 @@ app.get("/api/cost-log", (c) => {
     }),
     { count: 0, calls: 0, inTok: 0, outTok: 0, tokenCost: 0, bytesSent: 0, bytesRecv: 0, dataCost: 0, totalCost: 0 },
   );
-  // Rozbicie po typie operacji (do podsumowania).
-  const byOp: Record<string, { count: number; totalCost: number }> = {};
+  // GRUPOWANIE per menu: skan + wszystkie dalsze operacje na tym samym samplu (captureId),
+  // a gdy brak captureId — po nazwie lokalu. Każda grupa: suma + rozbicie per provider + operacje.
+  const meta = loadMeta();
+  const capName = (id?: string): string => {
+    const cap = meta.find((x) => x.id === id);
+    return (cap?.labScan?.menu?.restaurantName as string) || cap?.result?.restaurantName || ("sample " + (id ?? "").slice(0, 8));
+  };
+  const groupOf = (e: (typeof entries)[number]): { key: string; label: string } => {
+    const cid = e.meta?.captureId as string | undefined;
+    if (cid) return { key: "c:" + cid, label: capName(cid) };
+    const lok = e.meta?.lokal as string | undefined;
+    if (lok) return { key: "r:" + lok.toLowerCase(), label: lok };
+    return { key: "—", label: "Inne (niepowiązane z menu)" };
+  };
+  type Prov = { provider: string; calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number };
+  const gmap: Record<string, { key: string; label: string; totalCost: number; tokenCost: number; dataCost: number; count: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
   for (const e of entries) {
-    byOp[e.op] = byOp[e.op] || { count: 0, totalCost: 0 };
-    byOp[e.op]!.count++;
-    byOp[e.op]!.totalCost += e.totalCost;
+    const { key, label } = groupOf(e);
+    const g = (gmap[key] = gmap[key] || { key, label, totalCost: 0, tokenCost: 0, dataCost: 0, count: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
+    g.totalCost += e.totalCost;
+    g.tokenCost += e.tokenCost;
+    g.dataCost += e.dataCost;
+    g.bytesSent += e.bytesSent;
+    g.bytesRecv += e.bytesRecv;
+    g.count++;
+    g.ts = Math.max(g.ts, e.ts);
+    for (const d of e.delta) {
+      const p = (g.byProvider[d.provider] = g.byProvider[d.provider] || { provider: d.provider, calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 });
+      p.calls += d.calls; p.inTok += d.inTok; p.outTok += d.outTok; p.costUsd += d.costUsd; p.bytesSent += d.bytesSent; p.bytesRecv += d.bytesRecv;
+    }
+    g.entries.push(e);
   }
-  return c.json({ period, egressUsdPerGB: egress, entries: entries.slice(0, 300), agg, byOp });
+  const groups = Object.values(gmap)
+    .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
+    .sort((a, b) => b.ts - a.ts);
+  return c.json({ period, egressUsdPerGB: egress, agg, groups });
 });
 
 app.post("/api/cost-log-clear", (c) => {

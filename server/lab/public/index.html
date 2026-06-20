@@ -586,7 +586,7 @@ async function simVenue(){
   const out=document.getElementById('simVenueOut'); out.innerHTML='<div class="mut small">dopasowuję pulę zdjęć lokalu…</div>';
   const dishes=SIM.items.map(it=>it.original).filter(Boolean);
   const certain = SIM.venue.nameVerified !== false;
-  const r=await api('/api/sim-venue',{dishes, cuisine:SIM.cuisine, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVenueModel').value, certain});
+  const r=await api('/api/sim-venue',{dishes, cuisine:SIM.cuisine, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVenueModel').value, certain, captureId:SIM.captureId, restaurantName:SIM.restaurantName});
   if(r.error){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); return; }
   const ms=(r.matches||[]).map(m=>{
     const thumb = m.source==='tripadvisor' && m.url ? `<img src="${esc(m.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.2">` : `<div style="width:74px;height:74px;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--mut)">Google</div>`;
@@ -650,7 +650,7 @@ async function simDescribe(i){
     const r=await api('/api/sim-describe',{
       dish:it.original, description:it.description, cuisine:SIM.cuisine,
       restaurant:SIM.restaurantName, location:SIM.venue?.address||undefined,
-      model:document.getElementById('simDescribeModel').value,
+      model:document.getElementById('simDescribeModel').value, captureId:SIM.captureId,
     });
     if(r.error) throw new Error(r.error);
     out.innerHTML=`<div class="mut small" style="margin-top:6px">📝 opis (${esc(document.getElementById('simDescribeModel').value)}) · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms</div><pre class="pre">${esc(r.text||'')}</pre>`;
@@ -665,7 +665,7 @@ async function simDish(i){
     const r=await api('/api/sim-dish',{
       dish:it.original, photoQuery:it.photoQuery, photoQueryLocal:it.photoQueryLocal, cuisine:SIM.cuisine,
       restaurantName:SIM.restaurantName, city:SIM.venue?.city, taLocationId:SIM.venue?.taLocationId, branded:it.branded, website:SIM.venue?.website,
-      verifyModel:document.getElementById('simVerifyModel').value, num:4,
+      verifyModel:document.getElementById('simVerifyModel').value, num:4, captureId:SIM.captureId,
     });
     if(r.error) throw new Error(r.error);
     const finalThumbs=(r.photos||[]).map(p=>{
@@ -682,7 +682,7 @@ async function simDish(i){
 }
 
 /* ---- Koszty i ceny ---- */
-let COST_PERIOD='all', COST_OPEN=false, COST_ENTRIES=[];
+let COST_PERIOD='all', COST_OPEN=false, COST_GROUPS=[], EGRESS_RATE=0.1;
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
 function fmtBytes(n){ n=n||0; if(n>=1073741824) return (n/1073741824).toFixed(2)+' GB'; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return (n/1024).toFixed(0)+' KB'; return n+' B'; }
 function fmtTokk(n){ n=n||0; return n>=1000 ? (n/1000).toFixed(1)+'k' : ''+n; }
@@ -699,31 +699,45 @@ function renderCostPeriod(){
 function setCostPeriod(k){ COST_PERIOD=k; renderCostPeriod(); loadCostLog(); }
 async function loadCostLog(){
   const r=await api('/api/cost-log?period='+COST_PERIOD);
-  COST_ENTRIES=r.entries||[]; const a=r.agg||{};
+  COST_GROUPS=r.groups||[]; EGRESS_RATE=r.egressUsdPerGB||0.1; const a=r.agg||{};
   document.getElementById('costInfo').textContent='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')';
   document.getElementById('costAgg').innerHTML=`
     <div class="step" style="margin-top:8px">
-      <div style="font-size:18px; font-weight:800; color:var(--acc)">Σ ${fmtUsd(a.totalCost)} <span class="mut small">(${a.count||0} operacji)</span></div>
-      <div class="mut small" style="margin-top:4px">tokeny: ${fmtUsd(a.tokenCost)} · transfer: ${fmtUsd(a.dataCost)} (egress $${r.egressUsdPerGB}/GB)</div>
+      <div style="font-size:18px; font-weight:800; color:var(--acc)">Σ ${fmtUsd(a.totalCost)} <span class="mut small">(${a.count||0} operacji, ${COST_GROUPS.length} menu)</span></div>
+      <div class="mut small" style="margin-top:4px">tokeny: ${fmtUsd(a.tokenCost)} · transfer: ${fmtUsd(a.dataCost)} (egress $${EGRESS_RATE}/GB)</div>
       <div class="mut small">tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out · wywołań API ${a.calls||0} · ⬆️ ${fmtBytes(a.bytesSent)} ⬇️ ${fmtBytes(a.bytesRecv)}</div>
-      ${Object.keys(r.byOp||{}).length?`<div class="mut small" style="margin-top:4px">${Object.entries(r.byOp).map(([op,o])=>esc(op)+': '+o.count+'× '+fmtUsd(o.totalCost)).join(' · ')}</div>`:''}
     </div>`;
-  document.getElementById('costLog').innerHTML = COST_ENTRIES.length ? COST_ENTRIES.map((e,i)=>`
-    <div class="cand" onclick="toggleCostEntry(${i})">
-      <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(e.op)}</b> <b style="color:var(--acc)">${fmtUsd(e.totalCost)}</b></div>
-      <div class="mut small">${new Date(e.ts).toLocaleString()} · ${e.ms}ms · ${esc(JSON.stringify(e.meta).slice(0,70))}</div>
-      <div id="costE-${i}"></div>
+  document.getElementById('costLog').innerHTML = COST_GROUPS.length ? COST_GROUPS.map((g,gi)=>`
+    <div class="cand" onclick="toggleCostGroup(${gi})">
+      <div style="display:flex; justify-content:space-between; gap:8px"><b>📖 ${esc(g.label)}</b> <b style="color:var(--acc)">${fmtUsd(g.totalCost)}</b></div>
+      <div class="mut small">${g.count} operacji · token ${fmtUsd(g.tokenCost)} · transfer ${fmtUsd(g.dataCost)} · ${new Date(g.ts).toLocaleString()}</div>
+      <div id="costG-${gi}"></div>
     </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak operacji w tym okresie</div>';
 }
-function toggleCostEntry(i){
-  const el=document.getElementById('costE-'+i); if(!el) return;
+function toggleCostGroup(gi){
+  const el=document.getElementById('costG-'+gi); if(!el) return;
   if(el.innerHTML){ el.innerHTML=''; return; }
-  const e=COST_ENTRIES[i];
+  const g=COST_GROUPS[gi];
+  const provRows=(g.byProvider||[]).map(p=>{ const dc=p.bytesSent/1e9*EGRESS_RATE; return `<tr><td><b>${esc(p.provider)}</b></td><td class="num">${p.calls}</td><td class="num">${fmtTokk(p.inTok)}/${fmtTokk(p.outTok)}</td><td class="num">${fmtUsd(p.costUsd+dc)}</td><td class="num">${fmtBytes(p.bytesSent)}</td></tr>`; }).join('');
+  const opRows=(g.entries||[]).map((e,ei)=>`
+    <div class="cand" style="margin-top:4px" onclick="event.stopPropagation(); toggleGroupEntry(${gi},${ei})">
+      <div style="display:flex; justify-content:space-between; gap:8px"><span><b>${esc(e.op)}</b> <span class="mut small">${esc((e.meta&&(e.meta.dish||e.meta.model||''))||'')}</span></span> <b>${fmtUsd(e.totalCost)}</b></div>
+      <div class="mut small">${new Date(e.ts).toLocaleTimeString()} · ${e.ms}ms</div>
+      <div id="costGE-${gi}-${ei}"></div>
+    </div>`).join('');
   el.innerHTML=`<div style="margin-top:6px; border-top:1px solid var(--line); padding-top:6px">
-    <div class="mut small">koszt tokenów ${fmtUsd(e.tokenCost)} · transfer ${fmtUsd(e.dataCost)} · ⬆️ ${fmtBytes(e.bytesSent)} ⬇️ ${fmtBytes(e.bytesRecv)}</div>
-    <table style="margin-top:4px"><thead><tr><th>provider</th><th>wyw.</th><th>tok in/out</th><th>koszt</th><th>⬆️</th><th>⬇️</th></tr></thead><tbody>
+    <div class="mut small" style="font-weight:700; margin-bottom:4px">Na co poszło (per provider / API):</div>
+    <table><thead><tr><th>provider</th><th>wyw.</th><th>tok in/out</th><th>koszt</th><th>⬆️ sent</th></tr></thead><tbody>${provRows}</tbody></table>
+    <div class="mut small" style="font-weight:700; margin:8px 0 2px">Operacje (${g.count}) — klik = szczegóły:</div>
+    ${opRows}</div>`;
+}
+function toggleGroupEntry(gi,ei){
+  const el=document.getElementById('costGE-'+gi+'-'+ei); if(!el) return;
+  if(el.innerHTML){ el.innerHTML=''; return; }
+  const e=COST_GROUPS[gi].entries[ei];
+  el.innerHTML=`<table style="margin-top:4px"><thead><tr><th>provider</th><th>wyw.</th><th>tok</th><th>koszt</th><th>⬆️</th><th>⬇️</th></tr></thead><tbody>
     ${(e.delta||[]).map(d=>`<tr><td><b>${esc(d.provider)}</b></td><td class="num">${d.calls}</td><td class="num">${fmtTokk(d.inTok)}/${fmtTokk(d.outTok)}</td><td class="num">${fmtUsd(d.costUsd)}</td><td class="num">${fmtBytes(d.bytesSent)}</td><td class="num">${fmtBytes(d.bytesRecv)}</td></tr>`).join('')}
-    </tbody></table></div>`;
+    </tbody></table>`;
 }
 async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
 async function loadPrices(){
