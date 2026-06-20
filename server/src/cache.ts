@@ -64,6 +64,10 @@ export async function initCache(): Promise<void> {
     `);
     ready = true;
     console.log("[cache] cache treści GOTOWY (Postgres + LRU).");
+    // Sprzątanie: usuń WYGASŁE wpisy (były tylko pomijane przy odczycie → rosły bez końca). Best-effort.
+    p.query(`DELETE FROM content_cache WHERE expires_at IS NOT NULL AND expires_at < now()`)
+      .then((r) => { if (r.rowCount) console.log(`[cache] usunięto ${r.rowCount} wygasłych wpisów.`); })
+      .catch((e) => console.error("[cache] czyszczenie wygasłych nieudane:", (e as Error).message));
   } catch (e) {
     console.error("[cache] init nieudany — cache tylko w pamięci:", (e as Error).message);
     ready = false;
