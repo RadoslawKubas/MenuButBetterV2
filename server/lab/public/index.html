@@ -11,7 +11,12 @@
   header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   h1 { font-size:18px; margin:0; color:var(--acc); }
   .mut { color:var(--mut); }
-  .wrap { display:grid; grid-template-columns: 380px 1fr; gap:0; height: calc(100vh - 54px); }
+  .tabs { display:flex; gap:6px; }
+  .tab { background:transparent; border:1px solid var(--line); color:var(--mut); border-radius:999px; padding:6px 14px; font-weight:800; }
+  .tab.on { background:var(--acc); color:#06302b; border-color:var(--acc); }
+  .scrollpane { overflow:auto; height: calc(100vh - 55px); padding:16px; }
+  .scrollpane .panel { max-width:1000px; }
+  .wrap { display:grid; grid-template-columns: 380px 1fr; gap:0; height: calc(100vh - 55px); }
   .left { border-right:1px solid var(--line); overflow:auto; padding:12px; }
   .right { overflow:auto; padding:12px; }
   #map { height: 280px; border-radius:10px; margin-bottom:12px; }
@@ -66,12 +71,18 @@
 </style>
 
 <header>
-  <h1>🔬 LAB modeli</h1>
-  <span class="mut" id="dir"></span>
+  <h1>🔬 LAB</h1>
+  <nav class="tabs">
+    <button class="tab on" id="tabBtn-lab" onclick="switchTab('lab')">🧪 Laboratorium</button>
+    <button class="tab" id="tabBtn-logs" onclick="switchTab('logs')">📊 Logi</button>
+    <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
+  </nav>
+  <span class="mut small" id="dir"></span>
   <span style="flex:1"></span>
   <button onclick="refreshState(this)">↻ Odśwież</button>
 </header>
 
+<div id="tab-lab">
 <div class="wrap">
   <div class="left">
     <div class="panel" style="margin-bottom:12px">
@@ -148,29 +159,6 @@
       <div id="simItems"></div>
     </div>
 
-    <div class="panel" id="costPanel">
-      <h3>💰 Koszty i ceny</h3>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-        <button class="primary" onclick="toggleCost()" id="costToggleBtn">Pokaż koszty</button>
-        <span class="mut small" id="costInfo"></span>
-      </div>
-      <div id="costBox" style="display:none; margin-top:10px">
-        <div class="chips" id="costPeriod"></div>
-        <div id="costAgg"></div>
-        <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center">
-          <span class="mut small">Log operacji (klik = rozbicie na co poszło):</span>
-          <button onclick="clearCostLog()" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 wyczyść log</button>
-        </div>
-        <div id="costLog"></div>
-        <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px; display:flex; gap:8px; align-items:center">
-          <b>Ceny używane</b>
-          <button onclick="refreshPrices(this)" style="padding:3px 8px; font-size:12px">↻ odśwież</button>
-          <span class="mut small">klik źródło → oficjalna strona; pola edytowalne (ręczna podmiana)</span>
-        </div>
-        <div id="pricesBox"></div>
-      </div>
-    </div>
-
     <div id="results"></div>
     <div class="panel" id="judgePanel" style="display:none">
       <h3>4 · Werdykt sędziego</h3>
@@ -190,6 +178,32 @@
       <div class="mut small" style="margin-top:4px">Jakość: scan = sędzia (uruchom wyżej) ·  peek/verify/venuePhotos = metryki obiektywne ·  koszt/czas zawsze.</div>
       <div id="leaderboard"></div>
     </div>
+  </div>
+</div>
+</div><!-- /tab-lab -->
+
+<div id="tab-logs" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>📊 Logi zapytań — koszty pogrupowane per menu</h3>
+    <div class="mut small" id="costInfo" style="margin-bottom:8px"></div>
+    <div class="chips" id="costPeriod"></div>
+    <div id="costAgg"></div>
+    <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center; gap:10px">
+      <span class="mut small">Każda grupa = praca nad jednym menu (skan + dalsze operacje). Klik grupę → rozbicie per provider/API + lista operacji; klik operację → jej delta.</span>
+      <button onclick="clearCostLog()" style="padding:3px 8px; font-size:12px; color:var(--err); white-space:nowrap">🗑 wyczyść log</button>
+    </div>
+    <div id="costLog"></div>
+  </div>
+</div>
+
+<div id="tab-prices" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>💰 Cennik — stawki używane do wyceny</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px">
+      <button onclick="refreshPrices(this)" style="padding:4px 10px">↻ odśwież</button>
+      <span class="mut small">klik „źródło ↗" → oficjalna strona z cenami; pola edytowalne (ręczna podmiana, zapis lokalny). Te stawki liczą koszty w zakładce Logi.</span>
+    </div>
+    <div id="pricesBox"></div>
   </div>
 </div>
 
@@ -682,16 +696,20 @@ async function simDish(i){
 }
 
 /* ---- Koszty i ceny ---- */
-let COST_PERIOD='all', COST_OPEN=false, COST_GROUPS=[], EGRESS_RATE=0.1;
+let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
+function switchTab(name){
+  CURRENT_TAB=name;
+  ['lab','logs','prices'].forEach(t=>{
+    document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
+    document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
+  });
+  if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
+  else if(name==='prices'){ loadPrices(); }
+  else if(name==='lab' && map){ setTimeout(()=>{ try{ map.invalidateSize(); }catch(e){} }, 60); }
+}
 function fmtUsd(n){ n=n||0; return n<0.01 ? '$'+n.toFixed(4) : '$'+n.toFixed(2); }
 function fmtBytes(n){ n=n||0; if(n>=1073741824) return (n/1073741824).toFixed(2)+' GB'; if(n>=1048576) return (n/1048576).toFixed(1)+' MB'; if(n>=1024) return (n/1024).toFixed(0)+' KB'; return n+' B'; }
 function fmtTokk(n){ n=n||0; return n>=1000 ? (n/1000).toFixed(1)+'k' : ''+n; }
-async function toggleCost(){
-  COST_OPEN=!COST_OPEN;
-  document.getElementById('costBox').style.display=COST_OPEN?'block':'none';
-  document.getElementById('costToggleBtn').textContent=COST_OPEN?'Ukryj':'Pokaż koszty';
-  if(COST_OPEN){ renderCostPeriod(); await loadCostLog(); await loadPrices(); }
-}
 function renderCostPeriod(){
   const opts=[['today','Dziś'],['7d','7 dni'],['30d','30 dni'],['all','Wszystko']];
   document.getElementById('costPeriod').innerHTML=opts.map(([k,l])=>`<div class="chip ${COST_PERIOD===k?'on':''}" onclick="setCostPeriod('${k}')">${l}</div>`).join('');
@@ -768,9 +786,9 @@ async function savePrice(key,kind,inV,outV){
   const body={key};
   if(kind==='model'){ if(inV!=null&&inV!=='') body.in=parseFloat(inV); if(outV!=null&&outV!=='') body.out=parseFloat(outV); }
   else { if(inV!=null&&inV!=='') body.value=parseFloat(inV); }
-  await api('/api/prices',body); loadPrices(); if(COST_OPEN) loadCostLog();
+  await api('/api/prices',body); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog();
 }
-async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(COST_OPEN) loadCostLog(); }
+async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog(); }
 
 loadState();
 </script>
