@@ -1384,8 +1384,15 @@ export default function App() {
   // znikania już wyszukanych. Dedup po remoteUrl/url (te same źródła = ten sam plik cache).
   function mergePhotos(fresh: DishPhotoLite[], old: DishPhotoLite[]): DishPhotoLite[] {
     const key = (p: DishPhotoLite) => p.remoteUrl ?? p.url;
-    const seen = new Set(fresh.map(key));
-    return [...fresh, ...old.filter((p) => !seen.has(key(p)))];
+    const seen = new Set<string>();
+    const dedup = (arr: DishPhotoLite[]) =>
+      arr.filter((p) => { const k = key(p); if (seen.has(k)) return false; seen.add(k); return true; });
+    // ★ z lokalu = MAX jakość → ZAWSZE z przodu (z dowolnego źródła), żeby nowe wyszukane go nie wyprzedziły.
+    // Potem nowe wyszukane (lepsze od poglądowych), na końcu stare poglądowe.
+    const venue = dedup([...fresh, ...old].filter((p) => p.fromVenue));
+    const freshRest = dedup(fresh.filter((p) => !p.fromVenue));
+    const oldRest = dedup(old.filter((p) => !p.fromVenue));
+    return [...venue, ...freshRest, ...oldRest];
   }
 
   function patchItem(m: Menu, si: number, ii: number, patch: Partial<Menu["sections"][0]["items"][0]>): Menu {
