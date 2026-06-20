@@ -94,6 +94,7 @@
       <span>Migawki — klik = do testu · 📍 lokal · 🗄 archiwum</span>
       <button id="archToggle" onclick="toggleShowArchived()" style="padding:3px 8px; font-size:12px"></button>
     </div>
+    <input type="text" id="capQuery" placeholder="🔍 szukaj migawki (nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderCaptures()" />
     <div id="captures"></div>
   </div>
 
@@ -217,7 +218,8 @@
       <h3 style="margin:0" id="localSamplesHdr">🗂 Sample lokalne (aktywne)</h3>
       <button id="archToggleBtn" onclick="toggleSampleArchive()" style="padding:3px 8px; font-size:12px"></button>
     </div>
-    <div class="mut small" style="margin:4px 0 8px">Migawki w bibliotece labu — miniatura, nazwa, lokal/kuchnia, zapisany skan. Wejście do archiwum opcjonalne.</div>
+    <div class="mut small" style="margin:4px 0 8px">Migawki w bibliotece labu — miniatura, nazwa, lokal/kuchnia, zapisany skan. Najnowsze na górze. Wejście do archiwum opcjonalne.</div>
+    <input type="text" id="sampleQuery" placeholder="🔍 szukaj sampla (nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderLocalSamples()" />
     <div id="localSamplesList"></div>
   </div>
 </div>
@@ -364,11 +366,23 @@ async function togglePrompts(){
     </div>`).join('');
 }
 
-function visibleCaptures(){ return STATE.captures.filter(c => SHOW_ARCHIVED || !c.archived); }
+// Dopasowanie sampla do frazy (nazwa / lokal / kuchnia / nazwa instancji). Wspólne dla obu list.
+function matchCapture(c, q){
+  if(!q) return true;
+  const hay=[c.name, c.locationHint, c.result&&c.result.restaurantName, c.result&&c.result.cuisine, c.installId, c.installId&&INST_NAMES[c.installId]].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q.toLowerCase());
+}
+function visibleCaptures(){
+  const q=(document.getElementById('capQuery')?.value||'').trim();
+  return STATE.captures
+    .filter(c => (SHOW_ARCHIVED || !c.archived) && matchCapture(c,q))
+    .slice().sort((a,b)=>(b.importedAt||b.createdAt||0)-(a.importedAt||a.createdAt||0)); // najnowsze na górze
+}
 function renderCaptures() {
   const archN = STATE.captures.filter(c=>c.archived).length;
   document.getElementById('archToggle').textContent = (SHOW_ARCHIVED?'ukryj':'pokaż')+` archiwum (${archN})`;
-  document.getElementById('captures').innerHTML = visibleCaptures().map(c => {
+  const vis = visibleCaptures();
+  document.getElementById('captures').innerHTML = vis.length ? vis.map(c => {
     const gt = c.groundTruth;
     return `<div class="cap ${SELECTED.has(c.id)?'sel':''}" id="cap-${c.id}" style="${c.archived?'opacity:.6':''}">
       <div class="row">
@@ -389,7 +403,7 @@ function renderCaptures() {
           : `<button onclick="archive('${c.id}',true)">🗄 Archiwizuj</button>`}
       </div>
     </div>`;
-  }).join('');
+  }).join('') : '<div class="mut small">brak migawek (dla wyszukiwania / filtra)</div>';
 }
 function toggleSel(id){ SELECTED.has(id)?SELECTED.delete(id):SELECTED.add(id); renderCaptures(); }
 function toggleShowArchived(){ SHOW_ARCHIVED=!SHOW_ARCHIVED; renderCaptures(); renderMap(); }
@@ -1042,7 +1056,8 @@ function renderLocalSamples(){
   const arch=caps.filter(c=>c.archived), active=caps.filter(c=>!c.archived);
   const btn=document.getElementById('archToggleBtn'); if(btn) btn.textContent = SAMPLE_SHOW_ARCH ? '← aktywne' : `🗄 archiwum (${arch.length})`;
   const hdr=document.getElementById('localSamplesHdr'); if(hdr) hdr.textContent = SAMPLE_SHOW_ARCH ? '🗄 Archiwum lokalne' : '🗂 Sample lokalne (aktywne)';
-  const list=(SAMPLE_SHOW_ARCH?arch:active).slice().sort((a,b)=>(b.importedAt||b.createdAt||0)-(a.importedAt||a.createdAt||0));
+  const q=(document.getElementById('sampleQuery')?.value||'').trim();
+  const list=(SAMPLE_SHOW_ARCH?arch:active).filter(c=>matchCapture(c,q)).slice().sort((a,b)=>(b.importedAt||b.createdAt||0)-(a.importedAt||a.createdAt||0));
   box.innerHTML = list.length ? list.map(c=>sampleCard(c,SAMPLE_SHOW_ARCH)).join('') : `<div class="mut small">${SAMPLE_SHOW_ARCH?'Archiwum puste.':'Brak aktywnych sampli.'}</div>`;
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
