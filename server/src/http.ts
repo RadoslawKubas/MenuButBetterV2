@@ -6,7 +6,8 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { stream } from "hono/streaming";
-import { extractMenu, isModelId, MODELS, type InputImage, type MediaType } from "./menu.ts";
+import { extractMenu, enrichMenu, menuToStructure, isModelId, MODELS, type InputImage, type MediaType } from "./menu.ts";
+import type { Menu } from "./schema.ts";
 import { describeDish } from "./dishInfo.ts";
 import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantInfo } from "./places.ts";
 import { findTripAdvisor } from "./tripadvisor.ts";
@@ -103,6 +104,8 @@ interface ScanBody {
   /** Apka prosi o KROKI postępu (NDJSON: received → extracting… → done/error).
    *  Bez tego — stare zachowanie (spacje keepalive + finalny JSON), zgodne ze starym buildem. */
   stream?: boolean;
+  /** TYLKO struktura (Faza A apki) — bez enrichu; enrich osobno przez /enrich. */
+  structureOnly?: boolean;
 }
 
 /** Normalizuje wejście (tablica lub pojedyncze) do InputImage[]. Rzuca przy błędzie. */
@@ -195,13 +198,14 @@ app.post("/scan", async (c) => {
     }, wantSteps ? 2000 : 5000);
     try {
       const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
-      const { menu, usage, cached, readable, poorQuality } = await extractMenu(images, {
+      const { menu, usage, cached, readable, poorQuality, enriched } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
         locationHint: body.locationHint?.trim() || undefined,
         cuisineHint: body.cuisineHint?.trim() || undefined,
         model,
         enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
+        structureOnly: body.structureOnly === true,
         // Postęp odczytu na żywo: krok z licznikiem pozycji (gdy wzrośnie).
         onProgress: wantSteps
           ? (p) => {
@@ -257,10 +261,64 @@ app.post("/scan", async (c) => {
       // Czytelne, ale SŁABA jakość (np. działy ok, pozycje za małe) → wynik może być NIEPEŁNY. NIE
       // rejestrujemy jako zły kadr (jest częściowo użyteczny), tylko ostrzegamy usera.
       const partialQuality = !lowQuality && poorQuality === true;
-      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached, lowQuality, partialQuality }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached, lowQuality, partialQuality }));
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage, cached: !!cached, lowQuality, partialQuality, enriched: enriched !== false }) + "\n" : JSON.stringify({ menu, usage, cached: !!cached, lowQuality, partialQuality, enriched: enriched !== false }));
     } catch (e) {
       console.error("scan error:", e);
       const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;
+      await s.write(wantSteps ? JSON.stringify({ error: msg }) + "\n" : JSON.stringify({ error: msg }));
+    } finally {
+      clearInterval(keepalive);
+    }
+  });
+});
+
+interface EnrichBody {
+  menu?: Menu;
+  targetLang?: string;
+  locationHint?: string;
+  cuisineHint?: string;
+  model?: string;
+  enrichModel?: string;
+  stream?: boolean;
+}
+
+// FAZA B (apka): enrich gotowej STRUKTURY menu — tłumaczenia/opisy/photo_query, tekstowo (BEZ zdjęć).
+// Apka po Fazie A (struktura) wchodzi do menu, a tu w tle uzupełnia pozycje W MIEJSCU (strumień
+// enrich-item po `original`). Enrich ma cache per pozycja → przy powtórce/replayu prawie darmowy.
+app.post("/enrich", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
+  let body: EnrichBody;
+  try {
+    body = await c.req.json<EnrichBody>();
+  } catch {
+    return c.json({ error: "Nieprawidłowy JSON." }, 400);
+  }
+  if (!body.menu?.sections?.length) return c.json({ error: "Brak struktury menu do wzbogacenia." }, 400);
+  const structure = menuToStructure(body.menu);
+  const model = isModelId(body.enrichModel) ? body.enrichModel : isModelId(body.model) ? body.model : DEFAULT_MODEL;
+  const wantSteps = body.stream === true;
+  const t0 = Date.now();
+  return stream(c, async (s) => {
+    if (wantSteps) await s.write(JSON.stringify({ phase: "received" }) + "\n");
+    const keepalive = setInterval(() => {
+      s.write(wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ").catch(() => {});
+    }, wantSteps ? 2000 : 5000);
+    try {
+      const { menu, usage } = await enrichMenu(
+        structure,
+        {
+          targetLang: body.targetLang?.trim() || "polski",
+          locationHint: body.locationHint?.trim() || undefined,
+          cuisineHint: body.cuisineHint?.trim() || undefined,
+          onEnrichItem: wantSteps ? (it) => { s.write(JSON.stringify({ phase: "enrich-item", ...it }) + "\n").catch(() => {}); } : undefined,
+        },
+        model,
+      );
+      logEvent({ type: "scan", op: "enrich", model, provider: apiTag(model), inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd, data: { items: menu.sections.reduce((n, sec) => n + sec.items.length, 0), targetLang: body.targetLang?.trim() || "polski" } });
+      await s.write(wantSteps ? JSON.stringify({ done: true, menu, usage }) + "\n" : JSON.stringify({ menu, usage }));
+    } catch (e) {
+      console.error("enrich error:", e);
+      const msg = `Wzbogacanie menu nie powiodło się: ${(e as Error).message}`;
       await s.write(wantSteps ? JSON.stringify({ error: msg }) + "\n" : JSON.stringify({ error: msg }));
     } finally {
       clearInterval(keepalive);

@@ -61,6 +61,8 @@ export interface ExtractOptions {
   onMeta?: (m: { restaurantName?: string }) => void;
   /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
+  /** Tylko STRUKTURA (vision) — bez enrichu. Zwraca Menu z oryginalnymi nazwami; enrich robi /enrich. */
+  structureOnly?: boolean;
 }
 
 /** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
@@ -361,7 +363,7 @@ function contextTextStructure(opts: ExtractOptions, n: number): string {
 export async function extractMenu(
   images: InputImage[],
   opts: ExtractOptions,
-): Promise<{ menu: Menu; usage: Usage; cached?: boolean; readable?: boolean; poorQuality?: boolean }> {
+): Promise<{ menu: Menu; usage: Usage; cached?: boolean; readable?: boolean; poorQuality?: boolean; enriched?: boolean }> {
   if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
   const enrichModel: ModelId = opts.enrichModel && isModelId(opts.enrichModel) ? opts.enrichModel : model;
@@ -370,7 +372,7 @@ export async function extractMenu(
   const ck = scanCacheKey(images, opts, model, enrichModel);
   if (!opts.noCache) {
     const hit = await cacheGet<Menu>("menu-scan", ck, { op: "scan" });
-    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true, readable: true };
+    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true, readable: true, enriched: true };
   }
 
   let total: Usage = ZERO_USAGE;
@@ -387,14 +389,20 @@ export async function extractMenu(
     if (!opts.noCache) void cacheSet("menu-structure", sck, structure);
   }
 
+  const readable = structure.readable !== false; // brak pola → traktuj jako czytelne
+  const poorQuality = structure.low_quality === true; // czytelne, ale słaba jakość → wynik może być niepełny
+
+  // TYLKO STRUKTURA (Faza A apki): zwróć Menu z oryginalnymi nazwami, bez enrichu. Pozycje już
+  // wyemitowane przez onItem podczas struktury. Enrich (tłumaczenia/opisy) zrobi osobno /enrich.
+  if (opts.structureOnly) {
+    return { menu: buildStructureMenu(structure), usage: total, readable, poorQuality, enriched: false };
+  }
+
   // PRZEBIEG 2 — WZBOGACANIE (tekst, z cache per pozycja) → pełne Menu.
   const enriched = await enrichMenu(structure, opts, enrichModel);
   total = addUsage(total, enriched.usage);
-
-  const readable = structure.readable !== false; // brak pola → traktuj jako czytelne
-  const poorQuality = structure.low_quality === true; // czytelne, ale słaba jakość → wynik może być niepełny
   if (!opts.noCache) void cacheSet("menu-scan", ck, enriched.menu, { lang: opts.targetLang });
-  return { menu: enriched.menu, usage: total, readable, poorQuality };
+  return { menu: enriched.menu, usage: total, readable, poorQuality, enriched: true };
 }
 
 /** Przebieg 1 (Claude): vision → STRUKTURA menu (streaming nazw). */
@@ -508,6 +516,40 @@ function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
     spice_level: spice,
     price: it.price,
     currency: it.currency,
+  };
+}
+
+/** Buduje Menu wprost ze STRUKTURY (bez enrichu): oryginalne nazwy, brak tłumaczeń/opisów.
+ *  Używane w trybie structureOnly (Faza A apki — szybkie, kompletna struktura do przeglądania). */
+export function buildStructureMenu(structure: MenuStructure): Menu {
+  return {
+    restaurant_name: structure.restaurant_name,
+    restaurant_address: structure.restaurant_address,
+    restaurant_language: structure.restaurant_language,
+    cuisine: structure.cuisine,
+    sections: structure.sections.map((s) => ({
+      name: s.name,
+      name_translated: s.name,
+      items: s.items.map((it) => assembleItem(it, null)),
+    })),
+    notes: (structure.notes ?? []).map((n) => ({ text: n.text, text_translated: n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
+  };
+}
+
+/** Odwrotność: z (kompletnego) Menu struktury robi MenuStructure do enrichu (Faza B — bez zdjęć). */
+export function menuToStructure(menu: Menu): MenuStructure {
+  return {
+    restaurant_name: menu.restaurant_name,
+    restaurant_address: menu.restaurant_address,
+    restaurant_language: menu.restaurant_language,
+    cuisine: menu.cuisine,
+    sections: menu.sections.map((s) => ({
+      name: s.name,
+      items: s.items.map((it) => ({ original: it.original, menu_description: it.menu_description ?? "", source_text: it.source_text ?? "", price: it.price, currency: it.currency })),
+    })),
+    notes: (menu.notes ?? []).map((n) => ({ text: n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
+    readable: true,
+    low_quality: false,
   };
 }
 
@@ -630,7 +672,7 @@ async function enrichCall(
  * pozycja (`original+menu_desc + kuchnia + kraj + język + model`) i per nazwa sekcji — do modelu idą
  * TYLKO niezcache'owane pozycje. Składa wynik z bezpiecznymi fallbackami.
  */
-async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model: ModelId): Promise<{ menu: Menu; usage: Usage }> {
+export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model: ModelId): Promise<{ menu: Menu; usage: Usage }> {
   const targetLang = opts.targetLang;
   const cuisine = structure.cuisine;
   const country = countryOf(opts.locationHint);
