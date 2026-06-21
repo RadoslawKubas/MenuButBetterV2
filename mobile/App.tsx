@@ -1192,12 +1192,6 @@ export default function App() {
     }
   }
 
-  // „Szerszy zasięg" — podwój promień ostatniego szukania (z górnym limitem).
-  function expandNearby() {
-    const r = Math.min((restaurantCtx?.radius ?? DEFAULT_NEARBY_RADIUS) * 2, 8000);
-    void searchNearby(r, false);
-  }
-
   // Usuwa dopasowany lokal ze skanu (karta znika; można wyszukać od nowa).
   async function removeRestaurant() {
     if (!restaurantCtx) return;
@@ -1226,12 +1220,7 @@ export default function App() {
         <RestaurantCard
           restaurant={r}
           loading={restaurantLoading}
-          candidates={restaurantCtx?.candidates}
-          nearbyLoading={nearbyLoading}
-          onPick={pickRestaurant}
           onSearchByName={name ? searchByName : undefined}
-          onSearchNearby={hasLoc ? () => searchNearby(DEFAULT_NEARBY_RADIUS, false) : undefined}
-          onExpandSearch={hasLoc ? expandNearby : undefined}
           onRemove={removeRestaurant}
         />
       );

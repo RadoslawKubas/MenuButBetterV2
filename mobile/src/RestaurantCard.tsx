@@ -26,22 +26,12 @@ const PRICE: Record<string, string> = {
 export function RestaurantCard({
   restaurant,
   loading,
-  candidates,
-  nearbyLoading,
-  onPick,
   onSearchByName,
-  onSearchNearby,
-  onExpandSearch,
   onRemove,
 }: {
   restaurant: RestaurantInfo | null;
   loading: boolean;
-  candidates?: RestaurantInfo[];
-  nearbyLoading?: boolean;
-  onPick?: (r: RestaurantInfo) => void;
   onSearchByName?: () => void;
-  onSearchNearby?: () => void;
-  onExpandSearch?: () => void;
   onRemove?: () => void;
 }) {
   const [preview, setPreview] = useState<LightboxState | null>(null);
@@ -112,52 +102,8 @@ export function RestaurantCard({
         {cityLine ? <Text style={styles.city}>{cityLine}</Text> : null}
         {r.address ? <Text style={styles.address}>{r.address}</Text> : null}
 
-        {/* Wybór właściwego lokalu: przycisk wyszukania i LISTA są RAZEM (nie rozbite). Lista to
-            czytelne wiersze: ocena + nazwa + adres — łatwo ocenić i wybrać. */}
-        {onSearchNearby || (candidates && candidates.length > 0) ? (
-          <View style={styles.pickBox}>
-            <View style={styles.pickHead}>
-              <Text style={styles.pickTitle}>
-                {r.guessedByLocation ? "📍 Zgadnięto po lokalizacji — to ten lokal?" : "To nie ten lokal?"}
-              </Text>
-              {onSearchNearby ? (
-                <Pressable style={[styles.pickSearchBtn, nearbyLoading && styles.pickSearchBtnOff]} onPress={onSearchNearby} disabled={nearbyLoading}>
-                  <Text style={styles.pickSearchText}>{nearbyLoading ? "⏳ szukam…" : "🔄 Inne w pobliżu"}</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <Text style={styles.pickHint}>Wyszukuje wg GPS zapisanego przy skanie (nie Twojej obecnej pozycji).</Text>
-            {candidates && candidates.length > 0 && onPick ? (
-              <View style={styles.candList}>
-                {candidates.map((c) => {
-                  const active = c.placeId === r.placeId;
-                  const addr = [c.address, c.city].filter(Boolean).join(" · ");
-                  return (
-                    <Pressable
-                      key={c.placeId}
-                      onPress={() => !active && onPick(c)}
-                      style={[styles.candRow, active && styles.candRowActive]}
-                    >
-                      <View style={[styles.candRating, c.rating != null && styles.candRatingHas]}>
-                        <Text style={styles.candRatingText}>{c.rating != null ? `★ ${c.rating.toFixed(1)}` : "—"}</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.candName, active && styles.candNameActive]} numberOfLines={1}>{active ? "✓ " : ""}{c.name}</Text>
-                        {addr ? <Text style={styles.candAddr} numberOfLines={1}>{addr}</Text> : null}
-                      </View>
-                      {!active ? <Text style={styles.candPick}>wybierz ›</Text> : null}
-                    </Pressable>
-                  );
-                })}
-                {onExpandSearch ? (
-                  <Pressable onPress={onExpandSearch} style={styles.candExpand}>
-                    <Text style={styles.candExpandText}>🔭 Szerszy zasięg</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
+        {/* „To nie ten lokal? / Inne w pobliżu" + kandydaci — USUNIĘTE (duplikat „Zły lokal? Znajdź inny →",
+            które otwiera pełny ekran wyszukiwania lokalu). Korekta lokalu idzie teraz JEDNĄ ścieżką. */}
 
         {r.photoNames.length > 1 ? (
           <View style={styles.gallery}>
@@ -254,25 +200,6 @@ const styles = StyleSheet.create({
   open: { fontSize: 13, fontWeight: "700" },
   openYes: { color: "#2e7d32" },
   openNo: { color: colors.error },
-  pickBox: { marginTop: 12, backgroundColor: colors.badgeBg, borderRadius: 12, padding: 10 },
-  pickHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  pickTitle: { flex: 1, fontSize: 13, color: colors.text, fontWeight: "700" },
-  pickSearchBtn: { backgroundColor: colors.accent, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
-  pickSearchBtnOff: { opacity: 0.6 },
-  pickSearchText: { color: "#fff", fontWeight: "800", fontSize: 12 },
-  pickHint: { fontSize: 11, color: colors.muted, marginTop: 4, lineHeight: 15 },
-  candList: { marginTop: 10, gap: 6 },
-  candRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, borderWidth: 1, borderColor: "transparent" },
-  candRowActive: { borderColor: colors.accent, backgroundColor: colors.accent + "12" },
-  candRating: { minWidth: 46, alignItems: "center", paddingVertical: 3, borderRadius: 8, backgroundColor: colors.badgeBg },
-  candRatingHas: { backgroundColor: colors.accent + "1f" },
-  candRatingText: { fontSize: 12, fontWeight: "800", color: colors.accent },
-  candName: { fontSize: 14, fontWeight: "700", color: colors.text },
-  candNameActive: { color: colors.accent },
-  candAddr: { fontSize: 12, color: colors.muted, marginTop: 1 },
-  candPick: { fontSize: 12, color: colors.accent, fontWeight: "700" },
-  candExpand: { alignSelf: "flex-start", marginTop: 2, paddingVertical: 6, paddingHorizontal: 4 },
-  candExpandText: { fontSize: 13, color: colors.accent, fontWeight: "700" },
   city: { fontSize: 14, color: colors.text, marginTop: 8, fontWeight: "600" },
   address: { fontSize: 13, color: colors.muted, marginTop: 2 },
   gallery: { marginTop: 14 },

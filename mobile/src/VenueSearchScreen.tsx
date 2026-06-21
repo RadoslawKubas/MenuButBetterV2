@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import { colors } from "./theme";
 import { fetchRestaurant } from "./api";
@@ -78,6 +79,7 @@ function VenueMap({ center, onCenterChange, webRef }: { center: GeoPoint; onCent
 }
 
 export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClose, onPick }: Props) {
+  const insets = useSafeAreaInsets(); // ekran jest full-screen overlay (absoluteFill) → bez tego header wchodzi pod notch
   const webRef = useRef<WebView>(null);
   const [center, setCenter] = useState<GeoPoint>(initialLocation ?? DEFAULT_CENTER);
   const [name, setName] = useState("");
@@ -167,7 +169,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={onClose} hitSlop={10} style={styles.backBtn}>
           <Text style={styles.backText}>← Wróć</Text>
         </Pressable>
@@ -257,7 +259,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.badgeBg, backgroundColor: colors.card },
   backBtn: { paddingVertical: 6, paddingRight: 8, width: 64 },
   backText: { color: colors.accent, fontWeight: "800", fontSize: 15 },
   title: { fontSize: 17, fontWeight: "800", color: colors.text },
