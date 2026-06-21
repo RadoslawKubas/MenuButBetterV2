@@ -1209,7 +1209,8 @@ function setStatsSource(k){ STAT_SOURCE=k; renderStatsPeriod(); loadStats(); }
 async function loadStats(btn){
   if(btn) btn.disabled=true;
   document.getElementById('statsSummary').innerHTML='ładuję…';
-  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  SESSION_DETAIL={}; // nowy zaciąg → wyczyść lazy-cache detali sesji
+  try{ STATS=await api('/api/cost-log?summary=1&period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
   renderStatsSummary(); renderStatsDaily(); renderStatsByApi(); renderStatsSessions();
   if(btn) btn.disabled=false;
 }
@@ -1229,13 +1230,12 @@ function renderStatsSummary(){
       <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}${capHit}</div>
       <div class="small" style="margin-top:3px">${STAT_SOURCE==='app'?'📱 <b>liczę tylko z apki</b>':STAT_SOURCE==='exp'?'🧪 <b>liczę tylko eksperymenty</b>':'📊 <b>liczę wszystko</b>'} <span class="mut">— w okresie: 📱 z apki ${STATS.appCount||0} · 🧪 eksperymenty ${STATS.expCount||0} ops</span></div>
       <div class="mut small" style="margin-top:5px">🧠 tokeny: ${fmtUsd(a.tokenCost)} · 🔌 API/zapytania: ${fmtUsd(a.apiCost)} · 📡 transfer: ${fmtUsd(a.dataCost)} · tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out</div>
-      ${(()=>{ const bo=globalByOp(); return Object.keys(bo).length ? byOpBar(bo,16)+`<div class="mut" style="margin-top:5px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(bo,true)}</div>` : ''; })()}
+      ${(()=>{ const bo=STATS.byOp||{}; return Object.keys(bo).length ? byOpBar(bo,16)+`<div class="mut" style="margin-top:5px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(bo,true)}</div>` : ''; })()}
       ${sv.cost?`<div class="small" style="margin-top:6px; color:#7fd6a0">💾 cache zaoszczędził ~${fmtUsd(sv.cost)} (${sv.count||0} trafień)</div>`:''}
     </div>`;
 }
 function renderStatsDaily(){
-  const byDay={};
-  for(const e of allEntries()){ const day=new Date(e.ts).toISOString().slice(0,10); byDay[day]=(byDay[day]||0)+(e.totalCost||0); }
+  const byDay=(STATS&&STATS.daily)||{};
   const days=Object.keys(byDay).sort();
   if(!days.length){ document.getElementById('statsDaily').innerHTML='<span class="mut">Brak danych.</span>'; return; }
   const max=Math.max(...days.map(d=>byDay[d]));
@@ -1262,8 +1262,13 @@ function sessionStats(g){
     else if(e.op==='dish-photos'||e.op==='dish-photo-refresh'){ photoOps++; photosFetched+=(d.resultCount||0); } }
   return {images,dishes,photosFetched,photoOps,byOp};
 }
-let STATS_OPEN={}; let STATS_KEYS=[];
-function toggleSession(i){ const k=STATS_KEYS[i]; if(k){ STATS_OPEN[k]=!STATS_OPEN[k]; renderStatsSessions(); } }
+let STATS_OPEN={}; let STATS_KEYS=[]; let SESSION_DETAIL={}; // detal (zdarzenia) sesji — dociągany DOPIERO po kliknięciu
+async function toggleSession(i){ const k=STATS_KEYS[i]; if(!k) return; STATS_OPEN[k]=!STATS_OPEN[k];
+  if(STATS_OPEN[k] && !SESSION_DETAIL[k]){ // klik → wyłuskaj zdarzenia tej sesji (lazy, z cache server-side)
+    try{ const r=await api('/api/cost-log?detail='+encodeURIComponent(k)+'&period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); SESSION_DETAIL[k]=r.entries||[]; }catch(e){ SESSION_DETAIL[k]=[]; }
+  }
+  renderStatsSessions();
+}
 function renderStatsSessions(){
   if(!STATS){ return; }
   const q=(document.getElementById('statsSearch').value||'').toLowerCase().trim();
@@ -1273,16 +1278,15 @@ function renderStatsSessions(){
   gs=[...gs].sort((a,b)=>(b.ts||0)-(a.ts||0)); // OSTATNIO ruszane sesje na górze (max ts)
   STATS_KEYS=gs.map(g=>g.key);
   document.getElementById('statsSessions').innerHTML = gs.length ? gs.map((g,i)=>{
-    const s=sessionStats(g);
-    const ents=(g.entries||[]);
-    const tss=ents.map(e=>e.ts).filter(Boolean);
-    const start=tss.length?Math.min.apply(null,tss):g.ts, end=tss.length?Math.max.apply(null,tss):g.ts;
+    const s=g.summary||{byOp:{},images:0,dishes:0,photosFetched:0,photoOps:0,start:g.ts,end:g.ts};
+    const start=s.start||g.ts, end=s.end||g.ts;
     const inTok=(g.byProvider||[]).reduce((n,p)=>n+p.inTok,0), outTok=(g.byProvider||[]).reduce((n,p)=>n+p.outTok,0), calls=(g.byProvider||[]).reduce((n,p)=>n+p.calls,0);
     const provChips=(g.byProvider||[]).map(p=>`<span class="badge" style="margin:0 4px 4px 0">${esc(PROV_LABEL[p.provider]||p.provider)}: ${fmtUsd(p.costUsd + (p.bytesSent/1e9*egress))}</span>`).join('');
     const open=!!STATS_OPEN[g.key];
     let detail='';
-    if(open){
-      const flow=[...ents].sort((a,b)=>(a.ts||0)-(b.ts||0));
+    if(open && !SESSION_DETAIL[g.key]){ detail=`<div class="mut small" style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.18)">⏳ wyłuskuję zdarzenia tej sesji…</div>`; }
+    else if(open){
+      const flow=[...(SESSION_DETAIL[g.key]||[])].sort((a,b)=>(a.ts||0)-(b.ts||0));
       let cum=0;
       const thumb=(u,c)=>{ const sc=!!c; const fv=sc&&c.fv, passed=sc&&c.p, fin=sc&&c.fin;
         const border=!sc?'#555':fv?'#f1c40f':passed?'#7fd6a0':'#b3261e';

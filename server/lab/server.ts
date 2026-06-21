@@ -1268,10 +1268,22 @@ app.post("/api/sim-venue", async (c) => {
 });
 
 // --- KOSZTY: log operacji (z rozbiciem) + statystyki łączne (okres) ------------------------
+// Cache ostatnio policzonych grup (z entries) — żeby DETAL sesji („klik → zdarzenia") nie pobierał
+// i nie przeliczał wszystkiego od nowa. Klucz = period|source|limit. Krótki TTL.
+let COSTLOG_CACHE: { sig: string; groups: any[]; ts: number } = { sig: "", groups: [], ts: 0 };
 app.get("/api/cost-log", async (c) => {
   const period = c.req.query("period") || "all";
   // Ile surowych zdarzeń pobrać z produkcji (sterowane z UI). Domyślnie 3000, max 50000.
   const evLimit = Math.min(Math.max(Number(c.req.query("limit")) || 3000, 100), 50000);
+  const srcParam0 = c.req.query("source") || "app";
+  const detailKey = c.req.query("detail");          // klik w sesję → zwróć TYLKO jej zdarzenia (flow)
+  const summaryMode = c.req.query("summary") === "1"; // lista sesji bez zdarzeń (lekka)
+  const sig = `${period}|${srcParam0}|${evLimit}`;
+  // Szybka ścieżka: detal z CACHE (bez ponownego pobierania prod), gdy sig pasuje i nie wygasł (5 min).
+  if (detailKey && COSTLOG_CACHE.sig === sig && Date.now() - COSTLOG_CACHE.ts < 5 * 60_000) {
+    const g = COSTLOG_CACHE.groups.find((x) => x.key === detailKey);
+    return c.json({ key: detailKey, entries: g ? g.entries : [] });
+  }
   const now = Date.now();
   const cutoff = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
   const egress = otherRate("egress");
@@ -1421,6 +1433,34 @@ app.get("/api/cost-log", async (c) => {
   const groups = Object.values(gmap)
     .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
     .sort((a, b) => b.ts - a.ts);
+  COSTLOG_CACHE = { sig, groups, ts: Date.now() }; // do lazy detalu (klik w sesję)
+
+  // Detal po świeżym przeliczeniu (cache był pusty/wygasły) → zdarzenia JEDNEJ sesji.
+  if (detailKey) { const g = groups.find((x) => x.key === detailKey); return c.json({ key: detailKey, entries: g ? g.entries : [] }); }
+
+  // PODSUMOWANIE sesji liczone SERVER-SIDE (w trybie summary przeglądarka NIE dostaje zdarzeń).
+  const groupSummary = (g: any) => {
+    let images = 0, dishes = 0, photosFetched = 0, photoOps = 0, start = Infinity, end = -Infinity;
+    const byOp: Record<string, { count: number; cost: number }> = {};
+    for (const e of g.entries) {
+      const d = (e.meta?.data as Record<string, any>) || {};
+      const o = byOp[e.op] = byOp[e.op] || { count: 0, cost: 0 }; o.count++; o.cost += e.totalCost || 0;
+      if (e.op === "scan") { images = Math.max(images, d.images || 0); dishes = Math.max(dishes, d.items || 0); }
+      else if (e.op === "enrich") { if (d.items) dishes = Math.max(dishes, d.items); }
+      else if (e.op === "dish-photos" || e.op === "dish-photo-refresh") { photoOps++; photosFetched += d.resultCount || 0; }
+      if (e.ts) { start = Math.min(start, e.ts); end = Math.max(end, e.ts); }
+    }
+    return { images, dishes, photosFetched, photoOps, byOp, start: isFinite(start) ? start : g.ts, end: isFinite(end) ? end : g.ts };
+  };
+  if (summaryMode) {
+    const daily: Record<string, number> = {}; const byOp: Record<string, { count: number; cost: number }> = {};
+    for (const g of groups) for (const e of g.entries) {
+      const day = new Date(e.ts).toISOString().slice(0, 10); daily[day] = (daily[day] || 0) + (e.totalCost || 0);
+      const o = byOp[e.op] = byOp[e.op] || { count: 0, cost: 0 }; o.count++; o.cost += e.totalCost || 0;
+    }
+    const slim = groups.map((g) => { const { entries: _drop, ...rest } = g; return { ...rest, summary: groupSummary(g) }; });
+    return c.json({ period, egressUsdPerGB: egress, agg, savings, groups: slim, daily, byOp, prodCount: prodEntries.length, prodFetched, evLimit, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
+  }
   return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodFetched, evLimit, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
 });
 
