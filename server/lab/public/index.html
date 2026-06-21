@@ -283,7 +283,7 @@
     <h3>🚀 Deploy — wysyłka na TestFlight</h3>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
       <button onclick="loadDeploy(this)" style="padding:4px 10px">↻ odśwież</button>
-      <span class="mut small">Budowanie NIE zużywa limitu Apple — tylko wysyłka. Buduj ile chcesz, a wgrywaj świadomie. Wgranie idzie w tle; numer builda apka podbija sama.</span>
+      <span class="mut small">Budowanie NIE zużywa limitu Apple — tylko wysyłka. Buduj ile chcesz, a wgrywaj świadomie. Wgranie idzie w tle; numer builda apka podbija sama. Po UDANEJ wysyłce starsze/zużyte buildy (numer ≤ wgrany) kasują się same — TestFlight i tak by je odrzucił.</span>
     </div>
     <div id="deployWarn" style="margin-bottom:10px"></div>
     <div id="deployJob"></div>
@@ -1119,7 +1119,7 @@ async function loadDeploy(btn){
   document.getElementById('deployBuilds').innerHTML = (r.builds||[]).length ? r.builds.map(b=>`
     <div class="step" style="display:flex; gap:10px; align-items:flex-start">
       <div style="flex:1; min-width:0">
-        <div><b>${esc(b.ipa)}</b> <span class="mut small">· ${b.sizeMB} MB · ${fmtAgo(b.mtime)}</span></div>
+        <div><b>build #${b.buildNumber||'?'}</b> <span class="mut small">${esc(b.ipa)} · ${b.sizeMB} MB · ${fmtAgo(b.mtime)}</span></div>
         <input value="${esc(b.note)}" placeholder="notka: co jest w tym buildzie…" onchange="saveBuildNote('${esc(b.ipa)}',this.value)" style="width:100%; margin-top:6px; padding:5px 8px; font-size:12px">
       </div>
       <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0">
