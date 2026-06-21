@@ -396,6 +396,7 @@ export async function extractMenu(
     ? cacheKey("menu-structure", imagesHash(images), model, sectCtx)
     : cacheKey("menu-structure", imagesHash(images), model);
   let structure = !opts.noCache ? await cacheGet<MenuStructure>("menu-structure", sck, { op: "scan" }) : null;
+  const structureFromCache = structure !== null; // hit ze structure cache → skan bez kosztu modelu
   if (structure) {
     replayStructureItems(structure, opts); // odtwórz licznik/nazwy z cache (apka pokaże pozycje)
   } else {
@@ -411,7 +412,7 @@ export async function extractMenu(
   // TYLKO STRUKTURA (Faza A apki): zwróć Menu z oryginalnymi nazwami, bez enrichu. Pozycje już
   // wyemitowane przez onItem podczas struktury. Enrich (tłumaczenia/opisy) zrobi osobno /enrich.
   if (opts.structureOnly) {
-    return { menu: buildStructureMenu(structure), usage: total, readable, poorQuality, enriched: false };
+    return { menu: buildStructureMenu(structure), usage: total, readable, poorQuality, enriched: false, cached: structureFromCache };
   }
 
   // PRZEBIEG 2 — WZBOGACANIE (tekst, z cache per pozycja) → pełne Menu.
