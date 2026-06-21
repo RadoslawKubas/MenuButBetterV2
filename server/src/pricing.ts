@@ -12,14 +12,15 @@ export type PriceOverrides = Record<string, { in?: number; out?: number; value?:
 /** Domyślne stawki NIE-AI / infra — JEDNO źródło prawdy (server + lab). */
 export const OTHER_RATES: Record<string, number> = {
   egress: 0.1, // $/GB wysłane (Railway)
-  google_places: 17, // $/1000 zapytań
+  google_places: 17, // $/1000 zapytań (wyszukanie lokalu: Text Search + Details)
+  google_places_photo: 7, // $/1000 zapytań (Places Photo — osobno, bo to pobranie zdjęcia lokalu)
   serper: 0.6, // $/1000 zapytań
   serpapi: 10, // $/1000 zapytań
   storage: 0.25, // $/GB-mies. (cache w Postgresie)
 };
 
 /** Providerzy NIE-AI rozliczani PER ZAPYTANIE (reszta — Wikimedia/Openverse/CSE/TripAdvisor — darmowa). */
-export const PER_CALL_PROVIDERS = new Set(["google_places", "serper", "serpapi"]);
+export const PER_CALL_PROVIDERS = new Set(["google_places", "google_places_photo", "serper", "serpapi"]);
 
 /** Cena AI per 1M tokenów dla modelu (z uwzględnieniem override'a). */
 export function aiPrice(model: string, ov?: PriceOverrides): { in: number; out: number } {

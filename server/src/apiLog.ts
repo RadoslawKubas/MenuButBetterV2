@@ -20,6 +20,7 @@ export type Provider =
   | "openai"
   | "google"
   | "google_places"
+  | "google_places_photo"
   | "google_cse"
   | "tripadvisor"
   | "serper"
@@ -155,7 +156,7 @@ function detect(u: string): { provider: Provider; op: string } {
       : host.includes("customsearch")
         ? "google_cse"
         : host.includes("googleapis.com")
-          ? "google_places"
+          ? (path.includes("/photos/") || path.endsWith("/media") ? "google_places_photo" : "google_places")
           : host.includes("tripadvisor")
             ? "tripadvisor"
             : host.includes("wikimedia") || host.includes("wikipedia")

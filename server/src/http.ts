@@ -75,7 +75,7 @@ app.use("/*", async (c, next) => {
     await next();
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
     // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.
-    const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "tripadvisor", "wikimedia", "openverse"]);
+    const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "google_places_photo", "tripadvisor", "wikimedia", "openverse"]);
     for (const [prov, u] of apiUsage) {
       if (!NON_AI.has(prov) || u.calls <= 0) continue;
       // Koszt nie-AI wg WSPÓLNEGO cennika (pricing.ts + override'y z labu) → akumulator sesji liczy KAŻDY

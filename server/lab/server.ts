@@ -54,7 +54,8 @@ const PRICE_SOURCES: Record<string, string> = {
 // żeby domyślny cennik był jeden po obu stronach.
 const OTHER_PRICES_DEFAULT: { key: string; label: string; unit: string; value: number; source: string }[] = [
   { key: "egress", label: "Transfer (Railway egress)", unit: "$/GB (wysłane)", value: OTHER_RATES.egress!, source: PRICE_SOURCES.egress! },
-  { key: "google_places", label: "Google Places (details+photos)", unit: "$/1000 req", value: OTHER_RATES.google_places!, source: PRICE_SOURCES.google_places! },
+  { key: "google_places", label: "Google Places (wyszukanie lokalu)", unit: "$/1000 req", value: OTHER_RATES.google_places!, source: PRICE_SOURCES.google_places! },
+  { key: "google_places_photo", label: "Google Places Photo (zdjęcie lokalu)", unit: "$/1000 req", value: OTHER_RATES.google_places_photo!, source: PRICE_SOURCES.google_places! },
   { key: "serper", label: "Serper.dev (Google Images)", unit: "$/1000 req", value: OTHER_RATES.serper!, source: PRICE_SOURCES.serper! },
   { key: "serpapi", label: "SerpApi", unit: "$/1000 req", value: OTHER_RATES.serpapi!, source: PRICE_SOURCES.serpapi! },
   { key: "storage", label: "Cache storage (Postgres)", unit: "$/GB-mies.", value: OTHER_RATES.storage!, source: PRICE_SOURCES.egress! },

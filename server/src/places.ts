@@ -292,19 +292,28 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
 }
 
 /** Pobiera bajty zdjęcia lokalu (proxy — klucz zostaje po stronie serwera). */
+// CACHE bajtów zdjęć lokalu — Places Photo API jest PŁATNE per pobranie, a te same zdjęcia lokalu
+// pobierają się wielokrotnie (każda partia /venue-photos + każde /place-photo). Trafienie = ZERO wywołania
+// Google. TTL 30 min, cap 300 (proste LRU po kolejności wstawiania). Klucz: nazwa + szerokość.
+const placePhotoCache = new Map<string, { body: ArrayBuffer; contentType: string; ts: number }>();
+const PLACE_PHOTO_TTL = 30 * 60_000;
+
 export async function fetchPlacePhoto(
   photoName: string,
   maxWidth = 800,
 ): Promise<{ body: ArrayBuffer; contentType: string }> {
+  if (!photoName.startsWith("places/")) throw new Error("Nieprawidłowa nazwa zdjęcia.");
+  const ck = `${photoName}@${maxWidth}`;
+  const hit = placePhotoCache.get(ck);
+  if (hit && Date.now() - hit.ts < PLACE_PHOTO_TTL) return { body: hit.body, contentType: hit.contentType };
+
   const key = KEY();
   if (!key) throw new Error("Brak GOOGLE_MAPS_KEY.");
-  if (!photoName.startsWith("places/")) throw new Error("Nieprawidłowa nazwa zdjęcia.");
-
   const url = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${maxWidth}&key=${key}`;
   const res = await trackedFetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`Place photo HTTP ${res.status}`);
-  return {
-    body: await res.arrayBuffer(),
-    contentType: res.headers.get("content-type") ?? "image/jpeg",
-  };
+  const out = { body: await res.arrayBuffer(), contentType: res.headers.get("content-type") ?? "image/jpeg" };
+  placePhotoCache.set(ck, { ...out, ts: Date.now() });
+  if (placePhotoCache.size > 300) { const oldest = placePhotoCache.keys().next().value; if (oldest) placePhotoCache.delete(oldest); }
+  return out;
 }
