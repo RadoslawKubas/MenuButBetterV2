@@ -59,8 +59,9 @@ if (APP_TOKEN) {
 // Kontekst instalacji: z nagłówka x-install-id (GUID apki) — wszystkie logEvent w tym requeście
 // (skan, ai, błąd, sample) zostaną otagowane tym GUID-em → grupowanie per instancja w labie.
 app.use("/*", async (c, next) => {
-  // Nagłówek X lub fallback z QUERY (?iid=/?sid=) — bo ładowanie zdjęć przez <Image> (np. /place-photo) NIE
-  // wysyła nagłówków, więc bez tego ich google_places lądowałyby OSIEROCONE (bez instancji/sesji).
+  // Tożsamość apki: z nagłówka X-* (zwykłe fetch/XHR) ALBO z query ?iid=/?sid= — bo żądania ŁADOWANE URL-em
+  // (<Image>, pobieranie pliku, np. /place-photo) NIE mogą wysyłać nagłówków. To ten sam kanał, którym apka
+  // wozi token (?t=) — STAŁY element rdzenia, nie naprawa. Dzięki temu każde żądanie identyfikuje instancję.
   const installId = c.req.header("x-install-id") || c.req.query("iid") || undefined;
   // Debug apki: x-force-fresh=1 → cache POMIJA ODCZYT (świeże generowanie), ale nadal ZAPISUJE wynik.
   const forceFresh = c.req.header("x-force-fresh") === "1";
