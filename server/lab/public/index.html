@@ -186,7 +186,7 @@
     <h3>📊 Logi zapytań — koszty pogrupowane per menu</h3>
     <div class="mut small" id="costInfo" style="margin-bottom:8px"></div>
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap"><div class="chips" id="costPeriod"></div>
-      <label class="mut small">zdarzeń: <select id="costLimit" onchange="setCostLimit(this.value)"><option>1000</option><option selected>3000</option><option>10000</option><option>30000</option><option value="50000">50000</option></select></label></div>
+      <label class="mut small">zdarzeń: <select id="costLimit" onchange="setCostLimit(this.value)"><option>1000</option><option>3000</option><option selected>10000</option><option>30000</option><option value="50000">50000</option></select></label></div>
     <div id="costAgg"></div>
     <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center; gap:10px">
       <span class="mut small">Każda grupa = praca nad jednym menu (skan + dalsze operacje). Klik grupę → rozbicie per provider/API + lista operacji; klik operację → jej delta.</span>
@@ -301,7 +301,7 @@
     <h3>📊 Statystyki kosztów — ile realnie kosztują skany</h3>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
       <button onclick="loadStats(this)" style="padding:4px 10px">↻ odśwież</button>
-      <label class="mut small">zdarzeń: <select id="statLimit" onchange="setStatLimit(this.value)"><option>1000</option><option selected>3000</option><option>10000</option><option>30000</option><option value="50000">50000</option></select></label>
+      <label class="mut small">zdarzeń: <select id="statLimit" onchange="setStatLimit(this.value)"><option>1000</option><option>3000</option><option selected>10000</option><option>30000</option><option value="50000">50000</option></select></label>
       <span class="mut small">Wszystko przeliczone wg AKTUALNEGO cennika (zmień w zakładce 💰 Cennik → tu się przeliczy). Realne skany z produkcji + lab.</span>
     </div>
     <div id="statsPeriod" class="chips" style="margin-bottom:10px"></div>
@@ -914,7 +914,7 @@ async function simDish(i){
 }
 
 /* ---- Koszty i ceny ---- */
-let COST_PERIOD='all', COST_LIMIT=3000, COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
+let COST_PERIOD='all', COST_LIMIT=10000, COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function setCostLimit(v){ COST_LIMIT=+v||3000; loadCostLog(); }
 function switchTab(name){
   CURRENT_TAB=name;
@@ -1193,7 +1193,7 @@ async function deleteBuild(ipa){
 }
 
 /* ---- Statystyki (zakładka 📊 Statystyki) — koszty wg AKTUALNEGO cennika ---- */
-let STAT_PERIOD='30d'; let STAT_SOURCE='app'; let STAT_LIMIT=3000; let STATS=null;
+let STAT_PERIOD='30d'; let STAT_SOURCE='app'; let STAT_LIMIT=10000; let STATS=null;
 function setStatLimit(v){ STAT_LIMIT=+v||3000; loadStats(); }
 const PROV_LABEL={claude:'Anthropic (Claude)',openai:'OpenAI (GPT)',google:'Google Gemini',google_places:'Google Places',serper:'Serper',serpapi:'SerpApi',tripadvisor:'TripAdvisor',wikimedia:'Wikimedia',openverse:'Openverse',google_cse:'Google CSE'};
 function renderStatsPeriod(){
