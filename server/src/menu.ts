@@ -416,25 +416,13 @@ export async function extractMenu(
   //  (cache menu-structure) + enrich (cache item-enrich) — pełnego wpisu nie trzeba, ścieżka pełna i tak
   //  trafia w te dwa pod-cache i tylko składa wynik.)
   let total: Usage = ZERO_USAGE;
-  // PRZEBIEG 1 — STRUKTURA (vision). Cache struktury per zestaw plików + model (BEZ języka/lokalizacji —
-  // transkrypcja jest od nich niezależna → reuse między językami). Streaming nazw przez onItem/onProgress.
-  // Klucz cache STRUKTURY: cała partia zdjęć (imagesHash) + model. Gdy są knownSections (kolejne partie
-  // z kontekstem ciągłości grup) — dołącz je do klucza (inny kontekst → inna struktura). Pusty → klucz
-  // jak dotąd (wsteczna zgodność z istniejącym cache pierwszej partii).
-  const sectCtx = opts.knownSections?.length ? opts.knownSections.join("|") : "";
-  const sck = sectCtx
-    ? cacheKey("menu-structure", imagesHash(images), model, sectCtx)
-    : cacheKey("menu-structure", imagesHash(images), model);
-  let structure = !opts.noCache ? await cacheGet<MenuStructure>("menu-structure", sck, { op: "scan" }) : null;
-  const structureFromCache = structure !== null; // hit ze structure cache → skan bez kosztu modelu
-  if (structure) {
-    replayStructureItems(structure, opts); // odtwórz licznik/nazwy z cache (apka pokaże pozycje)
-  } else {
-    const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
-    structure = s.structure;
-    total = addUsage(total, s.usage);
-    if (!opts.noCache) void cacheSet("menu-structure", sck, structure);
-  }
+  // PRZEBIEG 1 — STRUKTURA (vision). Streaming nazw przez onItem/onProgress (apka pokazuje pozycje na żywo).
+  // Cache struktury USUNIĘTY: klucz był hashem BAJTÓW zdjęcia, więc w realnym życiu (za każdym razem świeże
+  // zdjęcie) nigdy nie trafiał, a po hi-res samplu nie trafia nawet przy replayu. Odczyt liczymy zawsze.
+  const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
+  const structure = s.structure;
+  total = addUsage(total, s.usage);
+  const structureFromCache = false;
 
   // venue_match: który z „W POBLIŻU" wskazał model. Emituj RAZ po sparsowaniu (to obiekt — nie da się
   // go wyłuskać ze strumienia jak restaurant_name). Tylko gdy lista była podana (inaczej nie ma sensu).
@@ -520,20 +508,6 @@ async function structureClaude(
   }
 }
 
-// Odtwarza licznik pozycji i nazwy z gotowej struktury (cache) — apka pokazuje to samo, co przy
-// realnym odczycie. photoQuery puste → apka NIE prefetchuje (zrobi to po enrich z dobrym hasłem).
-function replayStructureItems(structure: MenuStructure, opts: ExtractOptions): void {
-  // Z cache też zgłoś KUCHNIĘ (jak streaming) — apka potrzebuje DETERMINISTYCZNEJ kuchni ze struktury do
-  // STABILNEGO klucza cache enrichu/zdjęć. Bez tego re-skan szedł z niestabilnym peek → cache nie trafiał.
-  if (structure.cuisine) opts.onMeta?.({ cuisine: structure.cuisine });
-  if (!opts.onProgress && !opts.onItem) return;
-  let n = 0;
-  for (const s of structure.sections) for (const it of s.items) {
-    n++;
-    opts.onItem?.({ original: it.original, translated: it.original, photoQuery: "", photoQueryLocal: "", branded: false, description: it.menu_description || "", price: it.price, currency: it.currency });
-  }
-  opts.onProgress?.({ chars: 0, items: n });
-}
 
 // Wzbogacenie pojedynczej pozycji (wynik przebiegu 2) — cache'owane per pozycja.
 interface ItemEnrich {
