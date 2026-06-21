@@ -89,6 +89,8 @@ export interface DishPhotosDebug {
   resultCount: number;
   /** Czy poglądowe poszły Z CACHE (zero płatnego wyszukania/weryfikacji). */
   fromCache?: boolean;
+  /** SUROWE wyniki per provider — URL-e zwrócone przez API PRZED weryfikacją (do podglądu). */
+  searched?: { provider: string; urls: string[] }[];
 }
 
 export interface DishPhotosResult {
@@ -308,6 +310,9 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     const ordered = CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources;
     const lists = await Promise.all(ordered.map((s) => s.run().catch(() => [] as DishPhoto[])));
     const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
+    // SUROWE wyniki per provider (URL-e ZWRÓCONE przez API, PRZED weryfikacją vizją) — do podglądu „co
+    // wyszukiwarka dała, zanim ocenialiśmy". Same linki (bez bajtów).
+    dbg.searched = ordered.map((s, i) => ({ provider: s.name, urls: (lists[i] ?? []).map((ph) => ph.url).filter(Boolean).slice(0, 12) })).filter((x) => x.urls.length);
     // Scal RÓWNOMIERNIE (round-robin po źródłach), dedup po url — każde źródło ma reprezentację.
     const merged: DishPhoto[] = [];
     const seen = new Set<string>();

@@ -714,6 +714,8 @@ app.post("/dish-photos", async (c) => {
         dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly,
         restaurant: body.restaurantName?.trim() || body.restaurantHint?.trim() || null,
         cached: !!debug?.fromCache,
+        // SUROWE zwroty API per provider (przed weryfikacją) — same linki, do podglądu.
+        searched: (debug?.searched ?? []).map((s) => ({ provider: s.provider, urls: s.urls.slice(0, 12) })),
         cands: (debug?.steps ?? []).flatMap((st) =>
           (st.candidates ?? []).map((c) => ({ u: c.url, s: c.score != null ? +c.score.toFixed(2) : null, p: !!c.passed, fv: !!c.fromVenue, tier: st.tier })),
         ).slice(0, 30),
