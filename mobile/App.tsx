@@ -20,6 +20,7 @@ import {
   scanUploadPhoto,
   scanRun,
   setScanSession,
+  setSessionCostHandler,
   type ScanPhase,
   type ScanItemStub,
   fetchDishInfo,
@@ -228,6 +229,7 @@ export default function App() {
   const [costPrefs, setCostPrefs] = useState<CostPrefs>(DEFAULT_COST_PREFS); // kontrola auto-kosztu po skanie
   const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
   const [showVenueSearch, setShowVenueSearch] = useState(false); // osobny ekran „Znajdź lokal" (mapa + szukanie)
+  const [sessionCost, setSessionCost] = useState(0); // LIVE koszt sesji (z nagłówka x-session-cost) — rośnie w trakcie
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -244,7 +246,7 @@ export default function App() {
   // ID SESJI usera (od „nowy skan" do „nowy skan"). Zapisywany w skanie; po otwarciu z historii wracamy
   // do niej, by dorabiane ops trafiły do tej samej sesji w statystykach.
   const sessionIdRef = useRef<string>("");
-  const newSession = () => { const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; sessionIdRef.current = id; setScanSession(id); };
+  const newSession = () => { const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; sessionIdRef.current = id; setScanSession(id); setSessionCost(0); };
   const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
@@ -279,6 +281,7 @@ export default function App() {
   const [structureReady, setStructureReady] = useState(false);
 
   useEffect(() => {
+    setSessionCostHandler((n) => setSessionCost((prev) => Math.max(prev, n))); // koszt sesji rośnie monotonicznie
     newSession(); // sesja od startu apki
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
     void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
@@ -1281,6 +1284,7 @@ export default function App() {
     // Powrót do SESJI tego skanu — dorabiane ops (więcej zdjęć / zmiana lokalu) trafią do tej samej sesji
     // w statystykach (i przesuną jej koniec na ostatnią akcję). Stary skan bez sesji → świeża na modyfikacje.
     if (scan.sessionId) { sessionIdRef.current = scan.sessionId; setScanSession(scan.sessionId); } else { newSession(); }
+    setSessionCost(scan.usage?.costUsd ?? 0); // pokaż zapisany koszt sesji od razu; nowe ops dorzuci serwer
     const apply = (r: RestaurantInfo | null) =>
       setOpenScan((prev) => (prev && prev.id === scan.id ? { ...prev, restaurant: r } : prev));
     const applyMenu = makeApplyMenu(scan.id, true);
@@ -2366,6 +2370,9 @@ export default function App() {
 
               {(status === "done" || (status === "scanning" && browseEarly)) && menu ? (
                 <View>
+                  {sessionCost > 0 ? (
+                    <Text style={styles.sessionCost}>💰 Koszt sesji: ${sessionCost < 0.01 ? sessionCost.toFixed(4) : sessionCost.toFixed(2)}{status === "scanning" ? " · rośnie…" : ""}</Text>
+                  ) : null}
                   {status === "scanning" ? (
                     // Przeglądanie w trakcie skanu: baner z paskiem postępu DAŃ. Total rośnie w trakcie
                     // struktury (meta „ucieka"), a po jej zamrożeniu (structureReady) jest stały i pasek
@@ -2655,6 +2662,7 @@ const styles = StyleSheet.create({
   savedNote: { color: colors.accent, fontWeight: "700", fontSize: 15 },
   scanReadyBox: { alignSelf: "stretch", marginTop: 16 },
   scanReadyVenueHdr: { fontSize: 13, fontWeight: "800", color: colors.muted, marginHorizontal: 16, marginBottom: 8 },
+  sessionCost: { fontSize: 12, fontWeight: "700", color: colors.muted, textAlign: "right", marginBottom: 8 },
   scanBanner: { flexDirection: "row", alignItems: "center", backgroundColor: colors.badgeBg, borderRadius: 12, padding: 12, marginBottom: 16 },
   scanBannerTitle: { fontSize: 14, fontWeight: "800", color: colors.accent },
   scanBannerSub: { fontSize: 12, color: colors.muted, marginTop: 2 },

@@ -94,6 +94,12 @@ export async function registerInstall(): Promise<void> {
 let SESSION_ID: string | undefined;
 export function setScanSession(id: string | undefined): void { SESSION_ID = id; }
 
+// LIVE koszt sesji: serwer dokłada nagłówek x-session-cost do każdej odpowiedzi (sumaryczny koszt tej sesji).
+// Apka czyta go i aktualizuje wskaźnik „ile sesja kosztuje" (menu/historia) na bieżąco.
+let onSessionCost: ((cost: number) => void) | undefined;
+export function setSessionCostHandler(fn: ((cost: number) => void) | undefined): void { onSessionCost = fn; }
+function readSessionCost(v: string | null | undefined): void { if (!v) return; const n = parseFloat(v); if (!Number.isNaN(n) && onSessionCost) onSessionCost(n); }
+
 function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   h["x-client"] = "app"; // DETERMINISTYCZNIE: to prawdziwa apka (nie lab/curl/eksperyment) → statystyki „z apki"
@@ -109,6 +115,7 @@ async function loggedFetch(label: string, input: string, init?: RequestInit): Pr
   const t0 = Date.now();
   try {
     const res = await fetch(input, init);
+    readSessionCost(res.headers.get("x-session-cost")); // live koszt sesji
     appLog.logCall({
       ts: Date.now(),
       label,
@@ -319,6 +326,7 @@ export function scanMenu(
     xhr.onerror = () => fail("Błąd sieci podczas skanu.");
     xhr.ontimeout = () => fail("Skan trwał za długo (timeout).");
     xhr.onload = () => {
+      readSessionCost(xhr.getResponseHeader("x-session-cost"));
       appLog.logCall({ ts: Date.now(), label: "scan", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
       onProgress?.({ phase: "finalizing" });
       // Wynik: ostatnia kompletna linia JSON z `menu`/`error`/`done`.
@@ -411,6 +419,7 @@ export function enrichMenuOnServer(
     xhr.onerror = () => fail("Błąd sieci podczas wzbogacania.");
     xhr.ontimeout = () => fail("Wzbogacanie trwało za długo (timeout).");
     xhr.onload = () => {
+      readSessionCost(xhr.getResponseHeader("x-session-cost"));
       appLog.logCall({ ts: Date.now(), label: "enrich", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
       const text = xhr.responseText || "";
       let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
@@ -439,6 +448,7 @@ export function enrichMenuOnServer(
 /** Zaczyna sesję skanu (parametry bez zdjęć) → zwraca sessionId. */
 export async function scanStart(params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
   const res = await fetch(`${API_BASE}/scan/start`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(params) });
+  readSessionCost(res.headers.get("x-session-cost"));
   if (!res.ok) throw new Error(`Nie udało się rozpocząć skanu (HTTP ${res.status}).`);
   const json = (await res.json()) as { sessionId?: string };
   if (!json.sessionId) throw new Error("Serwer nie zwrócił sesji skanu.");
@@ -496,6 +506,7 @@ export function scanRun(
     xhr.onerror = () => fail("Błąd sieci podczas skanu.");
     xhr.ontimeout = () => fail("Skan trwał za długo (timeout).");
     xhr.onload = () => {
+      readSessionCost(xhr.getResponseHeader("x-session-cost"));
       appLog.logCall({ ts: Date.now(), label: "scan", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
       const text = xhr.responseText || "";
       let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean } | null = null;

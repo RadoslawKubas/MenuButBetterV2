@@ -16,7 +16,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost } from "./db.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
@@ -32,7 +32,7 @@ void initCache();
 void initSamples();
 
 // CORS — żeby appka (Expo web / urządzenie) mogła wołać endpoint w devie.
-app.use("/*", cors());
+app.use("/*", cors({ origin: "*", exposeHeaders: ["x-session-cost"] })); // expose: apka musi móc odczytać live koszt sesji
 
 // Token aplikacji: gdy ustawiony APP_TOKEN (produkcja w chmurze, gdzie endpoint jest
 // publiczny), każdy request poza /health musi mieć nagłówek `x-app-token` = APP_TOKEN.
@@ -73,6 +73,9 @@ app.use("/*", async (c, next) => {
       if (!NON_AI.has(prov) || u.calls <= 0) continue;
       logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd: 0, data: { calls: u.calls, bytesSent: u.bytesSent } });
     }
+    // Aktualny sumaryczny koszt sesji → nagłówek dla apki (live „ile sesja kosztuje"). Dla zwykłych
+    // odpowiedzi JSON działa; dla strumieniowych nagłówek jest już wysłany — tam koszt dojdzie z kolejnym requestem.
+    if (sessionId) { try { c.res.headers.set("x-session-cost", getSessionCost(sessionId).toFixed(6)); } catch { /* nagłówki już wysłane */ } }
   });
 });
 

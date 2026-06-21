@@ -101,11 +101,22 @@ export interface EventInput {
   installId?: string;
 }
 
+// KOSZT SESJI na żywo: sumujemy koszt zdarzeń per sessionId (w pamięci), żeby z KAŻDĄ odpowiedzią
+// odesłać apce aktualny sumaryczny koszt sesji (nagłówek x-session-cost) i pokazać „na bieżąco jak drożeje".
+const sessionCost = new Map<string, { cost: number; ts: number }>();
+export function getSessionCost(sessionId: string): number { return sessionCost.get(sessionId)?.cost ?? 0; }
+function bumpSessionCost(sessionId: string, cost: number): void {
+  const s = sessionCost.get(sessionId) ?? { cost: 0, ts: 0 };
+  s.cost += cost; s.ts = Date.now(); sessionCost.set(sessionId, s);
+  if (sessionCost.size > 1000) { const cut = Date.now() - 3 * 3600_000; for (const [k, v] of sessionCost) if (v.ts < cut) sessionCost.delete(k); }
+}
+
 /** Zapisuje zdarzenie (best‑effort, nieblokująco). No‑op bez DB. */
 export function logEvent(ev: EventInput): void {
+  const ctx = reqContext.getStore();
+  if (ctx?.sessionId && ev.costUsd) bumpSessionCost(ctx.sessionId, ev.costUsd); // licz nawet gdy DB padnie
   const p = getPool();
   if (!p || !ready) return;
-  const ctx = reqContext.getStore();
   const installId = ev.installId ?? ctx?.installId ?? null;
   // sessionId (sesja usera: od „nowy skan" do „nowy skan") wmergowany w data — bez migracji schematu.
   // To WSPÓLNY element wszystkich ops jednego skanu (peek, scan, enrich, zdjęcia) → grupowanie statystyk.
