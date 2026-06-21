@@ -96,6 +96,7 @@ export function setScanSession(id: string | undefined): void { SESSION_ID = id; 
 
 function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
+  h["x-client"] = "app"; // DETERMINISTYCZNIE: to prawdziwa apka (nie lab/curl/eksperyment) → statystyki „z apki"
   if (APP_TOKEN) h["x-app-token"] = APP_TOKEN;
   if (INSTALL_ID) h["x-install-id"] = INSTALL_ID;
   if (SESSION_ID) h["x-session-id"] = SESSION_ID;

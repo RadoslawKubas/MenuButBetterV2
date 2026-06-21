@@ -1181,17 +1181,22 @@ async function deleteBuild(ipa){
 }
 
 /* ---- Statystyki (zakładka 📊 Statystyki) — koszty wg AKTUALNEGO cennika ---- */
-let STAT_PERIOD='30d'; let STATS=null;
+let STAT_PERIOD='30d'; let STAT_SOURCE='app'; let STATS=null;
 const PROV_LABEL={claude:'Anthropic (Claude)',openai:'OpenAI (GPT)',google:'Google Gemini',google_places:'Google Places',serper:'Serper',serpapi:'SerpApi',tripadvisor:'TripAdvisor',wikimedia:'Wikimedia',openverse:'Openverse',google_cse:'Google CSE'};
 function renderStatsPeriod(){
   const opts=[['today','Dziś'],['7d','7 dni'],['30d','30 dni'],['all','Wszystko']];
-  document.getElementById('statsPeriod').innerHTML=opts.map(([k,l])=>`<div class="chip ${STAT_PERIOD===k?'on':''}" onclick="setStatsPeriod('${k}')">${l}</div>`).join('');
+  const src=[['app','📱 Apka'],['exp','🧪 Eksperymenty'],['all','Wszystko']];
+  document.getElementById('statsPeriod').innerHTML=
+    opts.map(([k,l])=>`<div class="chip ${STAT_PERIOD===k?'on':''}" onclick="setStatsPeriod('${k}')">${l}</div>`).join('')
+    +'<span style="display:inline-block; width:18px"></span>'
+    +src.map(([k,l])=>`<div class="chip ${STAT_SOURCE===k?'on':''}" onclick="setStatsSource('${k}')" title="źródło logów">${l}</div>`).join('');
 }
 function setStatsPeriod(k){ STAT_PERIOD=k; renderStatsPeriod(); loadStats(); }
+function setStatsSource(k){ STAT_SOURCE=k; renderStatsPeriod(); loadStats(); }
 async function loadStats(btn){
   if(btn) btn.disabled=true;
   document.getElementById('statsSummary').innerHTML='ładuję…';
-  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD+'&source='+STAT_SOURCE); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
   renderStatsSummary(); renderStatsDaily(); renderStatsByApi(); renderStatsSessions();
   if(btn) btn.disabled=false;
 }
@@ -1203,6 +1208,7 @@ function renderStatsSummary(){
     <div class="step">
       <div style="font-size:26px; font-weight:800; color:var(--acc)">${fmtUsd(a.totalCost)}</div>
       <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}</div>
+      <div class="small" style="margin-top:3px">${STAT_SOURCE==='app'?'📱 <b>liczę tylko z apki</b>':STAT_SOURCE==='exp'?'🧪 <b>liczę tylko eksperymenty</b>':'📊 <b>liczę wszystko</b>'} <span class="mut">— w okresie: 📱 z apki ${STATS.appCount||0} · 🧪 eksperymenty ${STATS.expCount||0} ops</span></div>
       <div class="mut small" style="margin-top:5px">🧠 tokeny: ${fmtUsd(a.tokenCost)} · 🔌 API/zapytania: ${fmtUsd(a.apiCost)} · 📡 transfer: ${fmtUsd(a.dataCost)} · tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out</div>
       ${sv.cost?`<div class="small" style="margin-top:5px; color:#7fd6a0">💾 cache zaoszczędził ~${fmtUsd(sv.cost)} (${sv.count||0} trafień)</div>`:''}
     </div>`;

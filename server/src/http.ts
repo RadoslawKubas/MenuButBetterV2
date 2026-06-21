@@ -61,8 +61,10 @@ app.use("/*", async (c, next) => {
   const forceFresh = c.req.header("x-force-fresh") === "1";
   // Sesja usera (x-session-id): od „nowy skan" do „nowy skan" — wspólny tag wszystkich ops jednego skanu.
   const sessionId = c.req.header("x-session-id") || undefined;
+  // „app" tylko gdy nagłówek x-client:app (ustawia go DETERMINISTYCZNIE prawdziwa apka). Brak → eksperyment.
+  const source = c.req.header("x-client") === "app" ? "app" : undefined;
   const apiUsage = new Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>();
-  await reqContext.run({ installId, forceFresh, sessionId, apiUsage }, async () => {
+  await reqContext.run({ installId, forceFresh, sessionId, source, apiUsage }, async () => {
     await next();
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
     // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.

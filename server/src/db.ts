@@ -12,6 +12,9 @@ let ready = false;
 // logEvent w obrębie requestu samo dostaje installId — bez przekazywania przez wszystkie wywołania.
 export const reqContext = new AsyncLocalStorage<{
   installId?: string; forceFresh?: boolean; sessionId?: string;
+  // „app" gdy request pochodzi z PRAWDZIWEJ apki (nagłówek x-client:app). Brak → eksperyment/test (lab,
+  // curl Claude itp.). Dzięki temu statystyki domyślnie liczą tylko realne logi z apki.
+  source?: string;
   // Akumulator zużycia API per-request (apiLog wpisuje; middleware loguje nie-AI providerów na koniec).
   apiUsage?: Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>;
 }>();
@@ -106,8 +109,10 @@ export function logEvent(ev: EventInput): void {
   const installId = ev.installId ?? ctx?.installId ?? null;
   // sessionId (sesja usera: od „nowy skan" do „nowy skan") wmergowany w data — bez migracji schematu.
   // To WSPÓLNY element wszystkich ops jednego skanu (peek, scan, enrich, zdjęcia) → grupowanie statystyk.
-  const sid = ctx?.sessionId;
-  const data = sid ? { ...(ev.data ?? {}), sessionId: sid } : ev.data;
+  const extra: Record<string, unknown> = {};
+  if (ctx?.sessionId) extra.sessionId = ctx.sessionId;
+  if (ctx?.source) extra.source = ctx.source; // „app" = realna apka; brak → eksperyment/test
+  const data = Object.keys(extra).length ? { ...(ev.data ?? {}), ...extra } : ev.data;
   p.query(
     `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,

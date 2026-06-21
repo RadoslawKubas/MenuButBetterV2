@@ -1273,7 +1273,15 @@ app.get("/api/cost-log", async (c) => {
     const outTok = e.models ? e.models.reduce((n, m) => n + m.outTok, 0) : sumD(e, "outTok");
     return { ...e, tokenCost, apiCost, bytesSent, bytesRecv, inTok, outTok, calls: sumD(e, "calls"), dataCost, totalCost: tokenCost + apiCost + dataCost };
   };
-  const entries = [...readCostLog(), ...prodEntries].filter((e) => e.ts >= cutoff).map(enrich).sort((a, b) => b.ts - a.ts);
+  // ŹRÓDŁO: „app" = realna apka (prod + data.source==="app"). Reszta (lab sim, curl/eksperymenty, prod bez
+  // markera) = eksperyment. Domyślnie liczymy TYLKO apkę; eksperymenty za przełącznikiem (mniej ważne).
+  const srcParam = c.req.query("source") || "app";
+  const isApp = (e: CostEntry) => e.meta?.prod === true && (e.meta?.data as { source?: string } | undefined)?.source === "app";
+  const inWindow = [...readCostLog(), ...prodEntries].filter((e) => e.ts >= cutoff);
+  const appCount = inWindow.filter(isApp).length, expCount = inWindow.length - appCount;
+  const entries = inWindow
+    .filter((e) => (srcParam === "all" ? true : srcParam === "exp" ? !isApp(e) : isApp(e)))
+    .map(enrich).sort((a, b) => b.ts - a.ts);
   const agg = entries.reduce(
     (a, e) => ({
       count: a.count + 1, calls: a.calls + e.calls, inTok: a.inTok + e.inTok, outTok: a.outTok + e.outTok,
@@ -1360,7 +1368,7 @@ app.get("/api/cost-log", async (c) => {
   const groups = Object.values(gmap)
     .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
     .sort((a, b) => b.ts - a.ts);
-  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodErr, prodUrl: PROD_URL });
+  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
 });
 
 app.post("/api/cost-log-clear", (c) => {
