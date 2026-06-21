@@ -404,13 +404,15 @@ app.post("/scan/photo", async (c) => {
   return c.json({ ok: true, received: s.photos.size });
 });
 
-interface ScanRunBody { sessionId?: string; stream?: boolean }
+interface ScanRunBody { sessionId?: string; stream?: boolean; nearbyVenues?: { name?: string; cuisine?: string | null }[] }
 app.post("/scan/run", async (c) => {
   let body: ScanRunBody;
   try { body = await c.req.json<ScanRunBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
   const s = body.sessionId ? scanSessions.get(body.sessionId) : undefined;
   if (!s) return c.json({ error: "Sesja nieznana lub wygasła — zacznij skan od nowa." }, 404);
   if (s.photos.size === 0) return c.json({ error: "Brak zdjęć w sesji." }, 400);
+  // Lokale „w pobliżu" apka liczy RÓWNOLEGLE z uploadem i podaje dopiero tu (zero opóźnienia startu).
+  if (Array.isArray(body.nearbyVenues)) s.params.nearbyVenues = sanitizeNearby(body.nearbyVenues);
   if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
 
   // Kolejność DO AI: po dacie zrobienia (takenAt), index jako tie-breaker — strony tak, jak fotografował

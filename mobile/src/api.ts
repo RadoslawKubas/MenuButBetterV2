@@ -475,7 +475,8 @@ export function scanRun(
   sessionId: string,
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
-  onMeta?: (m: { restaurantName?: string; cuisine?: string }) => void,
+  onMeta?: (m: { restaurantName?: string; cuisine?: string; venueMatch?: { index: number; by: "name" | "cuisine" } | null }) => void,
+  nearbyVenues?: { name: string; cuisine?: string | null }[],
 ): Promise<{ menu: Menu; usage: Usage; cached: boolean }> {
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
@@ -497,7 +498,7 @@ export function scanRun(
           if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
           else if (ev.phase === "item") onItem?.({ original: ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null });
-          else if (ev.phase === "meta") onMeta?.({ restaurantName: ev.restaurantName, cuisine: ev.cuisine });
+          else if (ev.phase === "meta") onMeta?.({ restaurantName: ev.restaurantName, cuisine: ev.cuisine, venueMatch: ev.venueMatch });
         } catch { /* niepełna linia */ }
       }
     };
@@ -520,7 +521,7 @@ export function scanRun(
       if (!result.menu) return fail("Pusta odpowiedź serwera.");
       resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached });
     };
-    xhr.send(JSON.stringify({ sessionId, stream: true }));
+    xhr.send(JSON.stringify({ sessionId, stream: true, nearbyVenues }));
   });
 }
 

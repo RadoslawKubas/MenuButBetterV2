@@ -114,6 +114,9 @@ import {
 
 // Domyślny zasięg szukania lokalu „w pobliżu" (m). Można zwiększać „szerszym zasięgiem".
 const DEFAULT_NEARBY_RADIUS = 800;
+// Mały promień do listy „w pobliżu" wysyłanej do vision przy skanie (venue_match) — na błąd GPS, mała
+// lista = mniej szumu. Większy zasięg jest tylko w ręcznym „Znajdź inny".
+const VENUE_MATCH_RADIUS = 220;
 
 // Czytelna etykieta modelu (np. „Gemini 2.5 Flash”) z id — do panelu „Ustawienia menu”.
 function modelLabel(id: ModelId | undefined | null): string {
@@ -611,6 +614,8 @@ export default function App() {
       // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
       let enrichUsage: Usage = ZERO_USAGE;
       let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
+      let scanReadName = ""; // ostatnia nazwa lokalu ze streamu (fallback, gdy venue_match nie trafi)
+      let nearbyCands: RestaurantInfo[] = []; // kandydaci „w pobliżu" (do vision: venue_match)
       // POGLĄDOWE W TRAKCIE: gdy rolling da photo_query, od razu dociągamy tanie poglądowe (Serper/Wiki),
       // żeby zdjęcia pojawiały się WCZEŚNIE (jak dawny prefetch), a nie w finale. attachPhotosByName jest
       // no-op gdy pozycji jeszcze nie ma w menu (w trakcie struktury) → trzymamy w previewAcc i dokładamy
@@ -704,6 +709,13 @@ export default function App() {
       // === ARCHITEKTURA B: sesja — zdjęcia wysyłamy POJEDYNCZO (odporne, retry per zdjęcie, pasek postępu),
       // serwer buforuje, tnie PO ROZMIARZE na partie modelu i streamuje strukturę (onScanItem → rolling). ===
       setScanPhase({ label: "Wysyłam zdjęcia…" });
+      // Lokale „w pobliżu" (mały promień) liczymy RÓWNOLEGLE z uploadem — vision dostanie ich nazwy+kuchnię
+      // i może wskazać lokal (venue_match). Wymaga GPS; ciche niepowodzenie = brak listy (działa jak dotąd).
+      const nearbyPromise: Promise<RestaurantInfo[]> = location
+        ? fetchRestaurant({ forceNearby: true, location, targetLang: opts.targetLang, radius: VENUE_MATCH_RADIUS })
+            .then((res) => res.candidates ?? [])
+            .catch(() => [])
+        : Promise.resolve([]);
       const sessionId = await scanStart({
         targetLang: opts.targetLang,
         restaurantHint: opts.hint.trim() || undefined,
@@ -744,6 +756,7 @@ export default function App() {
       }
       // Skan: serwer streamuje strukturę; onScanItem napędza rolling enrich, onMeta daje nazwę/kuchnię (+#2a).
       setScanPhase({ label: "Czytam menu…" });
+      nearbyCands = await nearbyPromise; // gotowe po uploadzie — bez opóźniania startu skanu
       const ran = await scanRun(
         sessionId,
         (p) => setScanPhase(scanPhaseLabel(p)),
@@ -751,14 +764,40 @@ export default function App() {
         (m) => {
           if (myGen !== scanGenRef.current) return; // spóźniony meta STAREGO skanu — nie dotykaj bieżącego
           if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
+
+          // venue_match (przychodzi PO sparsowaniu struktury): vision wskazało lokal z „w pobliżu". Ma
+          // PIERWSZEŃSTWO nad zgadywaniem po nazwie. by='name' → pewny; by='cuisine' → zgadnięty (Tier 0
+          // rygorystyczny). Brak dopasowania → fallback po odczytanej nazwie/GPS.
+          if (m.venueMatch !== undefined) {
+            if (earlyVenueRef.current) return;
+            earlyVenueRef.current = true;
+            const cand = m.venueMatch ? nearbyCands[m.venueMatch.index] : undefined;
+            if (cand) {
+              setScanFoundName(cand.name);
+              const venue: RestaurantInfo = m.venueMatch!.by === "cuisine"
+                ? { ...cand, guessedByLocation: true, nameVerified: false }
+                : { ...cand, guessedByLocation: false, nameVerified: true };
+              const minimal: Menu = { restaurant_name: cand.name, restaurant_address: cand.address ?? null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
+              void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true, preResolved: venue });
+            } else if (scanReadName || location) {
+              const minimal: Menu = { restaurant_name: scanReadName || null, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
+              void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
+            }
+            return;
+          }
+
+          // Zdarzenie nazwy (streaming). Z kandydatami CZEKAMY na venue_match (lepszy sygnał) — pokaż samą
+          // nazwę. Bez kandydatów (brak GPS) — wczesny lookup po nazwie, jak dotąd.
           if (!m.restaurantName) return;
           setScanFoundName(m.restaurantName);
-          if (!earlyVenueRef.current) {
+          scanReadName = m.restaurantName;
+          if (nearbyCands.length === 0 && !earlyVenueRef.current) {
             earlyVenueRef.current = true;
             const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
             void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
           }
         },
+        nearbyCands.map((c) => ({ name: c.name, cuisine: c.cuisine ?? null })),
       );
       merged = ran.menu;
       if (ran.cached) setScanFromCache(true); // cała struktura z cache → „bez kosztu modelu"
@@ -1022,24 +1061,28 @@ export default function App() {
     scanId: string | null,
     lang: string,
     apply: (r: RestaurantInfo | null) => void,
-    opts?: { forceNearby?: boolean; skipUpgrade?: boolean; applyMenu?: (u: (prev: Menu | null) => Menu | null) => void },
+    opts?: { forceNearby?: boolean; skipUpgrade?: boolean; applyMenu?: (u: (prev: Menu | null) => Menu | null) => void; preResolved?: RestaurantInfo },
   ) {
     const forceNearby = opts?.forceNearby ?? false;
     const applyMenu = opts?.applyMenu ?? restaurantCtx?.applyMenu ?? setMenu;
     const prevVenue = restaurantCtx?.current ?? null;
-    // forceNearby wymaga GPS; zwykłe wyszukiwanie — nazwy ALBO GPS (fallback).
-    if (forceNearby ? !location : !m.restaurant_name && !location) return;
+    // forceNearby wymaga GPS; zwykłe wyszukiwanie — nazwy ALBO GPS (fallback). preResolved (z venue_match)
+    // omija to — lokal już znamy.
+    if (!opts?.preResolved && (forceNearby ? !location : !m.restaurant_name && !location)) return;
     // Zapamiętaj kontekst karty (do „wybierz / szukaj w pobliżu / usuń").
     setRestaurantCtx({ menu: m, location, scanId, lang, apply, applyMenu, current: prevVenue, candidates: [] });
     setRestaurantLoading(true);
     try {
-      const { restaurant: r, candidates } = await fetchRestaurant({
-        name: forceNearby ? undefined : (m.restaurant_name ?? undefined),
-        address: m.restaurant_address ?? undefined,
-        cuisine: m.cuisine,
-        location,
-        targetLang: lang,
-      });
+      // preResolved: lokal wskazany przez vision (venue_match) — używamy wprost, bez zapytania do Places.
+      const { restaurant: r, candidates } = opts?.preResolved
+        ? { restaurant: opts.preResolved, candidates: [] as RestaurantInfo[] }
+        : await fetchRestaurant({
+            name: forceNearby ? undefined : (m.restaurant_name ?? undefined),
+            address: m.restaurant_address ?? undefined,
+            cuisine: m.cuisine,
+            location,
+            targetLang: lang,
+          });
       apply(r); // pokaż od razu (online, przez proxy)
       if (!r) {
         if (forceNearby) Alert.alert("Brak wyników", "Nie znalazłem innej restauracji w pobliżu.");
