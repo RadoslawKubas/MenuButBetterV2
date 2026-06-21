@@ -658,6 +658,7 @@ async function enrichCall(
       response_format: { type: "json_schema", json_schema: { name: "enrich", strict: tag === "openai", schema: ENRICH_SCHEMA as unknown as Record<string, unknown> } },
     };
     if (isOpenAiReasoning(model)) params.reasoning_effort = "minimal";
+    else params.temperature = 0; // determinizm photo_query (modele reasoning nie przyjmują temperature)
     const resp = await track(tag, "enrich", () => openai.chat.completions.create(params));
     const usage = usageFromOpenAI(model, resp.usage);
     recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
@@ -672,6 +673,7 @@ async function enrichCall(
   const stream = client.messages.stream({
     model,
     max_tokens: MODELS[model].maxOutput,
+    temperature: 0, // determinizm: ten sam danie → ten sam photo_query → stabilny klucz cache
     system: [{ type: "text", text: ENRICH_SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: userText }],
     output_config: { format: { type: "json_schema", schema: ENRICH_SCHEMA } },

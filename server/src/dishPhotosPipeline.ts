@@ -130,12 +130,20 @@ export function venueNameInUrl(contextUrl: string | undefined, name: string): bo
  * żeby refresh trafiał DOKŁADNIE w ten sam wpis. Zależy od: termin generyczny (photo_query lub
  * nazwa) + kuchnia + model weryfikacji + tryb źródeł (CC/web) + liczba zdjęć.
  */
+/** Kanoniczny klucz z nazwy: bez akcentów, małe litery, tylko [a-z0-9], UNIKALNE słowa POSORTOWANE.
+ *  Dzięki temu „salmon nigiri sushi" == „Nigiri Salmon Sushi" == „sushi  salmon nigiri" → jeden klucz
+ *  (odporne na kolejność słów / akcenty / duplikaty / drobny szum LLM). */
+function canonKey(s: string): string {
+  return [...new Set(deaccentLower(s).replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean))].sort().join(" ");
+}
+
 export function reprPhotoCacheKey(args: { dish: string; photoQuery?: string; cuisine?: string; verifyModel?: string; num?: number; verify?: boolean; takeAll?: boolean }): string {
-  // KLUCZ po STABILNEJ, znormalizowanej nazwie dania — NIE po photoQuery (to nazwa generowana przez AI w
-  // enrichu, więc RÓŻNI się per skan → klucz by się rozjeżdżał i cache nigdy nie trafiał). photoQuery dalej
-  // służy do SAMEGO WYSZUKIWANIA (lepsze trafienia), ale cache identyfikujemy daniem.
-  const term = deaccentLower(args.dish.trim());
-  const cuisine = args.cuisine ? deaccentLower(args.cuisine.trim()) || undefined : undefined;
+  // KLUCZ po KANONICZNEJ nazwie (photo_query — angielski, „opisz CZYM danie jest" + kuchnia), znormalizowanej
+  // tak, by była POWTARZALNA mimo drobnego niedeterminizmu LLM i wspólna cross-język. photo_query już niesie
+  // kontekst kuchni, więc osobnej kuchni nie dokładamy. Brak photo_query → fallback do nazwy dania + kuchni.
+  const pq = args.photoQuery?.trim();
+  const term = pq ? canonKey(pq) : deaccentLower(args.dish.trim());
+  const cuisine = pq ? undefined : (args.cuisine ? deaccentLower(args.cuisine.trim()) || undefined : undefined);
   const verifyModel = args.verifyModel?.trim() || "claude-sonnet-4-6";
   const num = args.num ?? 4;
   const ccFirst = process.env.REPRESENTATIVE_CC_FIRST === "1";
