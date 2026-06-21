@@ -18,7 +18,6 @@ export const CACHE_VERSION = {
   "repr-photos": 2, // zdjęcia poglądowe „typ dania" (v2: verify „pojedyncza porcja" + nowy photo_query)
   "dish-info": 2, // opis dania (v2: region+kraj w kluczu, bez powtórki nazwy, akcent regionalny)
   "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
-  "menu-scan": 6, // odczyt menu (v6: warianty cen jako pole + availability sekcji + zestawy-jako-dania)
   "menu-structure": 6, // przebieg 1: struktura menu (v6: variants[] + section.availability + zestawy-jako-dania)
   "item-enrich": 4, // przebieg 2: wzbogacenie (v4: photo_query „podana potrawa", krótki opis 1 zdanie, bez peek-kuchni)
   "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
@@ -30,7 +29,6 @@ const TTL_DAYS: Record<CacheKind, number> = {
   "repr-photos": 45,
   "dish-info": 200,
   "vision-url": 45,
-  "menu-scan": 120, // ten sam plik = ta sama treść; długo (a wersja klucza i tak chroni przy zmianach)
   "menu-structure": 120,
   "item-enrich": 200,
   "bad-photo": 365, // złe zdjęcie raczej nie „naprawi się" samo — pamiętaj długo

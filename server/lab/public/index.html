@@ -1005,7 +1005,7 @@ function toggleGroupEntry(gi,ei){
     </tbody></table>`;
 }
 async function clearCostLog(){ if(!confirm('Wyczyścić log kosztów (lokalny plik)?')) return; await api('/api/cost-log-clear',{}); loadCostLog(); }
-const CACHE_LABELS={'repr-photos':'zdjęcia poglądowe','dish-info':'opisy dań','vision-url':'werdykty vision','menu-scan':'pełne menu (skan)','menu-structure':'struktura menu','item-enrich':'wzbogacenie pozycji','bad-photo':'złe kadry (za słaba jakość)'};
+const CACHE_LABELS={'repr-photos':'zdjęcia poglądowe','dish-info':'opisy dań','vision-url':'werdykty vision','menu-structure':'struktura menu','item-enrich':'wzbogacenie pozycji','bad-photo':'złe kadry (za słaba jakość)'};
 async function loadCacheStats(btn){
   if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},900); }
   const r=await api('/api/cache-stats');

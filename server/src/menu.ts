@@ -379,10 +379,6 @@ function imagesHash(images: InputImage[]): string {
   for (const img of images) { h.update(img.mediaType); h.update("|"); h.update(img.base64); h.update("\n"); }
   return h.digest("hex").slice(0, 32);
 }
-/** Klucz cache skanu: hash zestawu + KONTEKST wpływający na wynik (język/lokalizacja/kuchnia/lokal/modele). */
-function scanCacheKey(images: InputImage[], opts: ExtractOptions, model: ModelId, enrichModel: ModelId): string {
-  return cacheKey("menu-scan", imagesHash(images), opts.targetLang, opts.locationHint, opts.restaurantHint, opts.cuisineHint, model, enrichModel);
-}
 
 // Kontekst dla PRZEBIEGU 1 (struktura) — bez instrukcji tłumaczenia; lokalizacja/kuchnia pomagają
 // poprawnie odczytać lokalne nazwy dań.
@@ -416,13 +412,9 @@ export async function extractMenu(
   const model: ModelId = opts.model && isModelId(opts.model) ? opts.model : DEFAULT_MODEL;
   const enrichModel: ModelId = opts.enrichModel && isModelId(opts.enrichModel) ? opts.enrichModel : model;
 
-  // FAST PATH — ten sam zestaw plików + ten sam kontekst i modele → gotowe menu (zero płatnych wywołań).
-  const ck = scanCacheKey(images, opts, model, enrichModel);
-  if (!opts.noCache) {
-    const hit = await cacheGet<Menu>("menu-scan", ck, { op: "scan" });
-    if (hit) return { menu: hit, usage: ZERO_USAGE, cached: true, readable: true, enriched: true };
-  }
-
+  // (Usunięty legacy cache „menu-scan" = pełne menu w jednym wpisie. Apka i tak idzie 2-fazowo: struktura
+  //  (cache menu-structure) + enrich (cache item-enrich) — pełnego wpisu nie trzeba, ścieżka pełna i tak
+  //  trafia w te dwa pod-cache i tylko składa wynik.)
   let total: Usage = ZERO_USAGE;
   // PRZEBIEG 1 — STRUKTURA (vision). Cache struktury per zestaw plików + model (BEZ języka/lokalizacji —
   // transkrypcja jest od nich niezależna → reuse między językami). Streaming nazw przez onItem/onProgress.
@@ -464,7 +456,6 @@ export async function extractMenu(
   // PRZEBIEG 2 — WZBOGACANIE (tekst, z cache per pozycja) → pełne Menu.
   const enriched = await enrichMenu(structure, opts, enrichModel);
   total = addUsage(total, enriched.usage);
-  if (!opts.noCache) void cacheSet("menu-scan", ck, enriched.menu, { lang: opts.targetLang });
   return { menu: enriched.menu, usage: total, readable, poorQuality, enriched: true };
 }
 
