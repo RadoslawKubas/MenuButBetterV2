@@ -69,9 +69,14 @@ app.use("/*", async (c, next) => {
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
     // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.
     const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "tripadvisor", "wikimedia", "openverse"]);
+    // Stawki nie-AI ($/1000 zapytań) — spójne z labem (Places 17, Serper 0.6, SerpApi 10; reszta darmowa).
+    // Doliczamy je do live kosztu sesji, by nagłówek akumulował KAŻDY koszt zdarzeń (nie tylko AI). Lab
+    // i tak przelicza koszt nie-AI z data.calls (costUsd zdarzenia api ignoruje) — brak podwójnego liczenia.
+    const NON_AI_RATE: Record<string, number> = { google_places: 17, serper: 0.6, serpapi: 10 };
     for (const [prov, u] of apiUsage) {
       if (!NON_AI.has(prov) || u.calls <= 0) continue;
-      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd: 0, data: { calls: u.calls, bytesSent: u.bytesSent } });
+      const costUsd = (u.calls / 1000) * (NON_AI_RATE[prov] ?? 0);
+      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, data: { calls: u.calls, bytesSent: u.bytesSent } });
     }
     // Aktualny sumaryczny koszt sesji → nagłówek dla apki (live „ile sesja kosztuje"). Dla zwykłych
     // odpowiedzi JSON działa; dla strumieniowych nagłówek jest już wysłany — tam koszt dojdzie z kolejnym requestem.
