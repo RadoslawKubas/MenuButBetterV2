@@ -515,10 +515,10 @@ export default function App() {
         .sort((a, b) => (a.im.takenAt ?? Infinity) - (b.im.takenAt ?? Infinity) || a.i - b.i)
         .map((x) => x.im);
       // Partie skanu struktury. batchSize: liczba ≥1 = sztywno tyle zdjęć/partię; 0 = „maks" DYNAMICZNIE
-      // — pakuj ile się ZMIEŚCI pod budżet rozmiaru żądania (zapas pod limit API ~32MB), z twardym sufitem.
-      // Większy batch = model widzi kartki RAZEM → grupy ciągnące się przez strony nie pękają.
-      const SIZE_BUDGET = 22 * 1024 * 1024; // ~22MB base64/partię (zapas: JSON+prompt+margines < 32MB API)
-      const MAX_PER_BATCH = 10; // twardy sufit = serwerowy MAX_IMAGES (większa partia → 400 i utrata stron)
+      // — pakuj ILE SIĘ ZMIEŚCI pod budżet ROZMIARU żądania (sterownik), a nie sztywną liczbę. Większy
+      // batch = model widzi kartki RAZEM → grupy ciągnące się przez strony nie pękają.
+      const SIZE_BUDGET = 28_000_000; // ~28M znaków base64/partię (zapas pod serwerowe MAX_TOTAL_BASE64=36M)
+      const MAX_PER_BATCH = 15; // NIE „produktowy" limit — tylko bezpiecznik TIMEOUTU (≈15 gęstych stron ≈ 240s)
       const fixed = Math.max(0, Math.round(costPrefs.batchSize || 0));
       const batches: PreparedImage[][] = [];
       if (fixed >= 1) {

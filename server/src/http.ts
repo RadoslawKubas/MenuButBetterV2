@@ -82,7 +82,9 @@ app.get("/models", (c) =>
 );
 
 const ALLOWED_MEDIA = new Set<MediaType>(["image/jpeg", "image/png", "image/webp"]);
-const MAX_IMAGES = 10;
+// Backstop liczby zdjęć/żądanie (hojny — apka i tak self-limituje po ROZMIARZE; tu tylko sanity).
+// Realny limit to MAX_TOTAL_BASE64 (rozmiar) — zgodnie z „pakuj ile się zmieści", nie sztywna liczba.
+const MAX_IMAGES = 20;
 
 interface ImageInput {
   base64?: string;
