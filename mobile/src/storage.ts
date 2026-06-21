@@ -227,6 +227,16 @@ export async function updateScanMenu(id: string, menu: Menu): Promise<void> {
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
 }
 
+/** Nadaje trwały sessionId zapisanemu skanowi (dla starych skanów bez sesji) — by oglądanie/dorabianie
+ *  trzymało się jednej sesji zamiast tworzyć „widmowe" przy każdym otwarciu. */
+export async function setScanSessionId(id: string, sessionId: string): Promise<void> {
+  const all = await listScans();
+  const scan = all.find((s) => s.id === id);
+  if (!scan || scan.sessionId) return; // nie nadpisuj istniejącej sesji
+  scan.sessionId = sessionId;
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+}
+
 export async function setScanSourcePhotos(id: string, photos: { path: string; mediaType: string }[]): Promise<void> {
   const all = await listScans();
   const scan = all.find((s) => s.id === id);

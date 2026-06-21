@@ -53,6 +53,7 @@ import {
   updateScanItem,
   updateScanMenu,
   setScanSourcePhotos,
+  setScanSessionId,
   updateScanRestaurant,
   addScanUsage,
   renameScan,
@@ -246,7 +247,7 @@ export default function App() {
   // ID SESJI usera (od „nowy skan" do „nowy skan"). Zapisywany w skanie; po otwarciu z historii wracamy
   // do niej, by dorabiane ops trafiły do tej samej sesji w statystykach.
   const sessionIdRef = useRef<string>("");
-  const newSession = () => { const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; sessionIdRef.current = id; setScanSession(id); setSessionCost(0); };
+  const newSession = (): string => { const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; sessionIdRef.current = id; setScanSession(id); setSessionCost(0); return id; };
   const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
@@ -1288,9 +1289,12 @@ export default function App() {
 
   function openSaved(scan: SavedScan) {
     setOpenScan(scan);
-    // Powrót do SESJI tego skanu — dorabiane ops (więcej zdjęć / zmiana lokalu) trafią do tej samej sesji
-    // w statystykach (i przesuną jej koniec na ostatnią akcję). Stary skan bez sesji → świeża na modyfikacje.
-    if (scan.sessionId) { sessionIdRef.current = scan.sessionId; setScanSession(scan.sessionId); } else { newSession(); }
+    // Powrót do SESJI tego skanu — dorabiane ops (opisy/więcej zdjęć/lokal) trafią do tej samej sesji w
+    // statystykach. Oglądanie zapisanego skanu NIE tworzy nowej sesji (to robi tylko „nowy skan" i wczytanie
+    // sampla). Stary skan bez sesji → nadaj mu TRWAŁY sessionId (zapisz), by kolejne otwarcia go reużywały
+    // zamiast rodzić „widmowe" puste sesje.
+    if (scan.sessionId) { sessionIdRef.current = scan.sessionId; setScanSession(scan.sessionId); }
+    else { const sid = newSession(); void setScanSessionId(scan.id, sid); }
     setSessionCost(scan.usage?.costUsd ?? 0); // pokaż zapisany koszt sesji od razu; nowe ops dorzuci serwer
     const apply = (r: RestaurantInfo | null) =>
       setOpenScan((prev) => (prev && prev.id === scan.id ? { ...prev, restaurant: r } : prev));
