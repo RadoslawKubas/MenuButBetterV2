@@ -1042,10 +1042,13 @@ app.get("/installs", async (c) => c.json({ installs: await getInstalls() }));
 // JEDNORAZOWY backfill: oznacz stare zdarzenia z REALNYCH urządzeń (telefon testera) jako source=app —
 // żeby filtr statystyk „app" je łapał. Domyślnie iPhone 17 Pro. Idempotentny, chroniony tokenem (auth).
 app.post("/admin/backfill-app-source", async (c) => {
-  const b = await c.req.json<{ deviceModels?: string[] }>().catch(() => ({}) as { deviceModels?: string[] });
-  const models = (b.deviceModels?.length ? b.deviceModels : ["iPhone 17 Pro"]).map((m) => m.trim()).filter(Boolean);
-  const res = await backfillAppSource(models);
-  return c.json({ ok: true, ...res, deviceModels: models });
+  const b = await c.req.json<{ deviceModels?: string[]; installIds?: string[] }>().catch(() => ({}) as { deviceModels?: string[]; installIds?: string[] });
+  const installIds = (b.installIds ?? []).map((m) => m.trim()).filter(Boolean);
+  // Domyślnie iPhone 17 Pro (realne urządzenie), ALE gdy podano installIds — bierzemy TYLKO je (stare buildy
+  // bez device_model). Brak obu → fallback iPhone 17 Pro.
+  const models = b.deviceModels?.length ? b.deviceModels.map((m) => m.trim()).filter(Boolean) : (installIds.length ? [] : ["iPhone 17 Pro"]);
+  const res = await backfillAppSource({ deviceModels: models, installIds });
+  return c.json({ ok: true, ...res, deviceModels: models, installIds });
 });
 
 // WSPÓLNY CENNIK: lab edytuje override'y cen i WGRYWA je tutaj (cały obiekt). Serwer trzyma je w DB
