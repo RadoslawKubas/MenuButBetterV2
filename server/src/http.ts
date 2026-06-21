@@ -18,7 +18,8 @@ import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLo
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
 // ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
-import { backfillAppSource, attributeOrphansByTime } from "./dataFixes.ts";
+import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
+import { getSessions, getSessionEvents } from "./sessions.ts";
 import { apiCallCost, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -1063,7 +1064,27 @@ app.post("/admin/attribute-orphans", async (c) => {
   const res = await attributeOrphansByTime(b.maxGapSec && b.maxGapSec > 0 ? b.maxGapSec : 900);
   return c.json({ ok: true, ...res });
 });
+// Nadaj syntetyczny sessionId starym zdarzeniom (bez sessionId) → baza może grupować sesje (GROUP BY sessionId).
+app.post("/admin/backfill-sessions", async (c) => {
+  const res = await backfillSyntheticSessions();
+  return c.json({ ok: true, ...res });
+});
 // ========= /JEDNORAZOWE NAPRAWY DANYCH =========
+
+// Podsumowania SESJI w okresie — agregacja w SQL (GROUP BY sessionId), bez ładowania wszystkich zdarzeń.
+app.get("/sessions", async (c) => {
+  const period = c.req.query("period") || "all";
+  const now = Date.now();
+  const since = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
+  const source = c.req.query("source") || "all";
+  return c.json({ sessions: await getSessions({ since: since || undefined, source }) });
+});
+// Zdarzenia JEDNEJ sesji (flow) — dopiero gdy user kliknie sesję.
+app.get("/session-events", async (c) => {
+  const sid = c.req.query("sessionId");
+  if (!sid) return c.json({ error: "Brak sessionId." }, 400);
+  return c.json({ sessionId: sid, events: await getSessionEvents(sid) });
+});
 
 // WSPÓLNY CENNIK: lab edytuje override'y cen i WGRYWA je tutaj (cały obiekt). Serwer trzyma je w DB
 // i stosuje do liczenia kosztu NOWYCH zdarzeń (AI w usage.ts, nie-AI w middleware) — bez rozjazdów.

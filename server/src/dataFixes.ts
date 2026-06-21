@@ -64,3 +64,34 @@ export async function attributeOrphansByTime(maxGapSec = 900): Promise<{ updated
   const rem = await p.query(`SELECT count(*)::int AS n FROM events WHERE install_id IS NULL`);
   return { updated: r.rowCount ?? 0, remaining: rem.rows[0]?.n ?? 0 };
 }
+
+/** JEDNORAZOWO: nadaj SYNTETYCZNY sessionId starym zdarzeniom (bez sessionId) — rekonstrukcja sesji per
+ *  instalacja (nowa sesja = SKAN po >3 min od ostatniego skanu, albo przerwa >8 min). Po tym baza może
+ *  grupować sesje trywialnie (GROUP BY sessionId) zamiast ładować wszystko i klastrować w JS. */
+export async function backfillSyntheticSessions(): Promise<{ updated: number; sessions: number }> {
+  const p = getReadyPool();
+  if (!p) return { updated: 0, sessions: 0 };
+  const r = await p.query<{ id: string; install_id: string | null; op: string | null; ts: string }>(
+    `SELECT id, install_id, op, extract(epoch FROM created_at) * 1000 AS ts
+     FROM events WHERE (data->>'sessionId') IS NULL ORDER BY install_id NULLS FIRST, created_at`,
+  );
+  const GAP = 8 * 60_000, COALESCE = 3 * 60_000;
+  const ids: string[] = [], sids: string[] = [];
+  let curInst: string | null | undefined, cur = "", lastTs = 0, lastScanTs = 0, hasScan = false, n = 0;
+  for (const e of r.rows) {
+    if (e.install_id !== curInst) { curInst = e.install_id; cur = ""; lastTs = 0; hasScan = false; }
+    const ts = Number(e.ts);
+    const gap = lastTs && ts - lastTs > GAP;
+    const newScan = e.op === "scan" && hasScan && ts - lastScanTs > COALESCE;
+    if (!cur || gap || newScan) { cur = "h" + (++n).toString(36) + Math.round(ts / 1000).toString(36); hasScan = false; }
+    if (e.op === "scan") { hasScan = true; lastScanTs = ts; }
+    ids.push(e.id); sids.push(cur); lastTs = ts;
+  }
+  if (!ids.length) return { updated: 0, sessions: 0 };
+  const upd = await p.query(
+    `UPDATE events e SET data = COALESCE(e.data, '{}'::jsonb) || jsonb_build_object('sessionId', v.sid)
+     FROM (SELECT unnest($1::bigint[]) AS id, unnest($2::text[]) AS sid) v WHERE e.id = v.id`,
+    [ids, sids],
+  );
+  return { updated: upd.rowCount ?? 0, sessions: n };
+}
