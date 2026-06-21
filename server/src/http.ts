@@ -16,7 +16,9 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost, readPriceOverrides, savePriceOverrides, attributeOrphansByTime } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
+// ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
+import { backfillAppSource, attributeOrphansByTime } from "./dataFixes.ts";
 import { apiCallCost, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -1041,25 +1043,26 @@ app.post("/install/register", async (c) => {
 // Lab: lista instalacji ze statystyką (urządzenie, wersja, od kiedy/ostatnia aktywność, skany, koszt, błędy).
 app.get("/installs", async (c) => c.json({ installs: await getInstalls() }));
 
-// JEDNORAZOWY backfill: oznacz stare zdarzenia z REALNYCH urządzeń (telefon testera) jako source=app —
-// żeby filtr statystyk „app" je łapał. Domyślnie iPhone 17 Pro. Idempotentny, chroniony tokenem (auth).
+// ========= ⚠️ JEDNORAZOWE NAPRAWY DANYCH (NIE rdzeń — logika w dataFixes.ts) =========
+// Do łatania historii ze STARYCH buildów. Po wdrożeniu nowej apki CAŁY ten blok + dataFixes.ts +
+// proxy/przycisk w labie można usunąć (nic z rdzenia od nich nie zależy). Chronione tokenem (auth).
+
+// Oznacz zdarzenia REALNYCH urządzeń jako source=app (po modelu i/lub install_id). Idempotentny.
 app.post("/admin/backfill-app-source", async (c) => {
   const b = await c.req.json<{ deviceModels?: string[]; installIds?: string[] }>().catch(() => ({}) as { deviceModels?: string[]; installIds?: string[] });
   const installIds = (b.installIds ?? []).map((m) => m.trim()).filter(Boolean);
-  // Domyślnie iPhone 17 Pro (realne urządzenie), ALE gdy podano installIds — bierzemy TYLKO je (stare buildy
-  // bez device_model). Brak obu → fallback iPhone 17 Pro.
   const models = b.deviceModels?.length ? b.deviceModels.map((m) => m.trim()).filter(Boolean) : (installIds.length ? [] : ["iPhone 17 Pro"]);
   const res = await backfillAppSource({ deviceModels: models, installIds });
   return c.json({ ok: true, ...res, deviceModels: models, installIds });
 });
 
-// Przypisanie SIEROT po CZASIE: logi bez install_id (proxy /place-photo) dostają instancję/sesję
-// najbliższego w czasie loga, który je ma. maxGapSec opcjonalny (domyślnie 900s = 15 min).
+// Przypisz SIEROTY (logi bez install_id, np. /place-photo) do instancji/sesji najbliższego w czasie loga.
 app.post("/admin/attribute-orphans", async (c) => {
   const b = await c.req.json<{ maxGapSec?: number }>().catch(() => ({}) as { maxGapSec?: number });
   const res = await attributeOrphansByTime(b.maxGapSec && b.maxGapSec > 0 ? b.maxGapSec : 900);
   return c.json({ ok: true, ...res });
 });
+// ========= /JEDNORAZOWE NAPRAWY DANYCH =========
 
 // WSPÓLNY CENNIK: lab edytuje override'y cen i WGRYWA je tutaj (cały obiekt). Serwer trzyma je w DB
 // i stosuje do liczenia kosztu NOWYCH zdarzeń (AI w usage.ts, nie-AI w middleware) — bez rozjazdów.
