@@ -250,6 +250,7 @@ export default function App() {
   const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
+  const scanGenRef = useRef(0); // generacja skanu — rośnie z każdym runScan; odsiewa spóźnione callbacki starych skanów
   const venueFinalizedRef = useRef(false); // czy lokal zapisany do skanu (raz na skan)
   const previewStartedRef = useRef(false); // czy ruszyło dociąganie TANICH poglądowych (★ z lokalu czeka na to)
   const venueUpgradedRef = useRef(false); // czy ★ z lokalu już podmieniane (raz na skan)
@@ -491,6 +492,18 @@ export default function App() {
     venueFinalizedRef.current = false;
     previewStartedRef.current = false;
     venueUpgradedRef.current = false;
+    setScanFoundName(null); // nie pokazuj nazwy lokalu z POPRZEDNIEGO skanu
+    const myGen = (scanGenRef.current += 1); // generacja tego skanu — odsiewa SPÓŹNIONE callbacki starych skanów
+    // Domknięcie wczesnego lokalu (karta + zapis ★). STRAŻNIK generacji: spóźniony lokal STAREGO skanu nie
+    // może zatruć bieżącego ani nie wskoczy do złego scanId (przeciek nazwy lokalu między skanami).
+    const applyEarlyVenue = (r: RestaurantInfo | null) => {
+      if (myGen !== scanGenRef.current) return; // inny skan już trwa → ignoruj wynik starego
+      setFreshRestaurant(r);
+      freshVenueRef.current = r;
+      if (r && structureFrozenRef.current && scanIdRef.current && structureMenuRef.current) {
+        void finalizeVenue(structureMenuRef.current, scanIdRef.current, r);
+      }
+    };
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
     try {
       // Źródła lokalizacji (oba opcjonalne):
@@ -726,6 +739,7 @@ export default function App() {
         (p) => setScanPhase(scanPhaseLabel(p)),
         onScanItem,
         (m) => {
+          if (myGen !== scanGenRef.current) return; // spóźniony meta STAREGO skanu — nie dotykaj bieżącego
           if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
           if (!m.restaurantName) return;
           setScanFoundName(m.restaurantName);
@@ -1087,15 +1101,8 @@ export default function App() {
     })();
   }
 
-  // Wczesny (read-only) lookup w trakcie struktury: pokaż kartę, a gdy struktura zamrożona + jest scanId
-  // → domknij (zapis + ★ zdjęcia). Działa w obu kolejnościach: lookup przed/po zamrożeniu struktury.
-  const applyEarlyVenue = (r: RestaurantInfo | null) => {
-    setFreshRestaurant(r);
-    freshVenueRef.current = r;
-    if (r && structureFrozenRef.current && scanIdRef.current && structureMenuRef.current) {
-      void finalizeVenue(structureMenuRef.current, scanIdRef.current, r);
-    }
-  };
+  // (applyEarlyVenue jest teraz LOKALNY w runScan — związany z generacją skanu, by spóźniony lokal
+  //  starego skanu nie zatruł bieżącego. Patrz runScan.)
 
   // User wybiera właściwy lokal z listy kandydatów (gdy zgadywaliśmy po GPS).
   async function pickRestaurant(choice: RestaurantInfo) {
