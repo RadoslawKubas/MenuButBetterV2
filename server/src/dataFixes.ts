@@ -71,20 +71,29 @@ export async function attributeOrphansByTime(maxGapSec = 900): Promise<{ updated
 export async function backfillSyntheticSessions(): Promise<{ updated: number; sessions: number }> {
   const p = getReadyPool();
   if (!p) return { updated: 0, sessions: 0 };
-  const r = await p.query<{ id: string; install_id: string | null; op: string | null; ts: string }>(
-    `SELECT id, install_id, op, extract(epoch FROM created_at) * 1000 AS ts
-     FROM events WHERE (data->>'sessionId') IS NULL ORDER BY install_id NULLS FIRST, created_at`,
+  // Bierzemy zdarzenia BEZ sessionId ORAZ z już nadanym SYNTETYCZNYM (regex ^h..$, bez myślnika — realne
+  // sesje z apki mają myślnik) → re-klastrowanie idzie od nowa, gdy poprawimy heurystykę. Realne sesje nietknięte.
+  const r = await p.query<{ id: string; install_id: string | null; op: string | null; rest: string | null; ts: string }>(
+    `SELECT id, install_id, op, data->>'restaurant' AS rest, extract(epoch FROM created_at) * 1000 AS ts
+     FROM events WHERE (data->>'sessionId') IS NULL OR (data->>'sessionId') ~ '^h[0-9a-z]+$'
+     ORDER BY install_id NULLS FIRST, created_at`,
   );
-  const GAP = 8 * 60_000, COALESCE = 3 * 60_000;
+  // Nowa sesja = INNY lokal w skanie ALBO przerwa. NIE tniemy ciągłej serii tego samego lokalu (re-skany).
+  const GAP = 8 * 60_000, IDLE = 2 * 60_000;
   const ids: string[] = [], sids: string[] = [];
-  let curInst: string | null | undefined, cur = "", lastTs = 0, lastScanTs = 0, hasScan = false, n = 0;
+  let curInst: string | null | undefined, cur = "", lastTs = 0, hasScan = false, curRest: string | null = null, n = 0;
   for (const e of r.rows) {
-    if (e.install_id !== curInst) { curInst = e.install_id; cur = ""; lastTs = 0; hasScan = false; }
+    if (e.install_id !== curInst) { curInst = e.install_id; cur = ""; lastTs = 0; hasScan = false; curRest = null; }
     const ts = Number(e.ts);
     const gap = lastTs && ts - lastTs > GAP;
-    const newScan = e.op === "scan" && hasScan && ts - lastScanTs > COALESCE;
-    if (!cur || gap || newScan) { cur = "h" + (++n).toString(36) + Math.round(ts / 1000).toString(36); hasScan = false; }
-    if (e.op === "scan") { hasScan = true; lastScanTs = ts; }
+    let newScan = false;
+    if (e.op === "scan" && hasScan) {
+      const diffRest = !!(e.rest && curRest && e.rest !== curRest); // inny lokal → nowa sesja
+      const idle = !!(lastTs && ts - lastTs > IDLE);                 // pauza i ponowny skan → nowa sesja
+      newScan = diffRest || idle;
+    }
+    if (!cur || gap || newScan) { cur = "h" + (++n).toString(36) + Math.round(ts / 1000).toString(36); hasScan = false; curRest = null; }
+    if (e.op === "scan") { hasScan = true; if (e.rest) curRest = e.rest; }
     ids.push(e.id); sids.push(cur); lastTs = ts;
   }
   if (!ids.length) return { updated: 0, sessions: 0 };
