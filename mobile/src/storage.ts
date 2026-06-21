@@ -39,6 +39,10 @@ export interface SavedScan {
   usage?: Usage;
   /** Zdjęcia ŹRÓDŁOWE skanu (te, z których powstało menu) — do podglądu w historii (resolveCaptureUri). */
   sourcePhotos?: { path: string; mediaType: string }[];
+  /** ID SESJI usera (od „nowy skan" do „nowy skan"). Po otwarciu z historii i dorabianiu wracamy do niej
+   *  (te same ops tagujemy tym sessionId) → statystyki grupują całość jednego menu razem, a koniec sesji
+   *  przesuwa się na ostatnią akcję. */
+  sessionId?: string;
 }
 
 const KEY = "mbb.scans.v1";
@@ -169,6 +173,7 @@ export async function saveScan(input: {
   useExifLocation?: boolean;
   useDeviceLocation?: boolean;
   usage?: Usage;
+  sessionId?: string;
 }): Promise<SavedScan> {
   const scan: SavedScan = {
     id: newId(),
@@ -183,6 +188,7 @@ export async function saveScan(input: {
     useExifLocation: input.useExifLocation,
     useDeviceLocation: input.useDeviceLocation,
     usage: input.usage ?? ZERO_USAGE,
+    sessionId: input.sessionId,
   };
   const all = await listScans();
   all.unshift(scan); // najnowsze na górze

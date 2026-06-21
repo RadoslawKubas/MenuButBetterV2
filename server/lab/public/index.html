@@ -1232,21 +1232,41 @@ function sessionStats(g){
     else if(e.op==='dish-photos'||e.op==='dish-photo-refresh'){ photoOps++; photosFetched+=(d.resultCount||0); } }
   return {images,dishes,photosFetched,photoOps,ops};
 }
+let STATS_OPEN={}; let STATS_KEYS=[];
+function toggleSession(i){ const k=STATS_KEYS[i]; if(k){ STATS_OPEN[k]=!STATS_OPEN[k]; renderStatsSessions(); } }
 function renderStatsSessions(){
   if(!STATS){ return; }
   const q=(document.getElementById('statsSearch').value||'').toLowerCase().trim();
   const egress=(STATS.egressUsdPerGB)||0.1;
   let gs=(STATS.groups||[]);
   if(q) gs=gs.filter(g=>(g.label||'').toLowerCase().includes(q));
-  document.getElementById('statsSessions').innerHTML = gs.length ? gs.map(g=>{
+  gs=[...gs].sort((a,b)=>(b.ts||0)-(a.ts||0)); // OSTATNIO ruszane sesje na górze (max ts)
+  STATS_KEYS=gs.map(g=>g.key);
+  document.getElementById('statsSessions').innerHTML = gs.length ? gs.map((g,i)=>{
     const s=sessionStats(g);
+    const ents=(g.entries||[]);
+    const tss=ents.map(e=>e.ts).filter(Boolean);
+    const start=tss.length?Math.min.apply(null,tss):g.ts, end=tss.length?Math.max.apply(null,tss):g.ts;
     const inTok=(g.byProvider||[]).reduce((n,p)=>n+p.inTok,0), outTok=(g.byProvider||[]).reduce((n,p)=>n+p.outTok,0), calls=(g.byProvider||[]).reduce((n,p)=>n+p.calls,0);
     const provChips=(g.byProvider||[]).map(p=>`<span class="badge" style="margin:0 4px 4px 0">${esc(PROV_LABEL[p.provider]||p.provider)}: ${fmtUsd(p.costUsd + (p.bytesSent/1e9*egress))}</span>`).join('');
+    const open=!!STATS_OPEN[g.key];
+    let detail='';
+    if(open){
+      const flow=[...ents].sort((a,b)=>(a.ts||0)-(b.ts||0));
+      let cum=0;
+      const rows=flow.slice(0,300).map(e=>{ cum+=(e.totalCost||0); const dish=(e.meta&&(e.meta.dish||(e.meta.data&&e.meta.data.dish)))||'';
+        return `<div style="display:flex; justify-content:space-between; gap:8px; padding:2px 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:11px">
+          <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}</span>
+          <span style="white-space:nowrap">+${fmtUsd(e.totalCost)} &nbsp;<b style="color:var(--acc)">Σ ${fmtUsd(cum)}</b></span></div>`; }).join('');
+      detail=`<div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.18)"><div class="mut small" style="margin-bottom:4px">Przepływ kosztów (chronologicznie, suma narastająco do ${fmtUsd(g.totalCost)}):</div>${rows}${flow.length>300?`<div class="mut small" style="margin-top:4px">…+${flow.length-300} kolejnych operacji</div>`:''}</div>`;
+    }
     return `<div class="step" style="margin-bottom:8px">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
-      <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek dociągniętych${s.photoOps?` (${s.photoOps} szukań)`:''} · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
+      <div onclick="toggleSession(${i})" style="cursor:pointer; display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${open?'▾':'▸'} ${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
+      <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()}</div>
+      <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek (${s.photoOps} szukań) · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
       <div class="mut" style="margin-top:3px; font-size:10px">${Object.entries(s.ops).sort((a,b)=>b[1]-a[1]).map(([op,n])=>`${esc(OP_LABEL[op]||op)} ×${n}`).join(' · ')}</div>
       <div style="margin-top:6px">${provChips}</div>
+      ${detail}
     </div>`;
   }).join('') : '<span class="mut">Brak sesji w tym okresie/filtrze.</span>';
 }

@@ -241,6 +241,10 @@ export default function App() {
   // na zamrożoną strukturę. Refy łączą wczesny lookup (bez scanId) z finalizacją po Fazie A.
   const earlyVenueRef = useRef(false); // czy wczesny lookup już ruszył (raz na skan)
   const scanIdRef = useRef<string | null>(null); // scanId dostępny dla wczesnych callbacków
+  // ID SESJI usera (od „nowy skan" do „nowy skan"). Zapisywany w skanie; po otwarciu z historii wracamy
+  // do niej, by dorabiane ops trafiły do tej samej sesji w statystykach.
+  const sessionIdRef = useRef<string>("");
+  const newSession = () => { const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; sessionIdRef.current = id; setScanSession(id); };
   const structureFrozenRef = useRef(false); // czy struktura zamrożona (można robić upgrade ★)
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
@@ -275,7 +279,7 @@ export default function App() {
   const [structureReady, setStructureReady] = useState(false);
 
   useEffect(() => {
-    setScanSession(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`); // sesja od startu apki
+    newSession(); // sesja od startu apki
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
     void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
     listScans().then(setScans).catch(() => {});
@@ -743,6 +747,7 @@ export default function App() {
           useExifLocation: opts.useExifLocation,
           useDeviceLocation: opts.useDeviceLocation,
           usage: ran.usage,
+          sessionId: sessionIdRef.current,
         });
         scanId = saved.id;
         scanIdRef.current = saved.id;
@@ -963,8 +968,7 @@ export default function App() {
   }
 
   function resetScan() {
-    // Nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops (peek/scan/enrich/zdjęcia).
-    setScanSession(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+    newSession(); // nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops
     setImages([]);
     setReplayLocation(null);
     setHint("");
@@ -1274,6 +1278,9 @@ export default function App() {
 
   function openSaved(scan: SavedScan) {
     setOpenScan(scan);
+    // Powrót do SESJI tego skanu — dorabiane ops (więcej zdjęć / zmiana lokalu) trafią do tej samej sesji
+    // w statystykach (i przesuną jej koniec na ostatnią akcję). Stary skan bez sesji → świeża na modyfikacje.
+    if (scan.sessionId) { sessionIdRef.current = scan.sessionId; setScanSession(scan.sessionId); } else { newSession(); }
     const apply = (r: RestaurantInfo | null) =>
       setOpenScan((prev) => (prev && prev.id === scan.id ? { ...prev, restaurant: r } : prev));
     const applyMenu = makeApplyMenu(scan.id, true);
