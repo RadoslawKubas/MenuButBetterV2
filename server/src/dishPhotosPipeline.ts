@@ -131,14 +131,17 @@ export function venueNameInUrl(contextUrl: string | undefined, name: string): bo
  * nazwa) + kuchnia + model weryfikacji + tryb źródeł (CC/web) + liczba zdjęć.
  */
 export function reprPhotoCacheKey(args: { dish: string; photoQuery?: string; cuisine?: string; verifyModel?: string; num?: number; verify?: boolean; takeAll?: boolean }): string {
-  const genericTerm = args.photoQuery?.trim() || args.dish.trim();
-  const cuisine = args.cuisine?.trim() || undefined;
+  // KLUCZ po STABILNEJ, znormalizowanej nazwie dania — NIE po photoQuery (to nazwa generowana przez AI w
+  // enrichu, więc RÓŻNI się per skan → klucz by się rozjeżdżał i cache nigdy nie trafiał). photoQuery dalej
+  // służy do SAMEGO WYSZUKIWANIA (lepsze trafienia), ale cache identyfikujemy daniem.
+  const term = deaccentLower(args.dish.trim());
+  const cuisine = args.cuisine ? deaccentLower(args.cuisine.trim()) || undefined : undefined;
   const verifyModel = args.verifyModel?.trim() || "claude-sonnet-4-6";
   const num = args.num ?? 4;
   const ccFirst = process.env.REPRESENTATIVE_CC_FIRST === "1";
   const verifyFlag = args.verify !== false;
   // takeAll zmienia WYNIK (dochodzą odrzucone + wszystkie dobre) → osobny wpis cache.
-  return cacheKey("repr-photos", genericTerm, cuisine, verifyFlag ? verifyModel : "noverify", ccFirst ? "cc" : "web", num, args.takeAll ? "all" : "top");
+  return cacheKey("repr-photos", term, cuisine, verifyFlag ? verifyModel : "noverify", ccFirst ? "cc" : "web", num, args.takeAll ? "all" : "top");
 }
 
 /**
