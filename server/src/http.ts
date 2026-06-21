@@ -282,7 +282,10 @@ app.post("/scan", async (c) => {
 // modelu, skanuje (równolegle, z ciągłością grup) i streamuje strukturę. Serwer = autorytet wielkości. ───
 interface ScanSession {
   params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId };
-  photos: Map<number, InputImage>; // index (kolejność stron) → zdjęcie; idempotentne (retry nadpisuje)
+  // index (kolejność dodania) → zdjęcie + takenAt (EXIF). Idempotentne (retry nadpisuje ten sam index).
+  // KOLEJNOŚĆ DO AI ustalamy po `takenAt` (data zrobienia), z indeksem jako tie-breakerem — model dostaje
+  // strony w kolejności, w jakiej user je fotografował.
+  photos: Map<number, { base64: string; mediaType: MediaType; takenAt: number | null }>;
   createdAt: number;
 }
 const scanSessions = new Map<string, ScanSession>();
@@ -340,7 +343,7 @@ app.post("/scan/start", async (c) => {
   return c.json({ sessionId });
 });
 
-interface ScanPhotoBody { sessionId?: string; index?: number; base64?: string; mediaType?: string }
+interface ScanPhotoBody { sessionId?: string; index?: number; base64?: string; mediaType?: string; takenAt?: number }
 app.post("/scan/photo", async (c) => {
   let body: ScanPhotoBody;
   try { body = await c.req.json<ScanPhotoBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
@@ -354,7 +357,7 @@ app.post("/scan/photo", async (c) => {
   if (b64.length > BATCH_BUDGET_B64) return c.json({ error: "Pojedyncze zdjęcie za duże." }, 413);
   const idx = Number.isFinite(body.index) ? Number(body.index) : s.photos.size;
   if (s.photos.size >= 40 && !s.photos.has(idx)) return c.json({ error: "Za dużo zdjęć w jednym skanie (max 40)." }, 413);
-  s.photos.set(idx, { base64: b64, mediaType: body.mediaType as MediaType });
+  s.photos.set(idx, { base64: b64, mediaType: body.mediaType as MediaType, takenAt: Number.isFinite(body.takenAt) ? Number(body.takenAt) : null });
   s.createdAt = Date.now(); // odśwież TTL
   return c.json({ ok: true, received: s.photos.size });
 });
@@ -368,8 +371,11 @@ app.post("/scan/run", async (c) => {
   if (s.photos.size === 0) return c.json({ error: "Brak zdjęć w sesji." }, 400);
   if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
 
-  // Zdjęcia W KOLEJNOŚCI STRON; tnij PO ROZMIARZE na partie modelu (serwer = autorytet). +sufit 15 (timeout).
-  const ordered = [...s.photos.entries()].sort((a, b) => a[0] - b[0]).map(([, img]) => img);
+  // Kolejność DO AI: po dacie zrobienia (takenAt), index jako tie-breaker — strony tak, jak fotografował
+  // user. Potem tnij PO ROZMIARZE na partie modelu (serwer = autorytet). +sufit 15 (bezpiecznik timeoutu).
+  const ordered: InputImage[] = [...s.photos.entries()]
+    .sort((a, b) => (a[1].takenAt ?? Infinity) - (b[1].takenAt ?? Infinity) || a[0] - b[0])
+    .map(([, img]) => ({ base64: img.base64, mediaType: img.mediaType }));
   scanSessions.delete(body.sessionId!);
   const batches: InputImage[][] = [];
   let cur: InputImage[] = []; let curB = 0;
@@ -388,9 +394,10 @@ app.post("/scan/run", async (c) => {
     try {
       const results: Menu[] = [];
       const tot = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+      let cachedCount = 0; // ile partii wróciło z cache (wszystkie → skan „bez kosztu modelu")
       let knownSections: string[] = [];
       const runOne = async (bi: number) => {
-        const { menu, usage } = await extractMenu(batches[bi]!, {
+        const { menu, usage, cached } = await extractMenu(batches[bi]!, {
           targetLang: s.params.targetLang, restaurantHint: s.params.restaurantHint, locationHint: s.params.locationHint,
           cuisineHint: s.params.cuisineHint, model, enrichModel: s.params.enrichModel, structureOnly: true,
           knownSections: bi === 0 ? undefined : knownSections,
@@ -398,6 +405,7 @@ app.post("/scan/run", async (c) => {
           onMeta: wantSteps ? (m) => { st.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {}); } : undefined,
         });
         results[bi] = menu;
+        if (cached) cachedCount++;
         tot.inputTokens += usage.inputTokens; tot.outputTokens += usage.outputTokens; tot.costUsd += usage.costUsd;
       };
       await runOne(0);
@@ -408,8 +416,9 @@ app.post("/scan/run", async (c) => {
         await Promise.all(Array.from({ length: Math.min(3, batches.length - 1) }, worker));
       }
       const merged = mergeStructureMenus(results.filter(Boolean));
-      logEvent({ type: "scan", op: "scan", model, provider: apiTag(model), inputTokens: tot.inputTokens, outputTokens: tot.outputTokens, costUsd: tot.costUsd, data: { images: ordered.length, sections: merged.sections.length, items: merged.sections.reduce((n, sec) => n + sec.items.length, 0), targetLang: s.params.targetLang, restaurant: merged.restaurant_name ?? null, cuisine: merged.cuisine ?? null, mode: "session" } });
-      await st.write(wantSteps ? JSON.stringify({ done: true, menu: merged, usage: tot, enriched: false }) + "\n" : JSON.stringify({ menu: merged, usage: tot, enriched: false }));
+      const cached = cachedCount === batches.length; // wszystkie partie z cache → bez kosztu modelu
+      logEvent({ type: "scan", op: "scan", model, provider: apiTag(model), inputTokens: tot.inputTokens, outputTokens: tot.outputTokens, costUsd: tot.costUsd, data: { images: ordered.length, sections: merged.sections.length, items: merged.sections.reduce((n, sec) => n + sec.items.length, 0), targetLang: s.params.targetLang, restaurant: merged.restaurant_name ?? null, cuisine: merged.cuisine ?? null, mode: "session", cached } });
+      await st.write(wantSteps ? JSON.stringify({ done: true, menu: merged, usage: tot, enriched: false, cached }) + "\n" : JSON.stringify({ menu: merged, usage: tot, enriched: false, cached }));
     } catch (e) {
       console.error("scan/run error:", e);
       await st.write(JSON.stringify({ error: `Skan nie powiódł się: ${(e as Error).message}` }) + "\n");

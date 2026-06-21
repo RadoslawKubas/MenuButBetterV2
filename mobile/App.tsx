@@ -182,17 +182,12 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
-  // Skan NIEKOMPLETNY: ile partii padło i jest dokańczanych w tle (null = komplet). Apka wpuszcza
-  // do menu z tym, co przeszło, a resztę dolicza w tle — bez powtarzania udanych partii.
-  const [scanIncomplete, setScanIncomplete] = useState<{ pending: number; working: boolean } | null>(null);
   // Czy choć jedna partia skanu wróciła Z CACHE (ten sam plik) — do informacji o oszczędności.
   const [scanFromCache, setScanFromCache] = useState(false);
   // Aktualnie analizowane zdjęcie (URI miniatury) — przy skanie per-zdjęcie pokazuje, co idzie teraz.
   const [scanCurrentImage, setScanCurrentImage] = useState<string | null>(null);
   // Nazwa lokalu wykryta NA ŻYWO w trakcie skanu (z szyldu/okładki) — pokazujemy od razu.
   const [scanFoundName, setScanFoundName] = useState<string | null>(null);
-  // Ręczne ponowienie dokończenia skanu (gdy auto-doliczanie w tle też padło) — z banera.
-  const retryScanRef = useRef<null | (() => void)>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
   const [scanItems, setScanItems] = useState<
     { original: string; translated: string; branded: boolean; price: string | null; currency: string | null; description: string; photo?: string }[]
@@ -522,7 +517,6 @@ export default function App() {
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
-      setScanIncomplete(null);
       setScanFromCache(false);
 
       // PREFETCH zdjęć poglądowych NA ŻYWO: gdy model wypisze pozycję, od razu dociągamy dla niej
@@ -655,20 +649,35 @@ export default function App() {
         model: opts.models.scan,
         enrichModel: opts.models.enrich,
       });
-      // Upload RÓWNOLEGLE (limit 4) z auto-retry (w scanUploadPhoto). Pasek = wysłane/total.
+      // Upload SEKWENCYJNY (jedno po drugim, NIE równolegle) — pasek = wysłane/total. `ordered` jest już
+      // posortowane po dacie (takenAt), indeks `i` też idzie po dacie; dodatkowo wysyłamy takenAt, więc
+      // serwer ułoży strony po dacie. Na każde zdjęcie: 1 próba + 1 AUTO-retry; jeśli dalej pada → PYTAMY
+      // usera (wysłano X z Y, możliwy problem z siecią) i ponawiamy aż się uda albo user przerwie skan.
+      // Żadne zdjęcie nie ginie po cichu.
       setScanProgress({ done: 0, total: ordered.length });
-      {
-        let uploaded = 0;
-        let nextUp = 0;
-        const upWorker = async () => {
-          while (nextUp < ordered.length) {
-            const i = nextUp++;
-            await scanUploadPhoto(sessionId, i, { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType });
-            uploaded++;
-            setScanProgress({ done: uploaded, total: ordered.length });
-          }
-        };
-        await Promise.all(Array.from({ length: Math.min(4, ordered.length) }, upWorker));
+      const askRetryUpload = (sentOk: number): Promise<boolean> =>
+        new Promise((resolve) => {
+          Alert.alert(
+            "Problem z wysłaniem zdjęcia",
+            `Udało się wysłać ${sentOk} z ${ordered.length} zdjęć — możliwy problem z siecią. Ponowić?`,
+            [
+              { text: "Przerwij skan", style: "cancel", onPress: () => resolve(false) },
+              { text: "Ponów", onPress: () => resolve(true) },
+            ],
+            { cancelable: false },
+          );
+        });
+      for (let i = 0; i < ordered.length; i++) {
+        const img = { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType, takenAt: ordered[i]!.takenAt };
+        let ok = false;
+        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+          try { await scanUploadPhoto(sessionId, i, img); ok = true; } catch { /* 1 automatyczny retry */ }
+        }
+        while (!ok) {
+          if (!(await askRetryUpload(i))) throw new Error(`Skan przerwany — wysłano ${i} z ${ordered.length} zdjęć (problem z siecią).`);
+          try { await scanUploadPhoto(sessionId, i, img); ok = true; } catch { /* zapyta ponownie */ }
+        }
+        setScanProgress({ done: i + 1, total: ordered.length });
       }
       // Skan: serwer streamuje strukturę; onScanItem napędza rolling enrich, onMeta daje nazwę/kuchnię (+#2a).
       setScanCurrentImage(null);
@@ -689,6 +698,7 @@ export default function App() {
         },
       );
       merged = ran.menu;
+      if (ran.cached) setScanFromCache(true); // cała struktura z cache → „bez kosztu modelu"
       if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
       {
         const saved = await saveScan({
@@ -882,63 +892,6 @@ export default function App() {
       })),
       notes: (prev.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
     };
-  }
-
-  // Dokańcza w TLE partie skanu, które padły (sieć/serwer): ponawia TYLKO je, scala z menu i
-  // zapisuje. Cache skanu sprawia, że jeśli serwer już policzył (a odpowiedź zginęła), ponowienie
-  // jest DARMOWE. 2 podejścia; jak dalej się nie uda — baner z ręcznym ponowieniem (retryScanRef).
-  async function completeFailedBatches(
-    scanId: string,
-    opts: { targetLang: string; models: Record<ModelRole, ModelId> },
-    locationHint: string | undefined,
-    cuisineHint: string | undefined,
-    failed: { idx: number; images: PreparedImage[] }[],
-    baseMenu: Menu,
-  ) {
-    let acc = baseMenu;
-    let remaining = [...failed];
-    for (let pass = 0; pass < 2 && remaining.length > 0; pass++) {
-      const stillFailed: typeof remaining = [];
-      for (const fb of remaining) {
-        try {
-          const hint = [acc.restaurant_name, acc.cuisine].filter(Boolean).join(" ") || undefined;
-          const { menu: incoming, usage } = await scanMenu({
-            images: fb.images.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-            targetLang: opts.targetLang,
-            restaurantHint: hint,
-            locationHint,
-            cuisineHint,
-            model: opts.models.scan,
-            enrichModel: opts.models.enrich,
-          });
-          acc = mergeMenus(acc, incoming).menu;
-          await updateScanMenu(scanId, acc);
-          await addScanUsage(scanId, usage);
-          const done = acc;
-          setMenu((prev) => (prev ? done : prev)); // odśwież widok, jeśli ten skan jest otwarty
-          setScanIncomplete((p) => (p ? { ...p, pending: Math.max(0, p.pending - 1) } : p));
-        } catch {
-          stillFailed.push(fb);
-        }
-      }
-      remaining = stillFailed;
-      if (remaining.length > 0) await new Promise((r) => setTimeout(r, 2500));
-    }
-    if (remaining.length === 0) {
-      setScanIncomplete(null);
-      retryScanRef.current = null;
-      setScans(await listScans());
-      if (costPrefs.autoPhotos) void fillDishPhotos(acc, scanId, acc.restaurant_name ?? undefined, setMenu);
-      if (costPrefs.autoDescriptions) void fillDescriptions(acc, scanId, opts.targetLang, setMenu);
-    } else {
-      const left = remaining;
-      const accFinal = acc;
-      retryScanRef.current = () => {
-        setScanIncomplete({ pending: left.length, working: true });
-        void completeFailedBatches(scanId, opts, locationHint, cuisineHint, left, accFinal);
-      };
-      setScanIncomplete({ pending: remaining.length, working: false });
-    }
   }
 
   // Tryb testowy: WCZYTAJ migawkę do ekranu skanu (zdjęcia + podpowiedź + przełączniki
@@ -2434,21 +2387,6 @@ export default function App() {
                       <Text style={styles.savedNote}>✓ Zapisano w historii</Text>
                     </View>
                   )}
-                  {scanIncomplete ? (
-                    <View style={styles.incompleteBox}>
-                      <Text style={styles.incompleteTitle}>⚠️ Menu może być niekompletne</Text>
-                      <Text style={styles.incompleteSub}>
-                        {scanIncomplete.working
-                          ? `Część stron nie przeszła — dolicza się w tle (pozostało ${scanIncomplete.pending}). Możesz już czytać; brakujące dania dojdą same.`
-                          : `Nie udało się doczytać ${scanIncomplete.pending} part. menu. Spróbuj dokończyć przy lepszym zasięgu — powtórzymy tylko brakujące strony.`}
-                      </Text>
-                      {!scanIncomplete.working ? (
-                        <Pressable style={styles.incompleteBtn} onPress={() => retryScanRef.current?.()}>
-                          <Text style={styles.incompleteBtnText}>↻ Dokończ brakujące</Text>
-                        </Pressable>
-                      ) : null}
-                    </View>
-                  ) : null}
                   {scanFromCache ? (
                     <Text style={styles.cacheNote}>🗄 Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
                   ) : null}
@@ -2709,11 +2647,6 @@ const styles = StyleSheet.create({
   },
   confirmTitle: { fontSize: 16, fontWeight: "800", color: colors.accent, marginBottom: 4 },
   confirmSub: { fontSize: 13, color: colors.muted, marginBottom: 12, lineHeight: 18 },
-  incompleteBox: { backgroundColor: "#FFF3D6", borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#E8C170" },
-  incompleteTitle: { fontSize: 14, fontWeight: "800", color: "#8A5A00", marginBottom: 3 },
-  incompleteSub: { fontSize: 12.5, color: "#6A5A2A", lineHeight: 17 },
-  incompleteBtn: { marginTop: 8, alignSelf: "flex-start", backgroundColor: "#8A5A00", borderRadius: 9, paddingVertical: 8, paddingHorizontal: 14 },
-  incompleteBtnText: { color: "#FFF", fontWeight: "800", fontSize: 13 },
   cacheNote: { fontSize: 12, color: colors.muted, marginBottom: 12, fontStyle: "italic" },
   venueSearchRow: { flexDirection: "row", gap: 8, marginTop: 4, marginBottom: 12 },
   venueSearchInput: {

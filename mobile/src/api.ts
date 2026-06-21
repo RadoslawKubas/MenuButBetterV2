@@ -438,21 +438,18 @@ export async function scanStart(params: { targetLang: string; restaurantHint?: s
   return json.sessionId;
 }
 
-/** Wysyła JEDNO zdjęcie do sesji. Idempotentne (po `index`), z auto-ponawianiem (3 próby). */
-export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string }, attempt = 0): Promise<void> {
+/** Wysyła JEDNO zdjęcie do sesji (POJEDYNCZA próba — ponawianiem steruje wywołujący: 1 auto-retry, potem
+ *  pyta usera). Idempotentne po `index`. `takenAt` (EXIF) → serwer ułoży strony po dacie zrobienia. */
+export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string; takenAt?: number | null }): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/scan/photo`);
     Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
     xhr.timeout = 90000;
-    const retryOr = (msg: string) => {
-      if (attempt < 2) scanUploadPhoto(sessionId, index, image, attempt + 1).then(resolve, reject);
-      else reject(new Error(msg));
-    };
-    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else retryOr(`Zdjęcie ${index + 1}: HTTP ${xhr.status}`); };
-    xhr.onerror = () => retryOr(`Zdjęcie ${index + 1}: błąd sieci`);
-    xhr.ontimeout = () => retryOr(`Zdjęcie ${index + 1}: timeout`);
-    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType }));
+    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(`Zdjęcie ${index + 1}: HTTP ${xhr.status}`)); };
+    xhr.onerror = () => reject(new Error(`Zdjęcie ${index + 1}: błąd sieci`));
+    xhr.ontimeout = () => reject(new Error(`Zdjęcie ${index + 1}: timeout`));
+    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType, takenAt: image.takenAt ?? undefined }));
   });
 }
 
@@ -462,7 +459,7 @@ export function scanRun(
   onProgress?: (p: ScanPhase) => void,
   onItem?: (item: ScanItemStub) => void,
   onMeta?: (m: { restaurantName?: string; cuisine?: string }) => void,
-): Promise<{ menu: Menu; usage: Usage }> {
+): Promise<{ menu: Menu; usage: Usage; cached: boolean }> {
   const t0 = Date.now();
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -494,7 +491,7 @@ export function scanRun(
     xhr.onload = () => {
       appLog.logCall({ ts: Date.now(), label: "scan", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
       const text = xhr.responseText || "";
-      let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
+      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean } | null = null;
       for (const line of text.split("\n")) {
         const tt = line.trim();
         if (!tt) continue;
@@ -503,7 +500,7 @@ export function scanRun(
       if (!result) return fail("Połączenie przerwane w trakcie skanu — spróbuj ponownie.");
       if (xhr.status < 200 || xhr.status >= 300 || result.error) return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
       if (!result.menu) return fail("Pusta odpowiedź serwera.");
-      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE });
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached });
     };
     xhr.send(JSON.stringify({ sessionId, stream: true }));
   });
