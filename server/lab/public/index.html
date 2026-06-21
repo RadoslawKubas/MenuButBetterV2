@@ -185,7 +185,8 @@
   <div class="panel">
     <h3>📊 Logi zapytań — koszty pogrupowane per menu</h3>
     <div class="mut small" id="costInfo" style="margin-bottom:8px"></div>
-    <div class="chips" id="costPeriod"></div>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap"><div class="chips" id="costPeriod"></div>
+      <label class="mut small">zdarzeń: <select id="costLimit" onchange="setCostLimit(this.value)"><option>1000</option><option selected>3000</option><option>10000</option><option>30000</option><option value="50000">50000</option></select></label></div>
     <div id="costAgg"></div>
     <div style="margin-top:10px; display:flex; justify-content:space-between; align-items:center; gap:10px">
       <span class="mut small">Każda grupa = praca nad jednym menu (skan + dalsze operacje). Klik grupę → rozbicie per provider/API + lista operacji; klik operację → jej delta.</span>
@@ -300,6 +301,7 @@
     <h3>📊 Statystyki kosztów — ile realnie kosztują skany</h3>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
       <button onclick="loadStats(this)" style="padding:4px 10px">↻ odśwież</button>
+      <label class="mut small">zdarzeń: <select id="statLimit" onchange="setStatLimit(this.value)"><option>1000</option><option selected>3000</option><option>10000</option><option>30000</option><option value="50000">50000</option></select></label>
       <span class="mut small">Wszystko przeliczone wg AKTUALNEGO cennika (zmień w zakładce 💰 Cennik → tu się przeliczy). Realne skany z produkcji + lab.</span>
     </div>
     <div id="statsPeriod" class="chips" style="margin-bottom:10px"></div>
@@ -327,6 +329,7 @@
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
       <input type="text" id="cacheQ" placeholder="szukaj w kluczach / treści…" style="flex:1; min-width:180px" onkeydown="if(event.key==='Enter')loadCacheBrowse()" />
       <button onclick="loadCacheBrowse()">🔍 szukaj</button>
+      <label class="mut small">pokaż <select id="cacheLimit" onchange="loadCacheBrowse()"><option>200</option><option selected>500</option><option>1000</option><option>2000</option><option>5000</option></select></label>
     </div>
     <div class="chips" id="cacheKindChips" style="margin-top:8px"></div>
     <div id="cacheBrowse" style="margin-top:8px"></div>
@@ -911,7 +914,8 @@ async function simDish(i){
 }
 
 /* ---- Koszty i ceny ---- */
-let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
+let COST_PERIOD='all', COST_LIMIT=3000, COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
+function setCostLimit(v){ COST_LIMIT=+v||3000; loadCostLog(); }
 function switchTab(name){
   CURRENT_TAB=name;
   ['lab','logs','cache','samples','errors','instances','prices','services','deploy','stats'].forEach(t=>{
@@ -939,10 +943,11 @@ function renderCostPeriod(){
 function setCostPeriod(k){ COST_PERIOD=k; renderCostPeriod(); loadCostLog(); }
 async function loadCostLog(){
   await ensureInstNames(); // nazwy instancji do grup
-  const r=await api('/api/cost-log?period='+COST_PERIOD);
+  const r=await api('/api/cost-log?period='+COST_PERIOD+'&limit='+COST_LIMIT);
   COST_GROUPS=r.groups||[]; EGRESS_RATE=r.egressUsdPerGB||0.1; const a=r.agg||{};
+  const capHit = (r.prodFetched!=null && r.evLimit!=null && r.prodFetched>=r.evLimit) ? ` · <span style="color:#e0a030">pobrano max ${r.evLimit} zdarzeń — zwiększ „zdarzeń", by sięgnąć głębiej</span>` : (r.prodFetched!=null?` · pobrano ${r.prodFetched} zdarzeń`:'');
   const srcNote = r.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(r.prodErr)})` : (r.prodCount!=null ? ` · realne z produkcji: ${r.prodCount}` : '');
-  document.getElementById('costInfo').innerHTML='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')'+srcNote;
+  document.getElementById('costInfo').innerHTML='Σ '+fmtUsd(a.totalCost)+' / '+(a.count||0)+' operacji ('+COST_PERIOD+')'+srcNote+capHit;
   const sv=r.savings||{count:0,cost:0,inTok:0,outTok:0};
   document.getElementById('costAgg').innerHTML=`
     <div class="step" style="margin-top:8px">
@@ -1027,10 +1032,12 @@ async function loadCacheSize(){
 }
 async function loadCacheBrowse(){
   const q=(document.getElementById('cacheQ').value||'').trim();
-  const r=await api('/api/cache-browse?limit=200'+(CACHE_KIND?'&kind='+encodeURIComponent(CACHE_KIND):'')+(q?'&q='+encodeURIComponent(q):''));
+  const lim=+(document.getElementById('cacheLimit')?.value||500);
+  const r=await api('/api/cache-browse?limit='+lim+(CACHE_KIND?'&kind='+encodeURIComponent(CACHE_KIND):'')+(q?'&q='+encodeURIComponent(q):''));
   CACHE_ROWS=r.rows||[];
   const box=document.getElementById('cacheBrowse');
-  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">${CACHE_ROWS.length} wpisów · ${r.from==='prod'?'☁ produkcja':'🖥 lokalny labu'} (${r.source==='pg'?'Postgres':'pamięć L1'})</div>`+CACHE_ROWS.map((row,i)=>`
+  const capHit=CACHE_ROWS.length>=lim?` · <span style="color:#e0a030">osiągnięto limit ${lim} — zwiększ „pokaż", by zobaczyć więcej</span>`:'';
+  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">wyświetlono ${CACHE_ROWS.length} wpisów · ${r.from==='prod'?'☁ produkcja':'🖥 lokalny labu'} (${r.source==='pg'?'Postgres':'pamięć L1'})${capHit}</div>`+CACHE_ROWS.map((row,i)=>`
     <div class="cand" onclick="toggleCacheRow(${i})">
       <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(CACHE_LABELS[row.kind]||row.kind)}</b> <span class="mut small">trafień ${row.hits}</span></div>
       <div class="mut" style="font-size:11px; word-break:break-all">${esc(row.key)}</div>
@@ -1186,7 +1193,8 @@ async function deleteBuild(ipa){
 }
 
 /* ---- Statystyki (zakładka 📊 Statystyki) — koszty wg AKTUALNEGO cennika ---- */
-let STAT_PERIOD='30d'; let STAT_SOURCE='app'; let STATS=null;
+let STAT_PERIOD='30d'; let STAT_SOURCE='app'; let STAT_LIMIT=3000; let STATS=null;
+function setStatLimit(v){ STAT_LIMIT=+v||3000; loadStats(); }
 const PROV_LABEL={claude:'Anthropic (Claude)',openai:'OpenAI (GPT)',google:'Google Gemini',google_places:'Google Places',serper:'Serper',serpapi:'SerpApi',tripadvisor:'TripAdvisor',wikimedia:'Wikimedia',openverse:'Openverse',google_cse:'Google CSE'};
 function renderStatsPeriod(){
   const opts=[['today','Dziś'],['7d','7 dni'],['30d','30 dni'],['all','Wszystko']];
@@ -1201,7 +1209,7 @@ function setStatsSource(k){ STAT_SOURCE=k; renderStatsPeriod(); loadStats(); }
 async function loadStats(btn){
   if(btn) btn.disabled=true;
   document.getElementById('statsSummary').innerHTML='ładuję…';
-  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD+'&source='+STAT_SOURCE); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
   renderStatsSummary(); renderStatsDaily(); renderStatsByApi(); renderStatsSessions();
   if(btn) btn.disabled=false;
 }
@@ -1214,10 +1222,11 @@ function byOpLegend(byOp,withCount){ const segs=Object.entries(byOp).sort((a,b)=
 function renderStatsSummary(){
   const a=STATS.agg||{}; const sv=STATS.savings||{};
   const srcNote = STATS.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(STATS.prodErr)})` : (STATS.prodCount!=null?` · realne z produkcji: ${STATS.prodCount}`:'');
+  const capHit = (STATS.prodFetched!=null && STATS.evLimit!=null && STATS.prodFetched>=STATS.evLimit) ? ` · <span style="color:#e0a030">pobrano max ${STATS.evLimit} zdarzeń — zwiększ „zdarzeń", by sięgnąć głębiej</span>` : (STATS.prodFetched!=null?` · pobrano ${STATS.prodFetched} zdarzeń`:'');
   document.getElementById('statsSummary').innerHTML=`
     <div class="step">
       <div style="font-size:26px; font-weight:800; color:var(--acc)">${fmtUsd(a.totalCost)}</div>
-      <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}</div>
+      <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}${capHit}</div>
       <div class="small" style="margin-top:3px">${STAT_SOURCE==='app'?'📱 <b>liczę tylko z apki</b>':STAT_SOURCE==='exp'?'🧪 <b>liczę tylko eksperymenty</b>':'📊 <b>liczę wszystko</b>'} <span class="mut">— w okresie: 📱 z apki ${STATS.appCount||0} · 🧪 eksperymenty ${STATS.expCount||0} ops</span></div>
       <div class="mut small" style="margin-top:5px">🧠 tokeny: ${fmtUsd(a.tokenCost)} · 🔌 API/zapytania: ${fmtUsd(a.apiCost)} · 📡 transfer: ${fmtUsd(a.dataCost)} · tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out</div>
       ${(()=>{ const bo=globalByOp(); return Object.keys(bo).length ? byOpBar(bo,16)+`<div class="mut" style="margin-top:5px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(bo,true)}</div>` : ''; })()}

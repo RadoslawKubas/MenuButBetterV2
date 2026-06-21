@@ -394,7 +394,7 @@ export async function getRecentEvents(limit = 200): Promise<unknown[]> {
   const r = await p.query(
     `SELECT id, created_at, type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id
      FROM events ORDER BY id DESC LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 3000)],
+    [Math.min(Math.max(limit, 1), 50000)], // cap bezpieczeństwa; lab steruje rzeczywistą liczbą (selektor „zdarzeń")
   );
   return r.rows;
 }

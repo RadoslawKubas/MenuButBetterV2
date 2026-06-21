@@ -185,7 +185,7 @@ export interface CacheRow { key: string; kind: string; lang: string | null; crea
 /** Przegląd wpisów cache (do podglądu w LABie): filtr po rodzaju + wyszukiwanie w kluczu/wartości.
  *  Źródło: Postgres (pełne metadane) lub — lokalnie bez DB — L1 w pamięci. */
 export async function cacheBrowse(opts: { kind?: string; q?: string; limit?: number }): Promise<{ source: "pg" | "l1"; rows: CacheRow[] }> {
-  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 5000);
   const p = getPool();
   if (p && ready) {
     const params: unknown[] = [];

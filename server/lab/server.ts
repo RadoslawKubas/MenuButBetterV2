@@ -1270,6 +1270,8 @@ app.post("/api/sim-venue", async (c) => {
 // --- KOSZTY: log operacji (z rozbiciem) + statystyki łączne (okres) ------------------------
 app.get("/api/cost-log", async (c) => {
   const period = c.req.query("period") || "all";
+  // Ile surowych zdarzeń pobrać z produkcji (sterowane z UI). Domyślnie 3000, max 50000.
+  const evLimit = Math.min(Math.max(Number(c.req.query("limit")) || 3000, 100), 50000);
   const now = Date.now();
   const cutoff = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
   const egress = otherRate("egress");
@@ -1277,9 +1279,11 @@ app.get("/api/cost-log", async (c) => {
   // → CostEntry. Łączymy z lokalnymi sim-scanami labu. Token chroni globalnie (prodFetch go dokłada).
   let prodEntries: CostEntry[] = [];
   let prodErr: string | null = null;
+  let prodFetched = 0;
   try {
-    const r = await prodFetch("/events?limit=3000");
+    const r = await prodFetch(`/events?limit=${evLimit}`);
     const evs = ((await r.json()) as { events?: Record<string, any>[] }).events ?? [];
+    prodFetched = evs.length;
     prodEntries = evs
       // type "api" = nie-AI provider (Serper/Places/Wiki/Openverse…) z liczbą zapytań w data.calls.
       .filter((e) => (e.type === "ai" || e.type === "scan" || e.type === "api") && (e.model || e.cost_usd != null || e.type === "api"))
@@ -1417,7 +1421,7 @@ app.get("/api/cost-log", async (c) => {
   const groups = Object.values(gmap)
     .map((g) => ({ ...g, byProvider: Object.values(g.byProvider).sort((a, b) => b.costUsd + b.bytesSent / 1e9 * egress - (a.costUsd + a.bytesSent / 1e9 * egress)) }))
     .sort((a, b) => b.ts - a.ts);
-  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
+  return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodFetched, evLimit, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
 });
 
 app.post("/api/cost-log-clear", (c) => {
