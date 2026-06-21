@@ -1201,6 +1201,11 @@ async function loadStats(btn){
   if(btn) btn.disabled=false;
 }
 function allEntries(){ return (STATS&&STATS.groups||[]).flatMap(g=>g.entries||[]); }
+function globalByOp(){ const byOp={}; for(const e of allEntries()){ const o=byOp[e.op]=byOp[e.op]||{count:0,cost:0}; o.count++; o.cost+=(e.totalCost||0); } return byOp; }
+function byOpBar(byOp,h){ const segs=Object.entries(byOp).sort((a,b)=>b[1].cost-a[1].cost); const tot=segs.reduce((n,[,o])=>n+o.cost,0)||1;
+  return `<div style="display:flex; height:${h||13}px; border-radius:4px; overflow:hidden; margin-top:6px; background:#1e1e1e">${segs.filter(([,o])=>o.cost>0).map(([op,o])=>`<div title="${esc(OP_LABEL[op]||op)}: ${fmtUsd(o.cost)} (${Math.round(o.cost/tot*100)}%)" style="width:${(o.cost/tot*100).toFixed(2)}%; background:${opColor(op)}"></div>`).join('')}</div>`; }
+function byOpLegend(byOp,withCount){ const segs=Object.entries(byOp).sort((a,b)=>b[1].cost-a[1].cost); const tot=segs.reduce((n,[,o])=>n+o.cost,0)||1;
+  return segs.filter(([,o])=>o.cost>0).map(([op,o])=>`<span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:${opColor(op)}; margin-right:3px"></span><b style="color:#cfe0ff">${esc(OP_LABEL[op]||op)}</b> ${withCount?o.count+' zap · ':''}${fmtUsd(o.cost)} (${Math.round(o.cost/tot*100)}%)`).join('  ·  '); }
 function renderStatsSummary(){
   const a=STATS.agg||{}; const sv=STATS.savings||{};
   const srcNote = STATS.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(STATS.prodErr)})` : (STATS.prodCount!=null?` · realne z produkcji: ${STATS.prodCount}`:'');
@@ -1210,7 +1215,8 @@ function renderStatsSummary(){
       <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}</div>
       <div class="small" style="margin-top:3px">${STAT_SOURCE==='app'?'📱 <b>liczę tylko z apki</b>':STAT_SOURCE==='exp'?'🧪 <b>liczę tylko eksperymenty</b>':'📊 <b>liczę wszystko</b>'} <span class="mut">— w okresie: 📱 z apki ${STATS.appCount||0} · 🧪 eksperymenty ${STATS.expCount||0} ops</span></div>
       <div class="mut small" style="margin-top:5px">🧠 tokeny: ${fmtUsd(a.tokenCost)} · 🔌 API/zapytania: ${fmtUsd(a.apiCost)} · 📡 transfer: ${fmtUsd(a.dataCost)} · tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out</div>
-      ${sv.cost?`<div class="small" style="margin-top:5px; color:#7fd6a0">💾 cache zaoszczędził ~${fmtUsd(sv.cost)} (${sv.count||0} trafień)</div>`:''}
+      ${(()=>{ const bo=globalByOp(); return Object.keys(bo).length ? byOpBar(bo,16)+`<div class="mut" style="margin-top:5px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(bo,true)}</div>` : ''; })()}
+      ${sv.cost?`<div class="small" style="margin-top:6px; color:#7fd6a0">💾 cache zaoszczędził ~${fmtUsd(sv.cost)} (${sv.count||0} trafień)</div>`:''}
     </div>`;
 }
 function renderStatsDaily(){
@@ -1274,8 +1280,8 @@ function renderStatsSessions(){
       <div onclick="toggleSession(${i})" style="cursor:pointer; display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${open?'▾':'▸'} ${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
       <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()}</div>
       <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek (${s.photoOps} szukań) · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
-      ${(()=>{ const segs=Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost); const tot=segs.reduce((n,[,o])=>n+o.cost,0)||1; return `<div style="display:flex; height:13px; border-radius:4px; overflow:hidden; margin-top:6px; background:#1e1e1e">${segs.filter(([,o])=>o.cost>0).map(([op,o])=>`<div title="${esc(OP_LABEL[op]||op)}: ${fmtUsd(o.cost)} (${Math.round(o.cost/tot*100)}%)" style="width:${(o.cost/tot*100).toFixed(2)}%; background:${opColor(op)}"></div>`).join('')}</div>`; })()}
-      <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost).map(([op,o])=>`<span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:${opColor(op)}; margin-right:3px"></span><b style="color:#cfe0ff">${esc(OP_LABEL[op]||op)}</b> ${o.count} zap · ${fmtUsd(o.cost)}`).join('  ·  ')}</div>
+      ${byOpBar(s.byOp,13)}
+      <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(s.byOp,true)}</div>
       <div style="margin-top:6px">${provChips}</div>
       ${detail}
     </div>`;
