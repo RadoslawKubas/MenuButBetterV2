@@ -1585,8 +1585,14 @@ app.get("/api/cache-size", async (c) => {
 });
 app.post("/api/cache-clear", async (c) => {
   const b = await c.req.json<{ kind?: string }>().catch(() => ({}) as { kind?: string });
+  // LAB PRZEGLĄDA cache PROD (cache-browse proxuje do prod) — więc czyścimy też PROD, nie lokalny lab.
+  // Inaczej „skasuj" czyściło pusty cache labu, a podgląd dalej pokazywał prod (mylące).
+  try {
+    const r = await prodFetch("/cache-clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b.kind ? { kind: b.kind } : {}) });
+    if (r.ok) return c.json({ ok: true, from: "prod" });
+  } catch { /* prod niedostępny → wyczyść chociaż lokalny */ }
   await cacheClear(b.kind as CacheKind | undefined);
-  return c.json({ ok: true });
+  return c.json({ ok: true, from: "local" });
 });
 
 // --- CENY: lista wszystkich (modele + inne API + transfer) ze źródłami + ręczna podmiana ----

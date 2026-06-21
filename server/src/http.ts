@@ -21,7 +21,7 @@ import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, 
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
 import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
 import { apiCallCost, getPriceOverrides, otherRate, type PriceOverrides } from "./pricing.ts";
-import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheClear, cacheGet, cacheSet, cacheKey, type CacheKind } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag, type ModelId } from "./models.ts";
@@ -917,6 +917,13 @@ app.get("/cache-size", async (c) => {
   } catch (e) {
     return c.json({ enabled: false, bytes: 0, rows: 0, error: (e as Error).message }, 200);
   }
+});
+// Czyszczenie cache (kind=… albo całość). Chronione tokenem app (jak reszta poza /health). LAB to proxuje.
+app.post("/cache-clear", async (c) => {
+  let kind: string | undefined;
+  try { kind = (await c.req.json<{ kind?: string }>()).kind; } catch { /* puste body = całość */ }
+  await cacheClear(kind as CacheKind | undefined);
+  return c.json({ ok: true, cleared: kind ?? "all" });
 });
 
 // Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
