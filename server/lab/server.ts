@@ -29,6 +29,7 @@ import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
+import { OTHER_RATES, aiPrice, otherRate as priceOtherRate, apiCallCost, type PriceOverrides } from "../src/pricing.ts";
 import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
 import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, type CacheKind } from "../src/cache.ts";
 
@@ -49,12 +50,14 @@ const PRICE_SOURCES: Record<string, string> = {
   tripadvisor: "https://www.tripadvisor.com/developers",
 };
 // Inne API + transfer — stawki orientacyjne (jednostka), nadpisywalne.
+// Etykiety/jednostki/źródła zostają w labie (UI), ale WARTOŚCI biorę ze wspólnego OTHER_RATES (pricing.ts),
+// żeby domyślny cennik był jeden po obu stronach.
 const OTHER_PRICES_DEFAULT: { key: string; label: string; unit: string; value: number; source: string }[] = [
-  { key: "egress", label: "Transfer (Railway egress)", unit: "$/GB (wysłane)", value: 0.1, source: PRICE_SOURCES.egress! },
-  { key: "google_places", label: "Google Places (details+photos)", unit: "$/1000 req", value: 17, source: PRICE_SOURCES.google_places! },
-  { key: "serper", label: "Serper.dev (Google Images)", unit: "$/1000 req", value: 0.6, source: PRICE_SOURCES.serper! },
-  { key: "serpapi", label: "SerpApi", unit: "$/1000 req", value: 10, source: PRICE_SOURCES.serpapi! },
-  { key: "storage", label: "Cache storage (Postgres)", unit: "$/GB-mies.", value: 0.25, source: PRICE_SOURCES.egress! },
+  { key: "egress", label: "Transfer (Railway egress)", unit: "$/GB (wysłane)", value: OTHER_RATES.egress!, source: PRICE_SOURCES.egress! },
+  { key: "google_places", label: "Google Places (details+photos)", unit: "$/1000 req", value: OTHER_RATES.google_places!, source: PRICE_SOURCES.google_places! },
+  { key: "serper", label: "Serper.dev (Google Images)", unit: "$/1000 req", value: OTHER_RATES.serper!, source: PRICE_SOURCES.serper! },
+  { key: "serpapi", label: "SerpApi", unit: "$/1000 req", value: OTHER_RATES.serpapi!, source: PRICE_SOURCES.serpapi! },
+  { key: "storage", label: "Cache storage (Postgres)", unit: "$/GB-mies.", value: OTHER_RATES.storage!, source: PRICE_SOURCES.egress! },
 ];
 
 // Katalog ZEWNĘTRZNYCH SERWISÓW, z których korzysta apka (nie tylko API modeli — też infra, build, dane).
@@ -184,11 +187,20 @@ function loadPriceOverrides(): Record<string, { in?: number; out?: number; value
 }
 function savePriceOverrides(o: Record<string, { in?: number; out?: number; value?: number }>): void {
   writeFileSync(PRICES_FILE, JSON.stringify(o, null, 2));
+  void pushPriceOverridesToProd(o); // wgraj cały cennik na serwer → NOWE zdarzenia liczą po nowemu
 }
-/** Stawka „inna" (egress/api) z uwzględnieniem ręcznej podmiany. */
+/** Wysyła override'y cen na PRODUKCJĘ (serwer trzyma je w DB i stosuje do nowych zdarzeń). Best-effort. */
+async function pushPriceOverridesToProd(o: PriceOverrides): Promise<boolean> {
+  try {
+    const r = await prodFetch("/admin/price-overrides", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ overrides: o }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+/** Stawka „inna" (egress/api) — WSPÓLNA metoda (pricing.ts) z lokalnymi override'ami. */
 function otherRate(key: string): number {
-  const ov = loadPriceOverrides()[key]?.value;
-  return ov ?? OTHER_PRICES_DEFAULT.find((p) => p.key === key)?.value ?? 0;
+  return priceOtherRate(key, loadPriceOverrides());
 }
 
 // Log kosztów: jedna linia (JSONL) na operację labu — delta zużycia z apiLog (źródło prawdy).
@@ -831,6 +843,19 @@ async function prodFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${PROD_URL}${path}`, { ...init, headers: { ...(init?.headers ?? {}), "x-app-token": PROD_TOKEN } });
 }
 
+// Synchronizacja CENNIKA na starcie labu: serwer = źródło prawdy. Jeśli serwer ma override'y → zapisz je
+// lokalnie. Jeśli serwer pusty, a lab coś ma → zasiej serwer z labu. Dzięki temu obie strony są spójne.
+void (async () => {
+  try {
+    const local = loadPriceOverrides();
+    const r = await prodFetch("/admin/price-overrides");
+    if (!r.ok) return;
+    const srv = ((await r.json()) as { overrides?: PriceOverrides }).overrides ?? {};
+    if (Object.keys(srv).length) { writeFileSync(PRICES_FILE, JSON.stringify(srv, null, 2)); console.log("[lab] cennik zsynchronizowany z serwera."); }
+    else if (Object.keys(local).length) { await pushPriceOverridesToProd(local); console.log("[lab] cennik z labu wgrany na pusty serwer."); }
+  } catch { /* lab offline — działa na lokalnym cenniku */ }
+})();
+
 app.get("/api/server-samples", async (c) => {
   try {
     const r = await prodFetch("/samples?pending=1");
@@ -1255,13 +1280,13 @@ app.get("/api/cost-log", async (c) => {
   // PRZELICZENIE z AKTUALNEGO cennika (override > MODELS) — zmiana ceny przelicza całą historię.
   const ovAll = loadPriceOverrides();
   const AI_PROV = new Set(["claude", "openai", "google"]);
-  const PER_CALL = new Set(["google_places", "serper", "serpapi"]);
-  const rate = (model: string) => { const ov = ovAll[model]; const def = (MODELS as Record<string, { price: { in: number; out: number } }>)[model]; return { in: ov?.in ?? def?.price.in ?? 0, out: ov?.out ?? def?.price.out ?? 0 }; };
+  // WSPÓLNE liczenie kosztu (pricing.ts) — te same stawki/metoda co serwer; ovAll = lokalne override'y.
+  const rate = (model: string) => aiPrice(model, ovAll);
   const tokCostOf = (models?: ModelDelta[]) => (models ?? []).reduce((n, m) => { const r = rate(m.model); return n + (m.inTok / 1e6) * r.in + (m.outTok / 1e6) * r.out; }, 0);
-  const apiCostOf = (delta: CostDelta[]) => delta.reduce((n, d) => n + (PER_CALL.has(d.provider) ? (d.calls / 1000) * otherRate(d.provider) : 0), 0);
+  const apiCostOf = (delta: CostDelta[]) => delta.reduce((n, d) => n + apiCallCost(d.provider, d.calls, ovAll), 0);
   const provCost = (e: CostEntry, d: CostDelta) => AI_PROV.has(d.provider)
     ? (e.models ?? []).filter((m) => apiTag(m.model) === d.provider).reduce((n, m) => { const r = rate(m.model); return n + (m.inTok / 1e6) * r.in + (m.outTok / 1e6) * r.out; }, 0)
-    : (PER_CALL.has(d.provider) ? (d.calls / 1000) * otherRate(d.provider) : 0);
+    : apiCallCost(d.provider, d.calls, ovAll);
   const sumD = (e: CostEntry, f: keyof CostDelta) => e.delta.reduce((n, d) => n + (d[f] as number), 0);
   const enrich = (e: CostEntry) => {
     const bytesSent = sumD(e, "bytesSent");

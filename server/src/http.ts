@@ -16,7 +16,8 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
+import { apiCallCost, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
@@ -69,13 +70,11 @@ app.use("/*", async (c, next) => {
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
     // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.
     const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "tripadvisor", "wikimedia", "openverse"]);
-    // Stawki nie-AI ($/1000 zapytań) — spójne z labem (Places 17, Serper 0.6, SerpApi 10; reszta darmowa).
-    // Doliczamy je do live kosztu sesji, by nagłówek akumulował KAŻDY koszt zdarzeń (nie tylko AI). Lab
-    // i tak przelicza koszt nie-AI z data.calls (costUsd zdarzenia api ignoruje) — brak podwójnego liczenia.
-    const NON_AI_RATE: Record<string, number> = { google_places: 17, serper: 0.6, serpapi: 10 };
     for (const [prov, u] of apiUsage) {
       if (!NON_AI.has(prov) || u.calls <= 0) continue;
-      const costUsd = (u.calls / 1000) * (NON_AI_RATE[prov] ?? 0);
+      // Koszt nie-AI wg WSPÓLNEGO cennika (pricing.ts + override'y z labu) → akumulator sesji liczy KAŻDY
+      // koszt. Lab przelicza nie-AI z data.calls tą samą metodą (costUsd zdarzenia api ignoruje) — brak dubla.
+      const costUsd = apiCallCost(prov, u.calls, getPriceOverrides());
       logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, data: { calls: u.calls, bytesSent: u.bytesSent } });
     }
     // Aktualny sumaryczny koszt sesji → nagłówek dla apki (live „ile sesja kosztuje"). Dla zwykłych
@@ -1047,6 +1046,16 @@ app.post("/admin/backfill-app-source", async (c) => {
   const models = (b.deviceModels?.length ? b.deviceModels : ["iPhone 17 Pro"]).map((m) => m.trim()).filter(Boolean);
   const res = await backfillAppSource(models);
   return c.json({ ok: true, ...res, deviceModels: models });
+});
+
+// WSPÓLNY CENNIK: lab edytuje override'y cen i WGRYWA je tutaj (cały obiekt). Serwer trzyma je w DB
+// i stosuje do liczenia kosztu NOWYCH zdarzeń (AI w usage.ts, nie-AI w middleware) — bez rozjazdów.
+app.get("/admin/price-overrides", (c) => c.json({ overrides: readPriceOverrides() }));
+app.post("/admin/price-overrides", async (c) => {
+  const b = await c.req.json<{ overrides?: PriceOverrides }>().catch(() => ({}) as { overrides?: PriceOverrides });
+  const ov = b.overrides && typeof b.overrides === "object" ? b.overrides : {};
+  await savePriceOverrides(ov);
+  return c.json({ ok: true, overrides: readPriceOverrides() });
 });
 
 // Lab: nadaj nazwę instalacji.

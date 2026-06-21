@@ -4,6 +4,7 @@
 // ani nie wywalają requestu (błędy łapane i logowane do konsoli).
 import { Pool } from "pg";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setPriceOverridesCache, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
 
 let pool: Pool | null = null;
 let ready = false;
@@ -71,11 +72,51 @@ export async function initDb(): Promise<void> {
         first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
         last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
     `);
     ready = true;
+    await loadPriceOverridesFromDb(); // wczytaj wspólny cennik (override'y z labu) do cache
     console.log("[db] trwałe logi GOTOWE (Postgres).");
   } catch (e) {
     console.error("[db] init nieudany — trwałe logi wyłączone:", (e as Error).message);
+  }
+}
+
+// --- WSPÓLNY CENNIK: override'y cen edytowane w labie, trzymane w DB, używane do liczenia kosztu
+// NOWYCH zdarzeń na serwerze (usage.ts/http.ts czytają je z cache w pricing.ts). ---------------
+async function loadPriceOverridesFromDb(): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  try {
+    const r = await p.query<{ data: PriceOverrides }>(`SELECT data FROM app_config WHERE key = 'price_overrides'`);
+    setPriceOverridesCache(r.rows[0]?.data ?? {});
+  } catch (e) {
+    console.error("[db] nie udało się wczytać cennika:", (e as Error).message);
+  }
+}
+
+/** Zwraca aktualne override'y cen (z cache) — do oddania labowi przez GET. */
+export function readPriceOverrides(): PriceOverrides {
+  return getPriceOverrides();
+}
+
+/** Zapisuje override'y cen (upload z labu) do DB i odświeża cache → nowe zdarzenia liczą po nowemu. */
+export async function savePriceOverrides(o: PriceOverrides): Promise<void> {
+  setPriceOverridesCache(o); // od razu w cache (nawet bez DB)
+  const p = getPool();
+  if (!p || !ready) return;
+  try {
+    await p.query(
+      `INSERT INTO app_config (key, data, updated_at) VALUES ('price_overrides', $1, now())
+       ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+      [JSON.stringify(o)],
+    );
+  } catch (e) {
+    console.error("[db] nie udało się zapisać cennika:", (e as Error).message);
   }
 }
 
