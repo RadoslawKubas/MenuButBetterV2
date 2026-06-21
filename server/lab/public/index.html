@@ -1231,6 +1231,8 @@ function renderStatsByApi(){
 }
 const OP_LABEL={scan:'skan',enrich:'enrich (tłum./opisy)','dish-photos':'zdjęcia dań — weryfikacja (AI)','dish-photo-refresh':'odśw. zdjęcia',peek:'szybki podgląd','dish-info':'opis dania',restaurant:'lokal (Places)','venue-photos':'zdjęcia z lokalu — weryfikacja (AI)',
   serper:'wyszukiwanie zdjęć (Serper)',wikimedia:'wyszukiwanie zdjęć (Wikimedia)',openverse:'wyszukiwanie zdjęć (Openverse)',google_places:'wyszukiwanie lokalu (Places)',google_cse:'wyszukiwanie (Google CSE)',serpapi:'wyszukiwanie (SerpApi)',tripadvisor:'TripAdvisor (lokal/zdjęcia)'};
+const OP_COLOR={scan:'#e8c170',enrich:'#7fd6a0','dish-photos':'#5aa9e6','dish-photo-refresh':'#3a7fb5','dish-info':'#c98bdb',peek:'#9aa0a6','venue-photos':'#e88a5a',restaurant:'#d4a017',serper:'#888',wikimedia:'#777',openverse:'#666',google_places:'#c0853a',google_cse:'#b0703a',serpapi:'#a06030',tripadvisor:'#5a8f5a'};
+const opColor=(op)=>OP_COLOR[op]||'#555';
 function sessionStats(g){
   let images=0,dishes=0,photosFetched=0,photoOps=0; const byOp={};
   for(const e of (g.entries||[])){ const d=(e.meta&&e.meta.data)||{};
@@ -1272,7 +1274,8 @@ function renderStatsSessions(){
       <div onclick="toggleSession(${i})" style="cursor:pointer; display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${open?'▾':'▸'} ${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
       <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()}</div>
       <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek (${s.photoOps} szukań) · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
-      <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost).map(([op,o])=>`<b style="color:#cfe0ff">${esc(OP_LABEL[op]||op)}</b> ${o.count} zap · ${fmtUsd(o.cost)}`).join('  ·  ')}</div>
+      ${(()=>{ const segs=Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost); const tot=segs.reduce((n,[,o])=>n+o.cost,0)||1; return `<div style="display:flex; height:13px; border-radius:4px; overflow:hidden; margin-top:6px; background:#1e1e1e">${segs.filter(([,o])=>o.cost>0).map(([op,o])=>`<div title="${esc(OP_LABEL[op]||op)}: ${fmtUsd(o.cost)} (${Math.round(o.cost/tot*100)}%)" style="width:${(o.cost/tot*100).toFixed(2)}%; background:${opColor(op)}"></div>`).join('')}</div>`; })()}
+      <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost).map(([op,o])=>`<span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:${opColor(op)}; margin-right:3px"></span><b style="color:#cfe0ff">${esc(OP_LABEL[op]||op)}</b> ${o.count} zap · ${fmtUsd(o.cost)}`).join('  ·  ')}</div>
       <div style="margin-top:6px">${provChips}</div>
       ${detail}
     </div>`;
