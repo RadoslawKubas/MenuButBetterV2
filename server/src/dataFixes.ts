@@ -9,8 +9,9 @@
 //  /admin/attribute-orphans) + przycisk „📲 oznacz jako z urządzenia" w labie stają się ZBĘDNE.
 //
 //  WTEDY MOŻNA BEZPIECZNIE USUNĄĆ: ten plik + import w http.ts + oba endpointy + proxy/przycisk w labie.
-//  Nic z rdzenia od tego nie zależy. (Stałe poprawki — fallback iid/sid w middleware i placePhotoUrl —
-//  ZOSTAJĄ, bo używa ich nowa apka.)
+//  Nic z rdzenia od tego nie zależy. (Stały kanał tożsamości — iid/sid z query w middleware i &iid w
+//  placePhotoUrl — ZOSTAJE, bo używa go nowa apka; to NIE naprawa, tylko jak żądania ładowane URL-em
+//  identyfikują instancję, tak jak token ?t=.)
 // ============================================================================================
 import { getReadyPool } from "./db.ts";
 
