@@ -32,7 +32,8 @@ export const SYSTEM = [
   "WAŻNE: nie zmyślaj konkretów, których nie wiesz, i nie dodawaj składników nietypowych",
   "dla tego dania w tej kuchni (np. awokado do prostej sałatki w kuchni indyjskiej).",
   "Jeśli czegoś nie jesteś pewien — pisz ogólnie zamiast wymyślać szczegóły.",
-  "150–250 słów, w języku docelowym. Bez wstępów typu Oto informacje — od razu treść.",
+  "150–250 słów, w języku docelowym. Od razu treść — bez wstępów ('Oto…') i bez zaczynania od powtórzenia",
+  "nazwy dania. Jeśli to danie jest SPECJALNOŚCIĄ podanego regionu — wyraźnie to zaznacz.",
 ].join(" ");
 
 export async function describeDish(

@@ -36,6 +36,8 @@ export function venueInstruction(dishes: string[], cuisine?: string, certain = t
     "Dla KAŻDEGO zdjęcia podaj: index, category (food/drink/other).\n" +
     "Jeśli food/drink → dopasuj do NAJBLIŻSZEJ pozycji z poniższej listy menu i zwróć jej DOKŁADNĄ nazwę " +
     "(dish), albo '' gdy nic nie pasuje; podaj confidence 0..1.\n" +
+    "Gdy jedno zdjęcie pasuje do KILKU dań — wybierz NAJBARDZIEJ szczegółowo zgodne; nie przypisuj tego " +
+    "samego zdjęcia do wielu różnych dań (lepiej '' niż na siłę).\n" +
     "Podpis [TripAdvisor] to MOCNA wskazówka nazwy dania.\n" +
     "real_food = czy to realne zdjęcie potrawy. stock_or_ai = czy wygląda na stock / AI / studyjny render " +
     "marketingowy (dramatyczne światło, idealne tło, render) — takie ODRZUCAMY.\n" +

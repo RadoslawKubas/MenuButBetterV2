@@ -198,11 +198,25 @@ export const STRUCTURE_SYSTEM = [
   "Otrzymasz jedno lub WIELE zdjęć — kolejne strony/fragmenty TEGO SAMEGO menu (czasem okładkę",
   "albo zdjęcie lokalu). Odczytaj TYLKO to, co realnie widać.",
   "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje, w kolejności jak na stronach; nie duplikuj",
-  "powtórzonych nagłówków ani pozycji. Dla każdej pozycji podaj `original` (nazwa DOKŁADNIE jak na",
+  "powtórzonych nagłówków ani pozycji.",
+  "Zdjęcia często NACHODZĄ na siebie — ten sam fragment menu bywa na kilku ujęciach (duża tablica/ściana/",
+  "karta fotografowana po kawałku, kilka zdjęć tej samej strony). Złóż wszystko w JEDNĄ całość i NIE",
+  "duplikuj: to samo danie z różnych zdjęć = JEDEN wpis. Gdy różne ujęcia pokazują RÓŻNE informacje o tym",
+  "samym daniu (na jednym widać cenę, na innym opis/składniki) — POŁĄCZ je w jeden, PEŁNY wpis (uzupełnij",
+  "braki z lepszego ujęcia).",
+  "MENU WIELOJĘZYCZNE / kilka wersji językowych tego samego dania (kolumny obok siebie lub osobne karty):",
+  "również JEDEN wpis na danie — `original` w języku ORYGINAŁU menu (kraju lokalu), a z pozostałych języków",
+  "UZUPEŁNIJ braki (gdy w jednym opis ucięty/nieczytelny — weź go z drugiego). NIE twórz osobnych pozycji",
+  "dla tłumaczeń tego samego dania.",
+  "Dla każdej pozycji podaj `original` (nazwa DOKŁADNIE jak na",
   "menu), cenę i walutę (gdy widać; inaczej null) oraz `menu_description` = opis NADRUKOWANY na menu",
   "pod/obok pozycji (transkrypcja słowo w słowo). Gdy danie nie ma opisu na menu — pusty string.",
   "Podaj też `source_text` = przepisany FRAGMENT karty dla tej pozycji (pełna linijka/blok jak na",
   "menu: nazwa + ewentualny opis + cena), słowo w słowo — żeby pokazać użytkownikowi skąd pochodzi.",
+  "WARIANTY/ROZMIARY: gdy pozycja ma kilka cen (mała/duża, kieliszek/butelka, 0,3/0,5 l) — to JEDNA",
+  "pozycja; w `price` zapisz wszystkie warianty z etykietą (np. 'mała 8 / duża 12'), NIE rozbijaj na osobne",
+  "dania dla samych rozmiarów. Dodatki/opcje 'do wyboru' i dopłaty ('+2 ekstra ser') → do `menu_description`",
+  "tej pozycji, nie jako osobne dania.",
   "NIE tłumacz, NIE generuj opisów, NIE zgaduj składników — to zrobi osobny krok.",
   "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz `restaurant_name`/`restaurant_address`.",
   "Wśród zdjęć MOŻE być fasada/szyld/witryna lokalu, wizytówka, pieczątka, paragon, okładka, nagłówek lub",
@@ -241,12 +255,14 @@ export const ENRICH_SYSTEM = [
   "Tłumacz nazwy (pozycji i sekcji) na język docelowy.",
   "Gdy pozycja ma OPIS Z KARTY (część po '|' w wejściu): przetłumacz go WIERNIE do `menu_description_translated`",
   "(dokładnie, bez dodatków) i OPRZYJ na nim generowany `description`. Gdy opisu z karty nie ma — `menu_description_translated` to pusty string.",
-  "OPIS (`description`) pisz ZWIĘŹLE i RZECZOWO, z tego, co wynika z nazwy/opisu z karty i typowego przyrządzania",
+  "OPIS (`description`) pisz ZWIĘŹLE (1 zdanie, max 2) i RZECZOWO, z tego, co wynika z nazwy/opisu z karty i typowego przyrządzania",
   "dania w TEJ kuchni/regionie. NIE upiększaj i NIE dodawaj nietypowych składników (np. NIE dodawaj awokado",
   "do zwykłej zielonej sałatki w kuchni indyjskiej). Lepiej ogólnie i PRAWDZIWIE niż barwnie i zmyślnie.",
   "W `ingredients` tylko składniki pewne/typowe; alergeny i flagi dietetyczne szacuj zachowawczo.",
   "`photo_query`: KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności",
   "(np. 'mango chicken curry indian', 'patatas bravas'). Opisz CZYM danie jest, nie markową nazwą z menu.",
+  "Celuj w GOTOWĄ, PODANĄ potrawę (jak na talerzu w lokalu), nie w surowe składniki, opakowanie ani przepis;",
+  "nie dodawaj słów typu 'recipe'/'ingredients'. Dla napojów: szklanka/kieliszek z napojem, nie samo logo.",
   "`photo_query_local`: nazwa do zdjęć W JĘZYKU KRAJU lokalu (z kontekstu). Gdy język menu = język kraju,",
   "zwykle = original; gdy się nie da — powtórz photo_query.",
   "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda),",
@@ -303,6 +319,8 @@ async function structureOpenAI(
       stream: true,
       // usage w strumieniu (ostatni chunk). OpenAI i Gemini-compat to wspierają.
       stream_options: { include_usage: true },
+      // Determinizm odczytu menu (wierniejsza transkrypcja + stabilny cache). Modele reasoning (gpt-5*) nie przyjmują temperature.
+      ...(isOpenAiReasoning(model) ? {} : { temperature: 0 }),
     });
     let acc = "";
     let finish: string | null = null;
@@ -366,7 +384,7 @@ export function contextTextStructure(opts: ExtractOptions, n: number): string {
   return (
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
-    (opts.cuisineHint ? `Wstępnie rozpoznana kuchnia: ${opts.cuisineHint} (wskazówka — zweryfikuj z treścią).\n` : "") +
+    // Kuchni z peeku CELOWO nie podajemy — model lepiej ustali ją sam z pełnego menu; słaby peek tylko mieszał.
     (opts.nearbyVenues?.length
       ? `W POBLIŻU (z GPS) są te lokale:\n` +
         opts.nearbyVenues.map((v, i) => `  ${i}) ${v.name}${v.cuisine ? ` — ${v.cuisine}` : ""}`).join("\n") +
@@ -461,6 +479,7 @@ async function structureClaude(
   const stream = client.messages.stream({
     model,
     max_tokens: maxTokens,
+    temperature: 0, // determinizm odczytu menu — wierniejsza transkrypcja + stabilny cache
     system: STRUCTURE_SYSTEM,
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: STRUCTURE_SCHEMA } },

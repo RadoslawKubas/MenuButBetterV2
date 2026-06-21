@@ -11,13 +11,16 @@ import { recordCacheHit } from "./apiLog.ts";
 let ready = false;
 
 /** Wersje per rodzaj — BUMP gdy zmieni się prompt/model/próg, by unieważnić stare wpisy. */
+// Przegląd promptów [2026-06]: temp 0 w skanie, konsolidacja nachodzących/wielojęzycznych fragmentów,
+// warianty/ceny, photo_query „podana potrawa", krótszy opis, verify „pojedyncza porcja", dish-info regionalny.
+// Zmiana promptów = bump wszystkich dotkniętych wersji, by stare wpisy nie zasłaniały nowego zachowania.
 export const CACHE_VERSION = {
-  "repr-photos": 1, // zdjęcia poglądowe „typ dania" (lista zweryfikowanych URL)
-  "dish-info": 1, // opis dania (tekst)
-  "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
-  "menu-scan": 4, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst (v4: zestawy + readable/low_quality)
-  "menu-structure": 4, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (v4: zestawy/menu dnia + info grupowe + jakość)
-  "item-enrich": 3, // przebieg 2: wzbogacenie pozycji (v3: indeksy GĘSTE-lokalne — flush wpisów zatrutych rozjazdem indeksów przy re-skanie z częściowym cache)
+  "repr-photos": 2, // zdjęcia poglądowe „typ dania" (v2: verify „pojedyncza porcja" + nowy photo_query)
+  "dish-info": 2, // opis dania (v2: region+kraj w kluczu, bez powtórki nazwy, akcent regionalny)
+  "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
+  "menu-scan": 5, // odczyt menu (v5: temp 0 + konsolidacja fragmentów/języków + warianty cen)
+  "menu-structure": 5, // przebieg 1: struktura menu (v5: temp 0 + konsolidacja nachodzących/wielojęzycznych + warianty/ceny)
+  "item-enrich": 4, // przebieg 2: wzbogacenie (v4: photo_query „podana potrawa", krótki opis 1 zdanie, bez peek-kuchni)
   "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;

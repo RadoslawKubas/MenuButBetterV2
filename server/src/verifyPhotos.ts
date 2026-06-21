@@ -51,9 +51,11 @@ export function verifyInstruction(dish: string, cuisine?: string): string {
     "- INNA potrawa lub napój niż opisany (np. curry/chleb, gdy pozycja to woda lub napój gazowany).\n" +
     "match>0.8 TYLKO, gdy wyraźnie widać właśnie tę pozycję (to danie albo ten napój).\n" +
     "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja.\n" +
-    "Dodatkowo ustaw text_overlay=true, gdy na zdjęciu jest WPALONY tekst/napis (tytuł dania, " +
-    "logo przepisu, baner, kolaż z podpisem — typowe piny z blogów/Pinteresta) — chcemy czyste " +
-    "zdjęcia jedzenia; w przeciwnym razie false."
+    "Preferuj POJEDYNCZĄ, wyraźnie podaną porcję (jeden talerz / jedna szklanka) — zbiorcze ujęcia wielu " +
+    "dań, bufet czy zastawiony stół oceniaj NIŻEJ (to słabe miniatury).\n" +
+    "Dodatkowo ustaw text_overlay=true, gdy na zdjęciu jest WPALONY tekst/napis lub ZNAK WODNY / logo " +
+    "serwisu (tytuł dania, logo przepisu, baner, kolaż z podpisem — typowe piny z blogów/Pinteresta) — " +
+    "chcemy czyste zdjęcia jedzenia; w przeciwnym razie false."
   );
 }
 
