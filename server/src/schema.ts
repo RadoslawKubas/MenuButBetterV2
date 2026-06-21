@@ -75,6 +75,10 @@ export interface MenuItem {
   currency: string | null;
   /** Warianty cenowe (rozmiary/opcje) — gdy >1 ceny. Inaczej puste/undefined (jedna cena w `price`). */
   variants?: PriceVariant[];
+  /** Grupa wyboru w zestawie (menu dnia): „1. danie"/„deser". Apka grupuje po tym w sekcji zestawu. */
+  course?: string | null;
+  /** Dopłata przy wyborze w zestawie (np. „+2 €"). */
+  surcharge?: string | null;
 }
 
 export interface MenuSection {
@@ -111,6 +115,10 @@ export interface StructItem {
   currency: string | null;
   /** Warianty cenowe (rozmiary/opcje) — gdy >1 ceny; wtedy `price`=null. Inaczej pusta tablica. */
   variants: PriceVariant[];
+  /** Grupa wyboru w ZESTAWIE (menu dnia): „1. danie"/„2. danie"/„deser". null = poza zestawem. */
+  course: string | null;
+  /** Dopłata przy wyborze tego dania w zestawie (np. „+2 €"). null = bez dopłaty. */
+  surcharge: string | null;
 }
 /** Ograniczenie czasowe sekcji (menu dnia/lunch/weekend/sezon): krótki tekst, np. „pn-pt 13-16". null=brak. */
 export interface StructSection { name: string; items: StructItem[]; availability: string | null }
@@ -157,8 +165,10 @@ export const STRUCTURE_SCHEMA = {
                 price: { type: ["string", "null"], description: "Cena jako tekst, lub null gdy nie widać (LUB gdy są warianty — wtedy ceny idą do `variants`, a tu null)." },
                 currency: { type: ["string", "null"], description: "Waluta, np. 'EUR', lub null." },
                 variants: { type: "array", description: "Warianty cenowe, gdy pozycja ma KILKA cen (rozmiary/opcje: mała/duża, kieliszek/butelka, 0,3/0,5 l). Wtedy `price`=null. Inaczej pusta tablica.", items: { type: "object", additionalProperties: false, properties: { label: { type: "string", description: "Etykieta wariantu jak na menu (np. 'mała', 'duża', '0,5 l')." }, price: { type: "string", description: "Cena tego wariantu jako tekst." } }, required: ["label", "price"] } },
+                course: { type: ["string", "null"], description: "Gdy pozycja to WYBÓR w ZESTAWIE (menu dnia) — KRÓTKA etykieta grupy wyboru: '1. danie', '2. danie', 'deser'. Poza zestawem → null." },
+                surcharge: { type: ["string", "null"], description: "Dopłata przy wyborze tego dania w zestawie (np. '+2 €'). Brak dopłaty → null." },
               },
-              required: ["original", "menu_description", "source_text", "price", "currency", "variants"],
+              required: ["original", "menu_description", "source_text", "price", "currency", "variants", "course", "surcharge"],
             },
           },
         },

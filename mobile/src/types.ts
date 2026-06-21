@@ -39,6 +39,10 @@ export interface MenuItem {
   currency: string | null;
   /** Warianty cenowe (rozmiary/opcje), gdy pozycja ma >1 cenę (wtedy price=null). */
   variants?: { label: string; price: string }[];
+  /** Grupa wyboru w zestawie (menu dnia): „1. danie"/„deser" — apka grupuje po tym. */
+  course?: string | null;
+  /** Dopłata przy wyborze w zestawie (np. „+2 €"). */
+  surcharge?: string | null;
   /** Czy pozycja przeszła już ENRICH (tłumaczenie/opis). false/undefined = surowa struktura — apka
    *  pokazuje wtedy spinner „tłumaczę…" gdy enrich leci w tle. */
   enriched?: boolean;

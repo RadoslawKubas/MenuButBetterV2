@@ -230,12 +230,12 @@ export const STRUCTURE_SYSTEM = [
   "alergenach) NIE mogą trafić jako pozycje (dania). Wydziel je do tablicy `notes`: `text` (oryginał),",
   "`scope` ('menu' = całe menu, 'section' = konkretna sekcja), `section_index` (indeks sekcji od 0 gdy",
   "scope='section', inaczej null) i `kind` (set/included/wait/fee/tax/tip/hours/info). Gdy brak adnotacji — `notes` puste.",
-  "ZESTAWY / MENU DNIA (np. 'Menú del día', lunch, zestaw obiadowy): gdy zestaw ma DANIA DO WYBORU na każde",
-  "danie (1./2./deser), a tych wyborów jest sporo i to PEŁNOPRAWNE potrawy — potraktuj je jak ZWYKŁE POZYCJE",
-  "(każda osobny wpis, dostanie opis i zdjęcie), POGRUPOWANE w sekcje wg dania zestawu (np. 'Menu dnia · 1.",
-  "danie', 'Menu dnia · 2. danie', 'Deser'); `price` tych pozycji = null (są w cenie zestawu). Cenę zestawu",
-  "i zasady (po jednym z każdej grupy, deser/napój w cenie) zapisz jako adnotację `kind='set'` przy PIERWSZEJ",
-  "z tych sekcji. Gdy zestaw to tylko 1-2 stałe pozycje bez wyboru — wystarczy sama adnotacja `kind='set'`.",
+  "ZESTAWY / MENU DNIA (np. 'Menú del día', lunch, zestaw obiadowy): gdy zestaw ma DANIA DO WYBORU, a wyborów",
+  "jest sporo i to PEŁNOPRAWNE potrawy — daj je jako ZWYKŁE POZYCJE (każda osobny wpis: dostanie opis i",
+  "zdjęcie) w JEDNEJ sekcji zestawu (np. 'Menu dnia'). Każdą pozycję otaguj polem `course` = grupa wyboru",
+  "('1. danie'/'2. danie'/'deser'); `price`=null (w cenie zestawu); gdy dany wybór ma DOPŁATĘ — wpisz ją do",
+  "`surcharge` (np. '+2 €'). Cenę zestawu i zasady (po jednym z grupy, co wliczone, np. lampka wina) zapisz",
+  "jako adnotację `kind='set'` przy tej sekcji. Zestaw bez wyboru (1-2 stałe pozycje) — wystarczy adnotacja.",
   "OGRANICZENIA CZASOWE: gdy sekcja/menu obowiązuje tylko w określone dni/godziny (menu dnia w tygodniu,",
   "brunch weekendowy, karta sezonowa/świąteczna) — zapisz KRÓTKO w polu `availability` tej sekcji (np.",
   "'pn-pt 13-16', 'weekend', 'sezonowo'); brak ograniczenia → null.",
@@ -580,6 +580,8 @@ function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
     price: it.price,
     currency: it.currency,
     variants: it.variants?.length ? it.variants : undefined,
+    course: it.course ?? undefined,
+    surcharge: it.surcharge ?? undefined,
   };
 }
 
@@ -611,7 +613,7 @@ export function menuToStructure(menu: Menu): MenuStructure {
     sections: menu.sections.map((s) => ({
       name: s.name,
       availability: s.availability ?? null,
-      items: s.items.map((it) => ({ original: it.original, menu_description: it.menu_description ?? "", source_text: it.source_text ?? "", price: it.price, currency: it.currency, variants: it.variants ?? [] })),
+      items: s.items.map((it) => ({ original: it.original, menu_description: it.menu_description ?? "", source_text: it.source_text ?? "", price: it.price, currency: it.currency, variants: it.variants ?? [], course: it.course ?? null, surcharge: it.surcharge ?? null })),
     })),
     notes: (menu.notes ?? []).map((n) => ({ text: n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
     readable: true,

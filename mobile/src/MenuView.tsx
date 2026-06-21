@@ -359,13 +359,28 @@ export function MenuView({
           {!isCollapsed ? <NotesBlock notes={secNotes} /> : null}
           {!isCollapsed && section.items.map((item, ii) => {
             const key = `${si}-${ii}`;
+            // Zestaw: podgrupy „1. danie/2. danie/deser" — nagłówek, gdy course się zmienia.
+            const showCourse = !!item.course && item.course !== (ii > 0 ? section.items[ii - 1].course : undefined);
             return (
-              <Pressable key={ii} style={styles.card} onPress={() => press(si, ii, item)}>
+              <View key={ii}>
+                {showCourse ? <Text style={styles.courseHeader}>{item.course}</Text> : null}
+              <Pressable style={styles.card} onPress={() => press(si, ii, item)}>
                 <View style={styles.cardRow}>
                   <View style={styles.cardMain}>
                     <View style={styles.cardHeader}>
                       <Text style={styles.itemName}>{item.translated}</Text>
-                      {item.price && !(item.variants && item.variants.length > 0) ? (
+                      {item.variants && item.variants.length > 0 ? (
+                        <View style={styles.priceCol}>
+                          {item.variants.map((v, k) => (
+                            <Text key={k} style={styles.variantLine}>
+                              <Text style={styles.variantLabel}>{v.label} </Text>
+                              {v.price}{item.currency ? ` ${item.currency}` : ""}
+                            </Text>
+                          ))}
+                        </View>
+                      ) : item.surcharge ? (
+                        <Text style={styles.surcharge}>{item.surcharge}</Text>
+                      ) : item.price ? (
                         <Text style={styles.price} numberOfLines={2}>
                           {item.price}
                           {item.currency ? ` ${item.currency}` : ""}
@@ -373,16 +388,6 @@ export function MenuView({
                       ) : null}
                     </View>
                     <Text style={styles.original}>{item.original}</Text>
-                    {item.variants && item.variants.length > 0 ? (
-                      <View style={styles.variantsRow}>
-                        {item.variants.map((v, k) => (
-                          <View key={k} style={styles.variantPill}>
-                            <Text style={styles.variantLabel}>{v.label}</Text>
-                            <Text style={styles.variantPrice}>{v.price}{item.currency ? ` ${item.currency}` : ""}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    ) : null}
                     {enriching && !item.enriched ? (
                       <View style={styles.pendingRow}>
                         <ActivityIndicator size="small" color={colors.muted} />
@@ -456,6 +461,7 @@ export function MenuView({
                   onSearchMore={() => onSearchMorePhotos(si, ii)}
                 />
               </Pressable>
+              </View>
             );
           })}
         </View>
@@ -538,11 +544,14 @@ const styles = StyleSheet.create({
   // zawijają się do 2 linii zamiast spychać nazwę w wąską kolumnę). textAlign do prawej.
   price: { fontSize: 16, fontWeight: "700", color: colors.text, flexShrink: 0, maxWidth: 120, textAlign: "right" },
   original: { fontSize: 13, color: colors.muted, marginTop: 2, fontStyle: "italic" },
-  // Warianty cenowe (rozmiary) — pigułki pod nazwą; etykieta + cena.
-  variantsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
-  variantPill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
-  variantLabel: { fontSize: 12, color: colors.muted },
-  variantPrice: { fontSize: 12, fontWeight: "800", color: colors.text },
+  // Warianty cenowe (rozmiary) — po PRAWEJ jak zwykła cena, w kolumnie (etykieta + cena per linia).
+  priceCol: { flexShrink: 0, alignItems: "flex-end" },
+  variantLine: { fontSize: 15, fontWeight: "700", color: colors.text, textAlign: "right" },
+  variantLabel: { fontSize: 12, fontWeight: "400", color: colors.muted },
+  // Dopłata przy wyborze w zestawie (gdy danie bez własnej ceny).
+  surcharge: { fontSize: 14, fontWeight: "800", color: colors.accent, flexShrink: 0 },
+  // Nagłówek podgrupy zestawu („1. danie").
+  courseHeader: { fontSize: 12, fontWeight: "800", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4, marginTop: 10, marginBottom: 2, marginLeft: 2 },
   // Plakietka ograniczenia czasowego sekcji (menu dnia / weekend / sezon).
   availBadge: { alignSelf: "flex-start", backgroundColor: "#f6e0c0", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, marginTop: 3 },
   availText: { fontSize: 12, color: "#8a5a1a", fontWeight: "700" },

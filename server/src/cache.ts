@@ -18,7 +18,7 @@ export const CACHE_VERSION = {
   "repr-photos": 2, // zdjęcia poglądowe „typ dania" (v2: verify „pojedyncza porcja" + nowy photo_query)
   "dish-info": 2, // opis dania (v2: region+kraj w kluczu, bez powtórki nazwy, akcent regionalny)
   "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
-  "menu-structure": 6, // przebieg 1: struktura menu (v6: variants[] + section.availability + zestawy-jako-dania)
+  "menu-structure": 7, // przebieg 1: struktura menu (v7: + course/surcharge w pozycji = zestaw z podgrupami i dopłatą)
   "item-enrich": 4, // przebieg 2: wzbogacenie (v4: photo_query „podana potrawa", krótki opis 1 zdanie, bez peek-kuchni)
   "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
 } as const;
