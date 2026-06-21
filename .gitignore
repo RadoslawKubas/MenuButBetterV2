@@ -21,3 +21,4 @@ server/samples/*.jpg
 server/samples/*.jpeg
 server/samples/*.png
 server/samples/*.webp
+server/lab/deploy-state.json

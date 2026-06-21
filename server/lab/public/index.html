@@ -81,6 +81,7 @@
     <button class="tab" id="tabBtn-instances" onclick="switchTab('instances')">📱 Instancje</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
     <button class="tab" id="tabBtn-services" onclick="switchTab('services')">🔌 Serwisy</button>
+    <button class="tab" id="tabBtn-deploy" onclick="switchTab('deploy')">🚀 Deploy</button>
   </nav>
   <span class="mut small" id="dir"></span>
   <span style="flex:1"></span>
@@ -274,6 +275,22 @@
       <span class="mut small">„panel ↗" = logowanie/konsola · „cennik ↗" = oficjalna strona cen · „zaciągnij" = serwer pobiera stronę i wyłuskuje kwoty (podgląd — zweryfikuj w źródle). Ceny obok są orientacyjne.</span>
     </div>
     <div id="servicesBox" class="mut">ładuję…</div>
+  </div>
+</div>
+
+<div id="tab-deploy" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>🚀 Deploy — wysyłka na TestFlight</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      <button onclick="loadDeploy(this)" style="padding:4px 10px">↻ odśwież</button>
+      <span class="mut small">Budowanie NIE zużywa limitu Apple — tylko wysyłka. Buduj ile chcesz, a wgrywaj świadomie. Wgranie idzie w tle; numer builda apka podbija sama.</span>
+    </div>
+    <div id="deployWarn" style="margin-bottom:10px"></div>
+    <div id="deployJob"></div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:10px 0 6px">Gotowe buildy (.ipa)</div>
+    <div id="deployBuilds" class="mut">ładuję…</div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Historia wgrań (24h liczone z udanych)</div>
+    <div id="deployHistory" class="mut"></div>
   </div>
 </div>
 
@@ -872,13 +889,14 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','instances','prices','services'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','instances','prices','services','deploy'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='services'){ loadServices(); }
+  else if(name==='deploy'){ loadDeploy(); }
   else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); loadAppSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
@@ -1085,6 +1103,57 @@ async function pullAllPrices(btn){
   btn.disabled=true; const t=btn.textContent; btn.textContent='↻ zaciągam…';
   await Promise.all(SERVICES_CACHE.map(s=>pullPrice(s.key,null)));
   btn.textContent='✓ gotowe'; setTimeout(()=>{ btn.textContent=t; btn.disabled=false; }, 1600);
+}
+
+/* ---- Deploy (zakładka 🚀 Deploy) — ręczna wysyłka .ipa na TestFlight z kontrolą limitu ---- */
+let DEPLOY_POLL=null;
+function fmtAgo(ts){ const s=Math.max(0,(Date.now()-ts)/1000); if(s<60)return Math.round(s)+'s temu'; if(s<3600)return Math.round(s/60)+'min temu'; if(s<86400)return Math.round(s/3600)+'h temu'; return Math.round(s/86400)+'d temu'; }
+async function loadDeploy(btn){
+  if(btn) btn.disabled=true;
+  let r; try{ r=await api('/api/deploy/state'); }catch(e){ document.getElementById('deployBuilds').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  const col={ok:'#1e6b3a',warn:'#8a5a00',danger:'#7a1f1f'}[r.level];
+  const msg={ok:'Bezpiecznie',warn:'Ostrożnie — blisko limitu',danger:'STOP — wstrzymaj się'}[r.level];
+  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}"><b>Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span><div class="mut small" style="margin-top:3px">Apple bije limit szybko — przy ostrzeżeniu lepiej poczekać. Konto: ${esc(r.appleId||'')}.</div></div>`;
+  renderDeployJob(r.job);
+  const busy=!!(r.job&&r.job.running);
+  document.getElementById('deployBuilds').innerHTML = (r.builds||[]).length ? r.builds.map(b=>`
+    <div class="step" style="display:flex; gap:10px; align-items:flex-start">
+      <div style="flex:1; min-width:0">
+        <div><b>${esc(b.ipa)}</b> <span class="mut small">· ${b.sizeMB} MB · ${fmtAgo(b.mtime)}</span></div>
+        <input value="${esc(b.note)}" placeholder="notka: co jest w tym buildzie…" onchange="saveBuildNote('${esc(b.ipa)}',this.value)" style="width:100%; margin-top:6px; padding:5px 8px; font-size:12px">
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0">
+        <button onclick="uploadBuild('${esc(b.ipa)}')" ${busy?'disabled':''} style="padding:5px 12px; background:${busy?'#555':'#1e6b3a'}; color:#fff; font-weight:700">⬆️ Wgraj</button>
+        <button onclick="deleteBuild('${esc(b.ipa)}')" ${busy?'disabled':''} style="padding:4px 10px; font-size:11px">🗑 usuń</button>
+      </div>
+    </div>`).join('') : '<span class="mut">Brak gotowych .ipa. Zbuduj: <code>cd mobile &amp;&amp; ./build-only.sh</code></span>';
+  document.getElementById('deployHistory').innerHTML = (r.uploads||[]).length ? r.uploads.map(u=>`
+    <div class="mut small" style="padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06)">
+      ${u.ok?'✅':'❌'} ${new Date(u.ts).toLocaleString()} · <b>${esc(u.ipa)}</b>${u.note?` · ${esc(u.note)}`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
+    </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
+  if(busy && !DEPLOY_POLL && CURRENT_TAB==='deploy'){ DEPLOY_POLL=setInterval(()=>{ if(CURRENT_TAB==='deploy') loadDeploy(); else { clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; } },2500); }
+  if(!busy && DEPLOY_POLL){ clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; }
+  if(btn) btn.disabled=false;
+}
+function renderDeployJob(job){
+  const el=document.getElementById('deployJob');
+  if(!job){ el.innerHTML=''; return; }
+  const col=job.running?'#8a5a00':(job.ok?'#1e6b3a':'#7a1f1f');
+  el.innerHTML=`<div class="step" style="border-left:4px solid ${col}">
+    <b>${job.running?'⏳ Wysyłam…':(job.ok?'✅ Wysłano':'❌ Wysyłka nieudana')}</b> <span class="mut small">${esc(job.ipa)}</span>
+    <pre style="margin:6px 0 0; white-space:pre-wrap; font-size:10px; max-height:170px; overflow:auto; opacity:0.85">${esc((job.log||'').slice(-1400))}</pre>
+  </div>`;
+}
+async function saveBuildNote(ipa,note){ try{ await api('/api/deploy/note',{ipa,note}); }catch(e){} }
+async function uploadBuild(ipa){
+  if(!confirm('Wgrać '+ipa+' na TestFlight?\nTo zużyje JEDNO wgranie z dziennego limitu Apple.')) return;
+  try{ const r=await api('/api/deploy/upload',{ipa}); if(r&&r.error){ alert(r.error); return; } loadDeploy(); }
+  catch(e){ alert('Błąd: '+e); }
+}
+async function deleteBuild(ipa){
+  if(!confirm('Usunąć lokalny plik '+ipa+'?')) return;
+  try{ const r=await api('/api/deploy/delete-build',{ipa}); if(r&&r.error){ alert(r.error); return; } loadDeploy(); }
+  catch(e){ alert('Błąd: '+e); }
 }
 
 /* ---- Sample online + archiwum (zakładka 📦 Sample) ---- */

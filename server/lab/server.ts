@@ -12,9 +12,10 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
 import { extractMenu, contextText, SYSTEM as MENU_SYSTEM, type InputImage } from "../src/menu.ts";
@@ -120,6 +121,22 @@ const SERVICES: { key: string; name: string; icon: string; category: string; des
     dashboard: "https://expo.dev/accounts", pricing: "https://expo.dev/pricing",
     price: "Build lokalny gratis. Chmura: 30 buildów/mc gratis, potem płatne (Production $99/mc)" },
 ];
+
+// ─── DEPLOY: ręczna kontrola wysyłki na TestFlight (limit wgrań Apple). Budowanie nie zużywa limitu —
+// tylko `eas submit`. Lista gotowych .ipa + wysyłka na żądanie + licznik wgrań w 24h + ostrzeżenia. ───
+const MOBILE_DIR = join(HERE, "..", "..", "mobile");
+const DEPLOY_FILE = join(HERE, "deploy-state.json"); // notki per .ipa + historia wgrań (gitignored)
+const APPLE_ID = "rk@appwithkiss.com"; // sam e-mail nie jest sekretem (jak w build-submit.sh)
+const UPLOAD_WARN = 2; // ⚠️ od tylu wgrań w 24h ostrzegamy; (Apple bije limit szybko — bądźmy ostrożni)
+const UPLOAD_DANGER = 3; // 🛑 od tylu — wstrzymaj się
+interface DeployState { notes: Record<string, string>; uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null }[] }
+function loadDeploy(): DeployState {
+  try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { notes: j.notes ?? {}, uploads: j.uploads ?? [] }; }
+  catch { return { notes: {}, uploads: [] }; }
+}
+function saveDeploy(s: DeployState) { try { writeFileSync(DEPLOY_FILE, JSON.stringify(s, null, 2)); } catch { /* ignore */ } }
+// Stan AKTUALNIE trwającej wysyłki (jedna na raz) — log na żywo do podglądu w UI.
+let uploadJob: { running: boolean; ipa: string; startedAt: number; log: string; done: boolean; ok: boolean } | null = null;
 
 const PRICES_FILE = join(HERE, "prices-override.json");
 function loadPriceOverrides(): Record<string, { in?: number; out?: number; value?: number }> {
@@ -1402,6 +1419,80 @@ app.post("/api/service-price", async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: String((e as Error).message || e) });
   }
+});
+
+// ─── Deploy: ręczna kontrola wysyłki gotowych .ipa na TestFlight (kontrola limitu Apple) ───
+const IPA_RE = /^build-[0-9]+\.ipa$/; // sztywny wzorzec nazwy → zero path-traversal
+function listBuilds(): { ipa: string; sizeMB: number; mtime: number; note: string }[] {
+  let names: string[] = [];
+  try { names = readdirSync(MOBILE_DIR).filter((f) => IPA_RE.test(f)); } catch { /* brak katalogu */ }
+  const st = loadDeploy();
+  return names
+    .map((ipa) => {
+      let sizeMB = 0, mtime = 0;
+      try { const s = statSync(join(MOBILE_DIR, ipa)); sizeMB = +(s.size / 1048576).toFixed(1); mtime = s.mtimeMs; } catch { /* ignore */ }
+      return { ipa, sizeMB, mtime, note: st.notes[ipa] ?? "" };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+}
+function uploads24h(s: DeployState): number {
+  const cut = Date.now() - 24 * 3600_000;
+  return s.uploads.filter((u) => u.ok && u.ts >= cut).length;
+}
+app.get("/api/deploy/state", (c) => {
+  const s = loadDeploy();
+  const used = uploads24h(s);
+  return c.json({
+    builds: listBuilds(),
+    uploads: s.uploads.slice(0, 20),
+    used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER,
+    level: used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok",
+    job: uploadJob,
+    appleId: APPLE_ID,
+  });
+});
+app.post("/api/deploy/note", async (c) => {
+  const b = await c.req.json<{ ipa?: string; note?: string }>().catch(() => ({}) as { ipa?: string; note?: string });
+  if (!b.ipa) return c.json({ error: "brak ipa" }, 400);
+  const s = loadDeploy();
+  s.notes[b.ipa] = (b.note ?? "").slice(0, 500);
+  saveDeploy(s);
+  return c.json({ ok: true });
+});
+app.post("/api/deploy/delete-build", async (c) => {
+  const b = await c.req.json<{ ipa?: string }>().catch(() => ({}) as { ipa?: string });
+  if (!b.ipa || !IPA_RE.test(b.ipa)) return c.json({ error: "zła nazwa .ipa" }, 400);
+  if (uploadJob?.running && uploadJob.ipa === b.ipa) return c.json({ error: "Ten build jest właśnie wysyłany." }, 409);
+  try { unlinkSync(join(MOBILE_DIR, b.ipa)); } catch { /* już nie ma */ }
+  const s = loadDeploy(); delete s.notes[b.ipa]; saveDeploy(s);
+  return c.json({ ok: true });
+});
+app.post("/api/deploy/upload", async (c) => {
+  const b = await c.req.json<{ ipa?: string }>().catch(() => ({}) as { ipa?: string });
+  if (!b.ipa || !IPA_RE.test(b.ipa)) return c.json({ error: "zła nazwa .ipa" }, 400);
+  if (uploadJob?.running) return c.json({ error: "Wysyłka już trwa — poczekaj na zakończenie." }, 409);
+  if (!existsSync(join(MOBILE_DIR, b.ipa))) return c.json({ error: "Brak pliku .ipa (zbuduj najpierw)." }, 404);
+  const ipa = b.ipa;
+  uploadJob = { running: true, ipa, startedAt: Date.now(), log: "", done: false, ok: false };
+  // Budowanie nie zużywa limitu — TYLKO ta wysyłka. eas submit czyta eas.json (ascAppId) → non-interactive.
+  const sh = `export EXPO_APPLE_ID=${JSON.stringify(APPLE_ID)}; [ -f .apple-secrets ] && source .apple-secrets; eas submit --platform ios --profile production --path ${JSON.stringify(ipa)} --non-interactive`;
+  const child = spawn("bash", ["-lc", sh], { cwd: MOBILE_DIR });
+  const append = (d: Buffer) => { if (uploadJob) uploadJob.log = (uploadJob.log + d.toString()).slice(-8000); };
+  child.stdout.on("data", append);
+  child.stderr.on("data", append);
+  child.on("error", (e) => { if (uploadJob) { uploadJob.running = false; uploadJob.done = true; uploadJob.ok = false; uploadJob.log += `\nSPAWN ERROR: ${e.message}`; } });
+  child.on("close", () => {
+    if (!uploadJob) return;
+    const log = uploadJob.log;
+    const limit = /Upload limit reached/i.test(log);
+    const ok = /Submitted your app to Apple/i.test(log) && !limit && !/Error uploading ipa/i.test(log);
+    uploadJob.running = false; uploadJob.done = true; uploadJob.ok = ok;
+    const s = loadDeploy();
+    s.uploads.unshift({ ts: Date.now(), ipa, ok, note: s.notes[ipa] || null, error: ok ? null : (limit ? "Apple: limit wgrań osiągnięty — poczekaj ~24h" : "Wysyłka nie powiodła się (szczegóły w logu)") });
+    s.uploads = s.uploads.slice(0, 100);
+    saveDeploy(s);
+  });
+  return c.json({ ok: true });
 });
 
 // --- Zadania: długie eksperymenty w TLE (postęp / pauza / wznowienie / przerwanie) --------
