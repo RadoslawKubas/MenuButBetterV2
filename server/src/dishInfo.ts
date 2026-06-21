@@ -41,13 +41,13 @@ export async function describeDish(
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
   // ② CACHE opisu — opis jest „jak podaje się to w TEJ kuchni i regionie", więc niezależny od
-  // konkretnego lokalu. Klucz: danie + kuchnia + KRAJ (z location) + język + model. Gdy menu niesie
-  // WŁASNY krótki opis (możliwy wariant, np. „tost z awokado") — NIE cache’ujemy: generujemy świeżo,
-  // żeby nie zgubić tej informacji (bezstratnie).
+  // konkretnego lokalu. Klucz: danie + KRÓTKI OPIS (wariant, np. „tost z awokado") + kuchnia + KRAJ +
+  // język + model. Opis JEST w kluczu, więc cache'ujemy ZAWSZE bezstratnie (różny opis → różny wpis), a
+  // re-skan tego samego menu (ten sam opis) TRAFIA w cache. Wcześniej przy każdym opisie z menu pomijaliśmy
+  // cache → opisy liczyły się od zera co skan (największy powtarzalny koszt).
   const country = input.location ? input.location.split(",").pop()?.trim() || input.location : undefined;
-  const hasMenuDesc = !!input.description?.trim();
-  const useCache = !input.noCache && !hasMenuDesc;
-  const ck = cacheKey("dish-info", input.name, input.cuisine, country, input.targetLang, model);
+  const useCache = !input.noCache;
+  const ck = cacheKey("dish-info", input.name, input.description ?? "", input.cuisine, country, input.targetLang, model);
   if (useCache) {
     const hit = await cacheGet<string>("dish-info", ck, { op: "dish-info" });
     if (hit) return { text: hit, usage: ZERO_USAGE, cached: true };
