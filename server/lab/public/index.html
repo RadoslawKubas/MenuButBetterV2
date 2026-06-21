@@ -1225,12 +1225,13 @@ function renderStatsByApi(){
 }
 const OP_LABEL={scan:'skan',enrich:'enrich (tłum./opisy)','dish-photos':'zdjęcia dań','dish-photo-refresh':'odśw. zdjęcia',peek:'szybki podgląd','dish-info':'opis dania',restaurant:'lokal (Places)','venue-photos':'zdjęcia z lokalu'};
 function sessionStats(g){
-  let images=0,dishes=0,photosFetched=0,photoOps=0; const ops={};
-  for(const e of (g.entries||[])){ const d=(e.meta&&e.meta.data)||{}; ops[e.op]=(ops[e.op]||0)+1;
+  let images=0,dishes=0,photosFetched=0,photoOps=0; const byOp={};
+  for(const e of (g.entries||[])){ const d=(e.meta&&e.meta.data)||{};
+    const o=byOp[e.op]=byOp[e.op]||{count:0,cost:0}; o.count++; o.cost+=(e.totalCost||0); // koszt+liczba per typ
     if(e.op==='scan'){ images=Math.max(images,d.images||0); dishes=Math.max(dishes,d.items||0); }
     else if(e.op==='enrich'){ if(d.items) dishes=Math.max(dishes,d.items); }
     else if(e.op==='dish-photos'||e.op==='dish-photo-refresh'){ photoOps++; photosFetched+=(d.resultCount||0); } }
-  return {images,dishes,photosFetched,photoOps,ops};
+  return {images,dishes,photosFetched,photoOps,byOp};
 }
 let STATS_OPEN={}; let STATS_KEYS=[];
 function toggleSession(i){ const k=STATS_KEYS[i]; if(k){ STATS_OPEN[k]=!STATS_OPEN[k]; renderStatsSessions(); } }
@@ -1264,7 +1265,7 @@ function renderStatsSessions(){
       <div onclick="toggleSession(${i})" style="cursor:pointer; display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${open?'▾':'▸'} ${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
       <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()}</div>
       <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek (${s.photoOps} szukań) · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
-      <div class="mut" style="margin-top:3px; font-size:10px">${Object.entries(s.ops).sort((a,b)=>b[1]-a[1]).map(([op,n])=>`${esc(OP_LABEL[op]||op)} ×${n}`).join(' · ')}</div>
+      <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${Object.entries(s.byOp).sort((a,b)=>b[1].cost-a[1].cost).map(([op,o])=>`<b style="color:#cfe0ff">${esc(OP_LABEL[op]||op)}</b> ${o.count} zap · ${fmtUsd(o.cost)}`).join('  ·  ')}</div>
       <div style="margin-top:6px">${provChips}</div>
       ${detail}
     </div>`;
