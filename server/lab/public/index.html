@@ -1111,9 +1111,10 @@ function fmtAgo(ts){ const s=Math.max(0,(Date.now()-ts)/1000); if(s<60)return Ma
 async function loadDeploy(btn){
   if(btn) btn.disabled=true;
   let r; try{ r=await api('/api/deploy/state'); }catch(e){ document.getElementById('deployBuilds').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
-  const col={ok:'#1e6b3a',warn:'#8a5a00',danger:'#7a1f1f'}[r.level];
-  const msg={ok:'Bezpiecznie',warn:'Ostrożnie — blisko limitu',danger:'STOP — wstrzymaj się'}[r.level];
-  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}"><b>Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span><div class="mut small" style="margin-top:3px">Apple bije limit szybko — przy ostrzeżeniu lepiej poczekać. Konto: ${esc(r.appleId||'')}.</div></div>`;
+  const col={ok:'#1e6b3a',warn:'#8a5a00',danger:'#7a1f1f',blocked:'#7a1f1f'}[r.level];
+  const icon={ok:'✅',warn:'⚠️',danger:'🛑',blocked:'❌'}[r.level];
+  const msg={ok:'Bezpiecznie',warn:'Ostrożnie — blisko limitu',danger:'STOP — blisko twardego limitu',blocked:'Apple ODRZUCIŁ ostatnią wysyłkę (limit) — poczekaj ~24h'}[r.level];
+  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}; ${r.level==='blocked'||r.level==='danger'?'background:rgba(122,31,31,0.16)':''}"><b>${icon} Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span><div class="mut small" style="margin-top:3px">Realny limit Apple ~15–16/24h. Konto: ${esc(r.appleId||'')}.</div></div>`;
   renderDeployJob(r.job);
   const busy=!!(r.job&&r.job.running);
   document.getElementById('deployBuilds').innerHTML = (r.builds||[]).length ? r.builds.map(b=>`
@@ -1129,7 +1130,7 @@ async function loadDeploy(btn){
     </div>`).join('') : '<span class="mut">Brak gotowych .ipa. Zbuduj: <code>cd mobile &amp;&amp; ./build-only.sh</code></span>';
   document.getElementById('deployHistory').innerHTML = (r.uploads||[]).length ? r.uploads.map(u=>`
     <div class="mut small" style="padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06)">
-      ${u.ok?'✅':'❌'} ${new Date(u.ts).toLocaleString()} · <b>${esc(u.ipa)}</b>${u.note?` · ${esc(u.note)}`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
+      ${u.ok?'✅':'❌'} ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span>${u.note?` · ${esc(u.note)}`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
     </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
   if(busy && !DEPLOY_POLL && CURRENT_TAB==='deploy'){ DEPLOY_POLL=setInterval(()=>{ if(CURRENT_TAB==='deploy') loadDeploy(); else { clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; } },2500); }
   if(!busy && DEPLOY_POLL){ clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; }

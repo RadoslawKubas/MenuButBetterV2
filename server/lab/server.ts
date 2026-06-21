@@ -127,9 +127,9 @@ const SERVICES: { key: string; name: string; icon: string; category: string; des
 const MOBILE_DIR = join(HERE, "..", "..", "mobile");
 const DEPLOY_FILE = join(HERE, "deploy-state.json"); // notki per .ipa + historia wgrań (gitignored)
 const APPLE_ID = "rk@appwithkiss.com"; // sam e-mail nie jest sekretem (jak w build-submit.sh)
-const UPLOAD_WARN = 2; // ⚠️ od tylu wgrań w 24h ostrzegamy; (Apple bije limit szybko — bądźmy ostrożni)
-const UPLOAD_DANGER = 3; // 🛑 od tylu — wstrzymaj się
-interface DeployState { notes: Record<string, string>; uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null }[]; buildNums?: Record<string, string> }
+const UPLOAD_WARN = 10; // ⚠️ od tylu wgrań w 24h ostrzegamy (z obserwacji realny limit ~15–16)
+const UPLOAD_DANGER = 16; // 🛑 od tylu — wstrzymaj się (blisko twardego limitu)
+interface DeployState { notes: Record<string, string>; uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null; buildNumber?: string | null }[]; buildNums?: Record<string, string> }
 function loadDeploy(): DeployState {
   try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { notes: j.notes ?? {}, uploads: j.uploads ?? [], buildNums: j.buildNums ?? {} }; }
   catch { return { notes: {}, uploads: [], buildNums: {} }; }
@@ -1457,11 +1457,15 @@ function uploads24h(s: DeployState): number {
 app.get("/api/deploy/state", (c) => {
   const s = loadDeploy();
   const used = uploads24h(s);
+  const cut = Date.now() - 24 * 3600_000;
+  // Apple REALNIE odrzucił ostatnio (limit) → twardy „X", ważniejszy niż sam licznik.
+  const appleBlocked = s.uploads.some((u) => !u.ok && u.ts >= cut && /limit/i.test(u.error || ""));
+  const level = appleBlocked ? "blocked" : used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok";
   return c.json({
     builds: listBuilds(),
     uploads: s.uploads.slice(0, 20),
-    used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER,
-    level: used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok",
+    used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER, appleBlocked,
+    level,
     job: uploadJob,
     appleId: APPLE_ID,
   });
@@ -1504,6 +1508,7 @@ app.post("/api/deploy/upload", async (c) => {
     uploadJob.running = false; uploadJob.done = true; uploadJob.ok = ok;
     const s = loadDeploy();
     const noteForRecord = s.notes[ipa] || null; // zapamiętaj PRZED czyszczeniem (skasuje notkę wgranego)
+    const upBuildNum = buildNumberOf(ipa); // też przed czyszczeniem (skasuje plik + cache)
     // Po UDANEJ wysyłce: skasuj wszystkie .ipa z numerem ≤ wgrany (łącznie z wgranym) — TestFlight i tak
     // odrzuci niższy/równy numer, więc to bezużyteczne pliki. Czyści też zużyty build.
     const cleaned: string[] = [];
@@ -1518,7 +1523,7 @@ app.post("/api/deploy/upload", async (c) => {
       }
       if (cleaned.length) uploadJob.log += `\n🧹 Usunięto zużyte/starsze buildy: ${cleaned.join(", ")}`;
     }
-    s.uploads.unshift({ ts: Date.now(), ipa, ok, note: noteForRecord, error: ok ? (cleaned.length ? `🧹 posprzątano ${cleaned.length} starszych/zużytych` : null) : (limit ? "Apple: limit wgrań osiągnięty — poczekaj ~24h" : "Wysyłka nie powiodła się (szczegóły w logu)") });
+    s.uploads.unshift({ ts: Date.now(), ipa, ok, buildNumber: upBuildNum, note: noteForRecord, error: ok ? (cleaned.length ? `🧹 posprzątano ${cleaned.length} starszych/zużytych` : null) : (limit ? "Apple: limit wgrań osiągnięty — poczekaj ~24h" : "Wysyłka nie powiodła się (szczegóły w logu)") });
     s.uploads = s.uploads.slice(0, 100);
     saveDeploy(s);
   });
