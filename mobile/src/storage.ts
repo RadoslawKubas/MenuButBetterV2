@@ -132,7 +132,9 @@ export interface CostPrefs {
 }
 
 export const DEFAULT_COST_PREFS: CostPrefs = {
-  autoDescriptions: true,
+  // Długie opisy „więcej info" domyślnie NA ŻĄDANIE (klik), nie z góry — przy dużym menu to główny,
+  // odraczalny koszt; karta i tak ma krótki opis (enrich) + zdjęcie. Można włączyć w ustawieniach.
+  autoDescriptions: false,
   autoPhotos: true,
   autoVenuePhotos: true,
   autoLimit: 0,
