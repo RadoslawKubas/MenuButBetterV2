@@ -56,6 +56,63 @@ const OTHER_PRICES_DEFAULT: { key: string; label: string; unit: string; value: n
   { key: "storage", label: "Cache storage (Postgres)", unit: "$/GB-mies.", value: 0.25, source: PRICE_SOURCES.egress! },
 ];
 
+// Katalog ZEWNĘTRZNYCH SERWISÓW, z których korzysta apka (nie tylko API modeli — też infra, build, dane).
+// `price` = orientacyjnie (wg wiedzy; zweryfikuj klikając „cennik ↗" lub „zaciągnij"). dashboard = panel/logowanie.
+const SERVICES: { key: string; name: string; icon: string; category: string; desc: string; dashboard: string; pricing: string; price: string }[] = [
+  // ── AI (modele) ──
+  { key: "anthropic", name: "Anthropic (Claude)", icon: "🧠", category: "AI (modele)",
+    desc: "Rdzeń aplikacji: vision — odczyt struktury menu ze zdjęć (Faza A) + enrich — tłumaczenia/opisy dań (Faza B). Modele Sonnet / Opus / Haiku.",
+    dashboard: "https://console.anthropic.com", pricing: PRICE_SOURCES.claude!,
+    price: "za MTok (in/out): Sonnet $3/$15 · Opus $5/$25 · Haiku $1/$5" },
+  { key: "openai", name: "OpenAI (GPT-5)", icon: "🤖", category: "AI (modele)",
+    desc: "Alternatywne modele do skanu/enrichu (porównania jakości i kosztu). GPT-5 / mini / nano.",
+    dashboard: "https://platform.openai.com", pricing: PRICE_SOURCES.openai!,
+    price: "za MTok (in/out): GPT-5 $1.25/$10 · mini $0.25/$2 · nano $0.05/$0.40" },
+  { key: "gemini", name: "Google Gemini", icon: "✨", category: "AI (modele)",
+    desc: "Tanie alternatywne modele (Gemini 2.5 Flash / Pro) do skanu i enrichu.",
+    dashboard: "https://aistudio.google.com/apikey", pricing: PRICE_SOURCES.google!,
+    price: "za MTok (in/out): Flash-Lite $0.10/$0.40 · Flash $0.30/$2.50 · Pro $1.25/$10" },
+  // ── API danych ──
+  { key: "google_places", name: "Google Places API", icon: "📍", category: "API danych",
+    desc: "Namierzanie lokalu po nazwie/GPS: adres, oceny, godziny + zdjęcia „z lokalu” z Google.",
+    dashboard: "https://console.cloud.google.com/google/maps-apis", pricing: PRICE_SOURCES.google_places!,
+    price: "~$17–32 / 1000 zapytań (zależnie od pól). Darmowy kredyt $200/mc jest wycofywany." },
+  { key: "google_cse", name: "Google Custom Search (CSE)", icon: "🔎", category: "API danych",
+    desc: "Wyszukiwanie zdjęć dań w sieci (fallback, gdy Serper nic nie zwróci).",
+    dashboard: "https://programmablesearchengine.google.com/controlpanel/all", pricing: "https://developers.google.com/custom-search/v1/overview#pricing",
+    price: "100 zapytań/dzień gratis, potem $5 / 1000 (limit 10k/dzień)" },
+  { key: "serper", name: "Serper.dev", icon: "🖼️", category: "API danych",
+    desc: "Główne tanie źródło zdjęć POGLĄDOWYCH dań (Google Images przez SERP).",
+    dashboard: "https://serper.dev/dashboard", pricing: PRICE_SOURCES.serper!,
+    price: "~$0.30–1 / 1000 zapytań (zależnie od planu); 2500 zapytań gratis na start" },
+  { key: "serpapi", name: "SerpApi", icon: "🔁", category: "API danych",
+    desc: "Alternatywne wyszukiwanie SERP — zapas dla Serpera.",
+    dashboard: "https://serpapi.com/dashboard", pricing: PRICE_SOURCES.serpapi!,
+    price: "od $75/mc (5k zapytań); 100 zapytań/mc gratis" },
+  { key: "tripadvisor", name: "TripAdvisor Content API", icon: "🦉", category: "API danych",
+    desc: "Weryfikacja lokalu + zdjęcia „z lokalu” (pewne ID + czyste portale) w torze zdjęć.",
+    dashboard: "https://www.tripadvisor.com/developers", pricing: PRICE_SOURCES.tripadvisor!,
+    price: "5000 zapytań/mc gratis, potem ~$0.001–0.01 / zapytanie" },
+  { key: "wikimedia", name: "Wikimedia Commons", icon: "📚", category: "API danych",
+    desc: "Darmowe zdjęcia dań (CC / public domain) — bezkosztowe źródło poglądowe.",
+    dashboard: "https://commons.wikimedia.org", pricing: "https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia",
+    price: "Darmowe (licencje CC/PD; wymaga atrybucji)" },
+  // ── Hosting / infra ──
+  { key: "railway", name: "Railway", icon: "🚂", category: "Hosting / infra",
+    desc: "Hosting serwera (Hono/Node) + baza Postgres (cache treści, logi kosztów, sample online).",
+    dashboard: "https://railway.app/dashboard", pricing: PRICE_SOURCES.egress!,
+    price: "Hobby $5/mc (w cenie $5 zużycia), potem pay-as-you-go (CPU/RAM/egress ~$0.10/GB)" },
+  // ── Apple & build ──
+  { key: "apple", name: "Apple Developer Program", icon: "", category: "Apple & build",
+    desc: "Konto deweloperskie: TestFlight, App Store, certyfikaty + provisioning do buildów iOS.",
+    dashboard: "https://developer.apple.com/account", pricing: "https://developer.apple.com/support/compare-memberships/",
+    price: "$99 / rok (konto individual)" },
+  { key: "expo", name: "Expo / EAS", icon: "⚛️", category: "Apple & build",
+    desc: "Build iOS — u nas LOKALNY (eas build --local, bez kredytów chmury) + submit na TestFlight.",
+    dashboard: "https://expo.dev/accounts", pricing: "https://expo.dev/pricing",
+    price: "Build lokalny gratis. Chmura: 30 buildów/mc gratis, potem płatne (Production $99/mc)" },
+];
+
 const PRICES_FILE = join(HERE, "prices-override.json");
 function loadPriceOverrides(): Record<string, { in?: number; out?: number; value?: number }> {
   try {
@@ -1298,6 +1355,45 @@ app.post("/api/prices", async (c) => {
   }
   savePriceOverrides(ov);
   return c.json({ ok: true });
+});
+
+// Katalog zewnętrznych serwisów (nazwa/opis/panel/cennik/cena orientacyjna).
+app.get("/api/services", (c) => c.json({ services: SERVICES }));
+
+// „Zaciągnij aktualny cennik" — serwer (bez CORS) pobiera stronę cennika i wyłuskuje best-effort
+// fragmenty cenowe + tytuł. Strony renderowane w JS mogą nie dać kwot → wtedy zwracamy pusto i UI
+// kieruje do źródła. To PODGLĄD, nie autorytet (zweryfikuj na stronie).
+app.post("/api/service-price", async (c) => {
+  const { url } = await c.req.json<{ url?: string }>().catch(() => ({ url: undefined }));
+  if (!url || !/^https?:\/\//i.test(url)) return c.json({ ok: false, error: "zły url" }, 400);
+  try {
+    const r = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (MenuButBetter-lab price-peek)", accept: "text/html" }, signal: AbortSignal.timeout(12000) });
+    const html = await r.text();
+    const decode = (s: string) => s
+      .replace(/&quot;|&#34;/gi, '"').replace(/&#36;/gi, "$").replace(/&nbsp;|&#160;/gi, " ")
+      .replace(/&amp;|&#38;/gi, "&").replace(/&#x27;|&#39;|&apos;/gi, "'").replace(/&gt;/gi, ">").replace(/&lt;/gi, "<");
+    const title = decode((html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || "")).replace(/\s+/g, " ").trim().slice(0, 140);
+    const text = decode(html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+    // Słowa-klucze cenowe (okres/jednostka) — odsiewają szum (przykłady, ceny produktów ze stron).
+    const KW = /(per|\/|\ba\b|za\b)\s?(mo\b|month|mes|miesi|yr\b|year|rok|user|seat|1[,. ]?0{3}|1\s?[kK]\b|1\s?[mM]\b|million|mtok|token|gb\b|build|credit|request|\breq\b|call|day|dzie|hour)/i;
+    const collect = (requireCtx: boolean) => {
+      const out: string[] = []; const seen = new Set<string>();
+      const rx = /\$\s?\d[\d.,]*\s?[KkMm]?[^$•|\n]{0,34}/g; let m: RegExpExecArray | null;
+      while ((m = rx.exec(text)) && out.length < 12) {
+        const s = m[0].replace(/\s+/g, " ").trim().replace(/[\s,.;:]+$/, "");
+        if (s.length > 2 && (!requireCtx || KW.test(s)) && !seen.has(s)) { seen.add(s); out.push(s.slice(0, 50)); }
+      }
+      return out;
+    };
+    let snippets = collect(true); // najpierw z kontekstem cenowym (czysto)
+    let noisy = false;
+    if (snippets.length === 0) { snippets = collect(false).slice(0, 8); noisy = snippets.length > 0; } // fallback: same kwoty
+    return c.json({ ok: true, status: r.status, title, snippets, noisy });
+  } catch (e) {
+    return c.json({ ok: false, error: String((e as Error).message || e) });
+  }
 });
 
 // --- Zadania: długie eksperymenty w TLE (postęp / pauza / wznowienie / przerwanie) --------

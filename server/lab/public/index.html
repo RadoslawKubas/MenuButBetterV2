@@ -80,6 +80,7 @@
     <button class="tab" id="tabBtn-errors" onclick="switchTab('errors')">🐞 Błędy</button>
     <button class="tab" id="tabBtn-instances" onclick="switchTab('instances')">📱 Instancje</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
+    <button class="tab" id="tabBtn-services" onclick="switchTab('services')">🔌 Serwisy</button>
   </nav>
   <span class="mut small" id="dir"></span>
   <span style="flex:1"></span>
@@ -262,6 +263,17 @@
       <span class="mut small">klik „źródło ↗" → oficjalna strona z cenami; pola edytowalne (ręczna podmiana, zapis lokalny). Te stawki liczą koszty w zakładce Logi.</span>
     </div>
     <div id="pricesBox"></div>
+  </div>
+</div>
+
+<div id="tab-services" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>🔌 Serwisy zewnętrzne — z czego korzysta apka</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      <button onclick="pullAllPrices(this)" style="padding:4px 10px">↻ zaciągnij wszystkie cenniki</button>
+      <span class="mut small">„panel ↗" = logowanie/konsola · „cennik ↗" = oficjalna strona cen · „zaciągnij" = serwer pobiera stronę i wyłuskuje kwoty (podgląd — zweryfikuj w źródle). Ceny obok są orientacyjne.</span>
+    </div>
+    <div id="servicesBox" class="mut">ładuję…</div>
   </div>
 </div>
 
@@ -860,12 +872,13 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','instances','prices'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','instances','prices','services'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
+  else if(name==='services'){ loadServices(); }
   else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); loadAppSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
@@ -1029,6 +1042,50 @@ async function savePrice(key,kind,inV,outV){
   await api('/api/prices',body); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog();
 }
 async function resetPrice(key){ await api('/api/prices',{key,reset:true}); loadPrices(); if(CURRENT_TAB==='logs') loadCostLog(); }
+
+/* ---- Serwisy zewnętrzne (zakładka 🔌 Serwisy) ---- */
+let SERVICES_CACHE=[];
+async function loadServices(){
+  const r=await api('/api/services'); SERVICES_CACHE=r.services||[];
+  const cats=[]; const byCat={};
+  SERVICES_CACHE.forEach(s=>{ if(!byCat[s.category]){byCat[s.category]=[];cats.push(s.category);} byCat[s.category].push(s); });
+  const link=(u,t)=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" style="font-size:12px; font-weight:700; text-decoration:none">${t}</a>`:'';
+  document.getElementById('servicesBox').innerHTML=cats.map(cat=>`
+    <div style="margin-top:12px">
+      <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin-bottom:6px">${esc(cat)}</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:10px">
+        ${byCat[cat].map(s=>`
+          <div class="step" style="display:flex; flex-direction:column; gap:7px">
+            <div style="font-weight:800; font-size:14px">${s.icon||''} ${esc(s.name)}</div>
+            <div class="mut small" style="line-height:1.45; flex:1">${esc(s.desc)}</div>
+            <div><span class="badge" style="background:#2a3550; color:#cfe0ff">💲 ${esc(s.price)}</span></div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:2px">
+              ${link(s.dashboard,'panel ↗')} ${link(s.pricing,'cennik ↗')}
+              <button onclick="pullPrice('${s.key}',this)" style="padding:2px 8px; font-size:11px; margin-left:auto">↻ zaciągnij</button>
+            </div>
+            <div id="svcprice-${s.key}" class="small" style="display:none; margin-top:2px"></div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+async function pullPrice(key,btn){
+  const s=SERVICES_CACHE.find(x=>x.key===key); if(!s) return;
+  const box=document.getElementById('svcprice-'+key); box.style.display=''; box.innerHTML='⏳ pobieram cennik…';
+  if(btn) btn.disabled=true;
+  try{
+    const r=await api('/api/service-price',{url:s.pricing});
+    if(!r.ok){ box.innerHTML=`✗ nie pobrano (${esc(r.error||'błąd')}) — otwórz <a href="${esc(s.pricing)}" target="_blank" rel="noopener">cennik ↗</a>`; }
+    else if(!(r.snippets||[]).length){ box.innerHTML=`ℹ️ strona nie oddała kwot (pewnie ładuje je w JS)${r.title?` · <span class="mut">${esc(r.title)}</span>`:''} — otwórz <a href="${esc(s.pricing)}" target="_blank" rel="noopener">cennik ↗</a>`; }
+    else { box.innerHTML=`<div class="mut" style="font-size:10px; margin-bottom:3px">${r.noisy?'⚠️ kwoty bez kontekstu cenowego (możliwy szum)':'surowy podgląd'}${r.title?` ze strony „${esc(r.title)}”`:''} — zweryfikuj w <a href="${esc(s.pricing)}" target="_blank" rel="noopener">źródle ↗</a>:</div>`+r.snippets.map(x=>`<span class="badge" style="margin:0 4px 4px 0; display:inline-block">${esc(x)}</span>`).join(''); }
+  }catch(e){ box.innerHTML='✗ błąd: '+esc(String(e&&e.message||e)); }
+  if(btn) btn.disabled=false;
+}
+async function pullAllPrices(btn){
+  if(!SERVICES_CACHE.length) await loadServices();
+  btn.disabled=true; const t=btn.textContent; btn.textContent='↻ zaciągam…';
+  await Promise.all(SERVICES_CACHE.map(s=>pullPrice(s.key,null)));
+  btn.textContent='✓ gotowe'; setTimeout(()=>{ btn.textContent=t; btn.disabled=false; }, 1600);
+}
 
 /* ---- Sample online + archiwum (zakładka 📦 Sample) ---- */
 let SRV_SAMPLES=[];
