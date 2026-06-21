@@ -641,7 +641,7 @@ async function runJudge(images: InputImage[], system: string, userText: string, 
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: JUDGE_SCHEMA } },
   };
-  if (deep) (req as Record<string, unknown>).thinking = { type: "enabled", budget_tokens: 4000 };
+  if (deep) (req as unknown as Record<string, unknown>).thinking = { type: "enabled", budget_tokens: 4000 };
   const resp = await anthropic.messages.create(req);
   const text = resp.content.find((b) => b.type === "text");
   return text && text.type === "text" ? JSON.parse(text.text) : null;
