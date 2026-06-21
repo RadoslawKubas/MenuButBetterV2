@@ -1146,8 +1146,11 @@ async function loadDeploy(btn){
   const col={ok:'#1e6b3a',warn:'#8a5a00',danger:'#7a1f1f',blocked:'#7a1f1f'}[r.level];
   const icon={ok:'✅',warn:'⚠️',danger:'🛑',blocked:'❌'}[r.level];
   const msg={ok:'Bezpiecznie',warn:'Ostrożnie — blisko limitu',danger:'STOP — blisko twardego limitu',blocked:'Apple ODRZUCIŁ ostatnią wysyłkę (limit) — poczekaj ~24h'}[r.level];
-  const rejLine = r.lastRejectAt ? `<div class="small" style="margin-top:3px; color:#ff8a80">❌ Ostatnia odmowa Apple: ${fmtAgo(r.lastRejectAt)} (${new Date(r.lastRejectAt).toLocaleString()})${r.rejected24h?` · odrzuconych w 24h: ${r.rejected24h}`:''}</div>` : '';
-  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}; ${r.level==='blocked'||r.level==='danger'?'background:rgba(122,31,31,0.16)':''}"><b>${icon} Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span>${rejLine}<div class="mut small" style="margin-top:3px">Realny limit Apple ~15–16/24h. Suma liczy tylko udane; odrzucone widać w historii niżej. Konto: ${esc(r.appleId||'')}.</div></div>`;
+  // Gdy NAJNOWSZA wysyłka się udała → zielona nota (a odmowy to tylko historia). Gdy ostatnia to odmowa → czerwona.
+  const statusLine = r.latestOk
+    ? `<div class="small" style="margin-top:3px; color:#7fd6a0">✅ Ostatnia wysyłka UDANA: ${fmtAgo(r.latestAt)}${r.rejected24h?` <span class="mut">· wcześniej odrzucono ${r.rejected24h}× (limit) — ale ostatnia przeszła</span>`:''}</div>`
+    : (r.lastRejectAt ? `<div class="small" style="margin-top:3px; color:#ff8a80">❌ Ostatnia odmowa Apple: ${fmtAgo(r.lastRejectAt)} (${new Date(r.lastRejectAt).toLocaleString()})${r.rejected24h?` · odrzuconych w 24h: ${r.rejected24h}`:''}</div>` : '');
+  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}; ${r.level==='blocked'||r.level==='danger'?'background:rgba(122,31,31,0.16)':''}"><b>${icon} Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span>${statusLine}<div class="mut small" style="margin-top:3px">Realny limit Apple ~15–16/24h. Suma liczy tylko udane; odrzucone widać w historii niżej. Konto: ${esc(r.appleId||'')}.</div></div>`;
   renderDeployJob(r.job);
   const busy=!!(r.job&&r.job.running);
   document.getElementById('deployBuilds').innerHTML = (r.builds||[]).length ? r.builds.map(b=>`

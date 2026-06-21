@@ -1660,16 +1660,21 @@ app.get("/api/deploy/state", (c) => {
   const s = loadDeploy();
   const used = uploads24h(s);
   const cut = Date.now() - 24 * 3600_000;
-  // Apple REALNIE odrzucił ostatnio (limit) → twardy „X", ważniejszy niż sam licznik.
-  const appleBlocked = s.uploads.some((u) => !u.ok && u.ts >= cut && /limit/i.test(u.error || ""));
+  // Lista jest od NAJNOWSZYCH. „Blocked" tylko gdy NAJNOWSZA wysyłka to odmowa limitu — jeśli PO odmowie
+  // była UDANA wysyłka, limit już nie blokuje (Apple przyjął). Wcześniej brano „dowolną odmowę w 24h" → banner
+  // straszył mimo późniejszego sukcesu.
+  const latest = s.uploads[0];
+  const latestOk = !!(latest && latest.ok);
+  const appleBlocked = !!(latest && !latest.ok && latest.ts >= cut && /limit/i.test(latest.error || ""));
   const rejected24h = s.uploads.filter((u) => !u.ok && u.ts >= cut).length;
-  const lastReject = s.uploads.find((u) => !u.ok); // najnowsza odmowa/błąd (lista jest od najnowszych)
+  const lastReject = s.uploads.find((u) => !u.ok); // najnowsza odmowa/błąd
   const level = appleBlocked ? "blocked" : used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok";
   return c.json({
     builds: listBuilds(),
     uploads: s.uploads.slice(0, 20),
     used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER, appleBlocked, rejected24h,
     lastRejectAt: lastReject ? lastReject.ts : null,
+    latestOk, latestAt: latest ? latest.ts : null,
     level,
     job: uploadJob,
     appleId: APPLE_ID,
