@@ -197,6 +197,21 @@ interface NearbyParams {
   max?: number;
 }
 
+// KRÓTKI cache wyszukiwań lokalu (Places) — łapie testy/powtórki tego samego lokalu w ciągu paru minut,
+// ale szybko wygasa → w realnym życiu „otwarte/zamknięte"/oceny pozostają świeże. In-memory, cap 300.
+const lookupCache = new Map<string, { data: unknown; ts: number }>();
+const LOOKUP_TTL = 15 * 60_000;
+function lookupGet<T>(k: string): T | undefined {
+  const hit = lookupCache.get(k);
+  if (hit && Date.now() - hit.ts < LOOKUP_TTL) return hit.data as T;
+  if (hit) lookupCache.delete(k);
+  return undefined;
+}
+function lookupSet(k: string, data: unknown): void {
+  lookupCache.set(k, { data, ts: Date.now() });
+  if (lookupCache.size > 300) { const o = lookupCache.keys().next().value; if (o) lookupCache.delete(o); }
+}
+
 /**
  * FALLBACK bez nazwy: szuka restauracji W POBLIŻU (po GPS). NIE zawęża sztywno do typu
  * kuchni (Google klasyfikuje wąsko i gubiłby pasujące lokale) — pobiera wszystkie lokale
@@ -206,6 +221,10 @@ interface NearbyParams {
 export async function findRestaurantNearby(params: NearbyParams): Promise<RestaurantInfo[]> {
   const key = KEY();
   if (!key) throw new Error("Brak GOOGLE_MAPS_KEY w środowisku.");
+
+  const lck = `nearby:${params.lat.toFixed(4)},${params.lng.toFixed(4)}:${params.radius ?? 800}:${params.cuisine ?? ""}:${params.lang ?? "pl"}`;
+  const cached = lookupGet<RestaurantInfo[]>(lck);
+  if (cached) return cached;
 
   const body: Record<string, unknown> = {
     languageCode: params.lang ?? "pl",
@@ -246,13 +265,19 @@ export async function findRestaurantNearby(params: NearbyParams): Promise<Restau
     places = [...places.filter(isRel), ...places.filter((p) => !isRel(p))];
   }
 
-  return places.map((p) => ({ ...toInfo(p), guessedByLocation: true }));
+  const out = places.map((p) => ({ ...toInfo(p), guessedByLocation: true }));
+  lookupSet(lck, out);
+  return out;
 }
 
 /** Znajduje restaurację. Zwraca null, gdy nic nie pasuje. */
 export async function findRestaurant(params: FindParams): Promise<RestaurantInfo | null> {
   const key = KEY();
   if (!key) throw new Error("Brak GOOGLE_MAPS_KEY w środowisku.");
+
+  const lck = `find:${params.name}:${params.address ?? ""}:${params.lat?.toFixed(4) ?? ""},${params.lng?.toFixed(4) ?? ""}:${params.lang ?? "pl"}`;
+  const cached = lookupGet<RestaurantInfo>(lck);
+  if (cached) return cached;
 
   const hasGeo = params.lat != null && params.lng != null;
   const textQuery = [params.name, "restauracja", params.address].filter(Boolean).join(" ");
@@ -302,6 +327,7 @@ export async function findRestaurant(params: FindParams): Promise<RestaurantInfo
   // Places zwraca „najbliższy strzał" nawet przy słabym dopasowaniu nazwy — oznacz, czy nazwa
   // faktycznie pasuje, żeby Tier 0 wiedział, czy może ufać puli zdjęć jako „z tego lokalu".
   info.nameVerified = nameMatches(params.name, info.name);
+  lookupSet(lck, info);
   return info;
 }
 
