@@ -716,9 +716,11 @@ app.post("/dish-photos", async (c) => {
         cached: !!debug?.fromCache,
         // SUROWE zwroty API per provider (przed weryfikacją) — same linki, do podglądu.
         searched: (debug?.searched ?? []).map((s) => ({ provider: s.provider, urls: s.urls.slice(0, 12) })),
-        cands: (debug?.steps ?? []).flatMap((st) =>
-          (st.candidates ?? []).map((c) => ({ u: c.url, s: c.score != null ? +c.score.toFixed(2) : null, p: !!c.passed, fv: !!c.fromVenue, tier: st.tier })),
-        ).slice(0, 30),
+        // Kandydaci z OCENĄ, werdyktem i flagą `final` (czy trafił do zwróconej listy) — do dopasowania
+        // oceny do surowych zwrotów (które odrzucone i za ile punktów).
+        cands: (() => { const finalUrls = new Set(photos.map((p) => p.url)); return (debug?.steps ?? []).flatMap((st) =>
+          (st.candidates ?? []).map((c) => ({ u: c.url, s: c.score != null ? +c.score.toFixed(2) : null, p: !!c.passed, fv: !!c.fromVenue, fin: finalUrls.has(c.url), tier: st.tier })),
+        ).slice(0, 30); })(),
       },
     });
     return c.json({ photos, usage, debug });
