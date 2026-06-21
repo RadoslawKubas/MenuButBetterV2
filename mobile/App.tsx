@@ -78,6 +78,7 @@ import {
   type ScanCapture,
 } from "./src/captures";
 import { MenuView } from "./src/MenuView";
+import { VenueSearchScreen } from "./src/VenueSearchScreen";
 import { Lightbox, type LightboxState } from "./src/Lightbox";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
@@ -168,6 +169,18 @@ function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
   }
 }
 
+// Notka z „szybkiego podglądu" (quick peek) pod zdjęciem w Lightboxie — kuchnia/lokal/jakość, jeśli są.
+function peekNote(p?: PeekResult): string | undefined {
+  if (!p) return undefined;
+  const parts: string[] = [];
+  if (p.bad || !p.readable) parts.push("⚠️ słaba jakość — model może nie odczytać");
+  else if (p.partial) parts.push("⚠️ jakość słaba — wynik może być niepełny");
+  if (p.isMenu === false) parts.push("📷 to chyba nie menu");
+  if (p.cuisine?.trim()) parts.push(`🍽 ${p.cuisine.trim()}`);
+  if (p.restaurantName?.trim()) parts.push(`🏠 ${p.restaurantName.trim()}`);
+  return parts.length ? parts.join("  ·  ") : undefined;
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("scan");
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
@@ -184,8 +197,6 @@ export default function App() {
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
   // Czy choć jedna partia skanu wróciła Z CACHE (ten sam plik) — do informacji o oszczędności.
   const [scanFromCache, setScanFromCache] = useState(false);
-  // Aktualnie analizowane zdjęcie (URI miniatury) — przy skanie per-zdjęcie pokazuje, co idzie teraz.
-  const [scanCurrentImage, setScanCurrentImage] = useState<string | null>(null);
   // Nazwa lokalu wykryta NA ŻYWO w trakcie skanu (z szyldu/okładki) — pokazujemy od razu.
   const [scanFoundName, setScanFoundName] = useState<string | null>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
@@ -215,6 +226,7 @@ export default function App() {
   const [peekingUris, setPeekingUris] = useState<string[]>([]); // które zdjęcia są AKTUALNIE analizowane (równolegle)
   const [costPrefs, setCostPrefs] = useState<CostPrefs>(DEFAULT_COST_PREFS); // kontrola auto-kosztu po skanie
   const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
+  const [showVenueSearch, setShowVenueSearch] = useState(false); // osobny ekran „Znajdź lokal" (mapa + szukanie)
   // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
   const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
 
@@ -256,13 +268,10 @@ export default function App() {
   const [renameTarget, setRenameTarget] = useState<SavedScan | null>(null);
   // Trwa dokładanie nowych zdjęć do istniejącego menu.
   const [appending, setAppending] = useState(false);
-  // Krok „Potwierdź lokal" po świeżym skanie (potwierdź / wybierz inny / wyszukaj / pomiń).
-  const [venueConfirmed, setVenueConfirmed] = useState(true);
   // „Przejdź do menu" w trakcie skanu — user czyta gotowe pozycje, reszta dochodzi w tle.
   const [browseEarly, setBrowseEarly] = useState(false);
   // Struktura wszystkich stron złożona i ZAMROŻONA (Faza A gotowa) → pokaż „Otwórz menu" + kartę lokalu.
   const [structureReady, setStructureReady] = useState(false);
-  const [venueQuery, setVenueQuery] = useState("");
 
   useEffect(() => {
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
@@ -292,10 +301,26 @@ export default function App() {
     void savePeekPref(on).catch(() => {});
   }
 
+  // Zdjęcia przygotowane JUŻ przy zamrożeniu kadru (freeze) — żeby peek poszedł od razu, a „✓ Użyj"
+  // tylko je dołożyło (bez ponownego przygotowania i bez DRUGIEGO peeka, który kosztuje).
+  const preparedAtFreeze = useRef<Map<string, PreparedImage>>(new Map());
+
   // Przycisk „Aparat": zawsze nasz własny ekran aparatu (podgląd każdego zdjęcia + dodawanie serii).
   function openCamera() {
     setPeekInfo(null); // świeża sesja podglądu
+    preparedAtFreeze.current.clear(); // świeża sesja → wyczyść cache z poprzedniej
     setShowCamera(true);
+  }
+
+  // Freeze: użytkownik zrobił zdjęcie i czeka na decyzję → OD RAZU przygotuj + peek (nie czekamy na „Użyj").
+  async function onCameraFreeze(uri: string, exif?: Record<string, unknown> | null) {
+    try {
+      const img = await prepareCameraPhoto(uri, exif);
+      preparedAtFreeze.current.set(uri, img);
+      if (peekEnabled) void runPeek(img); // peek na zamrożonym kadrze — wynik dojdzie, gdy user patrzy
+    } catch {
+      // przygotowanie nie wyszło — „Użyj" spróbuje ponownie (fallback w onSerialCapture)
+    }
   }
 
   // „Szybki podgląd": lekka ocena 1 zdjęcia (kuchnia/nazwa) tanim modelem; auto-wstawia nazwę do pola Lokal.
@@ -328,13 +353,16 @@ export default function App() {
     }
   }
 
-  // Tryb seryjny: każde zdjęcie z własnego aparatu → przetwórz i dołóż (do limitu).
+  // „✓ Użyj": dołóż zdjęcie. Zwykle jest już PRZYGOTOWANE i ZPEEKOWANE przy freeze → reużywamy
+  // (bez ponownego przygotowania i bez drugiego peeka). Fallback: gdyby freeze nie zdążył/nie wyszedł.
   async function onSerialCapture(uri: string, exif?: Record<string, unknown> | null) {
     try {
-      const img = await prepareCameraPhoto(uri, exif);
+      const pre = preparedAtFreeze.current.get(uri);
+      preparedAtFreeze.current.delete(uri);
+      const img = pre ?? (await prepareCameraPhoto(uri, exif));
       setReplayLocation(null); // nowe zdjęcie z aparatu → przestajemy wymuszać lokalizację z migawki
       setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, img]));
-      if (peekEnabled) void runPeek(img); // szybki podgląd w tle dla każdego zatrzymanego kadru
+      if (!pre && peekEnabled) void runPeek(img); // peek tylko gdy NIE poszedł przy freeze (bez podwójnego)
     } catch {
       // pojedyncze zdjęcie nie przeszło — ignoruj, można pstryknąć ponownie
     }
@@ -572,6 +600,9 @@ export default function App() {
                 const cached = await cachePhotos(photos);
                 previewAcc.set(job.original, cached);
                 previewStartedRef.current = true;
+                // Mini-karta na ekranie skanu: pokaż miniaturę OD RAZU (w fazie struktury menu jest null,
+                // więc setMenu niżej to no-op — bez tego zdjęcia widać dopiero po „Otwórz menu").
+                setScanItems((prev) => prev.map((x) => (x.original === job.original && !x.photo ? { ...x, photo: cached[0]?.url } : x)));
                 setMenu((prev) => (prev ? attachPhotosByName(prev, job.original, cached) : prev));
                 maybeUpgradeVenue();
               }
@@ -680,7 +711,6 @@ export default function App() {
         setScanProgress({ done: i + 1, total: ordered.length });
       }
       // Skan: serwer streamuje strukturę; onScanItem napędza rolling enrich, onMeta daje nazwę/kuchnię (+#2a).
-      setScanCurrentImage(null);
       setScanPhase({ label: "Czytam menu…" });
       const ran = await scanRun(
         sessionId,
@@ -731,7 +761,9 @@ export default function App() {
       };
       setMenu(withPreviews(structureMenu));
       if (scanId) void updateScanMenu(scanId, structureMenu);
-      setStructureReady(true); // struktura kompletna → ekran skanu pokaże „Otwórz menu" + kartę lokalu
+      setStructureReady(true); // struktura kompletna i zamrożona
+      setBrowseEarly(true); // AUTO: skoro można już przejść do listy, przechodzimy — bez przycisku; enrich
+      //                       (tłumaczenia/opisy/zdjęcia) dochodzi w miejscu już w widoku menu.
       structureFrozenRef.current = true; // #2a: od teraz wolno robić upgrade ★ (struktura niezmienna)
       structureMenuRef.current = structureMenu;
       scanIdRef.current = scanId!;
@@ -761,8 +793,6 @@ export default function App() {
         current: freshVenueRef.current,
         candidates: [],
       });
-      setVenueConfirmed(false);
-      setVenueQuery("");
       if (freshVenueRef.current) {
         // wczesny lookup już znalazł lokal → domknij (zapis; ★ przez maybeUpgradeVenue gdy ruszą poglądowe)
         void finalizeVenue(structureMenu, scanId!, freshVenueRef.current);
@@ -841,7 +871,6 @@ export default function App() {
       setStatus("error");
       setScanProgress(null);
       setScanPhase(null);
-      setScanCurrentImage(null);
       setScanItems([]);
     }
   }
@@ -942,10 +971,9 @@ export default function App() {
     setFreshRestaurant(null);
     setFreshScanId(null);
     setRestaurantCtx(null);
-    setVenueConfirmed(true);
     setBrowseEarly(false);
     setStructureReady(false);
-    setVenueQuery("");
+    setShowVenueSearch(false);
     setPeekByUri({});
     setPeekInfo(null);
     setPeekingUris([]);
@@ -1093,21 +1121,6 @@ export default function App() {
     );
   }
 
-  // Ręczne wyszukanie lokalu z wpisanego tekstu (nazwa, ewentualnie + miasto) — działa też
-  // BEZ GPS. Wpisaną frazę traktujemy jak nazwę do wyszukania (lokalizacja jako bias, gdy jest).
-  function searchVenueText(query: string) {
-    if (!restaurantCtx) return;
-    const q = query.trim();
-    if (!q) return;
-    void lookupRestaurant(
-      { ...restaurantCtx.menu, restaurant_name: q },
-      restaurantCtx.location,
-      restaurantCtx.scanId,
-      restaurantCtx.lang,
-      restaurantCtx.apply,
-      { applyMenu: restaurantCtx.applyMenu },
-    );
-  }
 
   // Szukanie lokali w pobliżu (GPS + kuchnia). `autoPick` = od razu pokaż najbliższy
   // (gdy nie ma jeszcze dopasowania); inaczej tylko podaj listę kandydatów do wyboru.
@@ -2249,10 +2262,21 @@ export default function App() {
                       <Text style={styles.scanningSub}>Im więcej stron, tym dłużej — zwykle do minuty.</Text>
                     </>
                   )}
-                  {scanCurrentImage ? (
-                    <View style={styles.scanCurrentWrap}>
-                      <Image source={{ uri: scanCurrentImage }} style={styles.scanCurrentImg} />
-                      <Text style={styles.scanningSub}>Analizuję to zdjęcie…</Text>
+                  {images.length > 0 ? (
+                    // Wszystkie strony idą do analizy RÓWNOLEGLE — pokaż je jako scrollowaną listę miniatur;
+                    // dotknięcie otwiera pełnoekranowy podgląd (można poczytać menu, czekając na wynik).
+                    <View style={styles.scanThumbsWrap}>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scanThumbsRow}>
+                        {images.map((im, i) => (
+                          <Pressable
+                            key={im.uri ?? i}
+                            onPress={() => setSourceLb({ photos: images.map((x) => ({ url: x.uri, source: "menu", note: peekNote(peekByUri[x.uri]) })), index: i })}
+                          >
+                            <Image source={{ uri: im.uri }} style={styles.scanThumb} />
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                      <Text style={styles.scanningSub}>Analizuję {images.length} {images.length === 1 ? "zdjęcie" : "zdjęć"} — dotknij, by powiększyć i poczytać.</Text>
                     </View>
                   ) : null}
                   {scanPhase ? (
@@ -2268,21 +2292,14 @@ export default function App() {
                   {scanFoundName && !(freshRestaurant || restaurantLoading) ? (
                     <Text style={styles.scanFoundName}>🏠 Znaleziono lokal: {scanFoundName}</Text>
                   ) : null}
-                  {/* #2a: karta lokalu NAD listą dań — potwierdź/zmień czekając na resztę odczytu (#1/#2). */}
+                  {/* #2a: karta lokalu NAD listą dań — zakładamy, że trafiony; „Znajdź inny" → osobny ekran. */}
                   {freshRestaurant || restaurantLoading ? (
                     <View style={styles.scanReadyBox}>
-                      <Text style={styles.scanReadyVenueHdr}>{venueConfirmed ? "📍 Lokal potwierdzony" : "📍 Lokal — potwierdź lub zmień"}</Text>
+                      <Text style={styles.scanReadyVenueHdr}>📍 Lokal</Text>
                       {renderRestaurant(freshRestaurant)}
-                      {freshRestaurant && !venueConfirmed ? (
-                        <View style={styles.confirmActions}>
-                          <Pressable style={styles.confirmYes} onPress={() => setVenueConfirmed(true)}>
-                            <Text style={styles.confirmYesText}>✓ To ten lokal</Text>
-                          </Pressable>
-                          <Pressable style={styles.confirmSkip} onPress={() => setVenueConfirmed(true)}>
-                            <Text style={styles.confirmSkipText}>Pomiń</Text>
-                          </Pressable>
-                        </View>
-                      ) : null}
+                      <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
+                        <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
+                      </Pressable>
                     </View>
                   ) : null}
                   {scanItems.length > 0 ? (
@@ -2320,25 +2337,6 @@ export default function App() {
                         ))}
                       </ScrollView>
                     </>
-                  ) : null}
-                  {structureReady && menu ? (
-                    // Struktura gotowa (zamrożona) → total dań stały; pasek dopełnia się z enrichem.
-                    (() => {
-                      const total = menu.sections.reduce((n, s) => n + s.items.length, 0);
-                      const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
-                      const pct = total > 0 ? Math.min(1, enriched / total) : 0;
-                      return (
-                        <View style={styles.scanReadyBox}>
-                          <Pressable style={styles.enterMenuBtn} onPress={() => setBrowseEarly(true)}>
-                            <Text style={styles.enterMenuText}>📖 Otwórz menu →</Text>
-                          </Pressable>
-                          <View style={[styles.progressTrack, { marginTop: 10, marginHorizontal: 16, alignSelf: "stretch" }]}>
-                            <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` }]} />
-                          </View>
-                          <Text style={styles.scanReadySub}>Tłumaczę dania {enriched}/{total} — reszta dochodzi w tle.</Text>
-                        </View>
-                      );
-                    })()
                   ) : null}
                 </View>
               ) : null}
@@ -2390,45 +2388,14 @@ export default function App() {
                   {scanFromCache ? (
                     <Text style={styles.cacheNote}>🗄 Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
                   ) : null}
-                  {!venueConfirmed ? (
+                  {/* Lokal: zakładamy, że trafiony (bez potwierdzania). Zły? „Znajdź inny" → osobny ekran
+                      z mapą / GPS / szukaniem po nazwie i mieście. */}
+                  {freshRestaurant || restaurantLoading ? (
                     <View style={styles.confirmBox}>
-                      <Text style={styles.confirmTitle}>📍 Potwierdź lokal</Text>
-                      <Text style={styles.confirmSub}>
-                        Pewny lokal poprawia zdjęcia (★ z lokalu) i opisy dań. Wybierz właściwy,
-                        wyszukaj inny po nazwie/mieście, albo pomiń — menu i tak jest zapisane.
-                      </Text>
                       {renderRestaurant(freshRestaurant)}
-                      <View style={styles.venueSearchRow}>
-                        <TextInput
-                          value={venueQuery}
-                          onChangeText={setVenueQuery}
-                          placeholder="Szukaj lokalu: nazwa, miasto…"
-                          placeholderTextColor={colors.muted}
-                          style={styles.venueSearchInput}
-                          returnKeyType="search"
-                          onSubmitEditing={() => searchVenueText(venueQuery)}
-                        />
-                        <Pressable
-                          style={styles.venueSearchBtn}
-                          onPress={() => searchVenueText(venueQuery)}
-                        >
-                          <Text style={styles.venueSearchBtnText}>🔎</Text>
-                        </Pressable>
-                      </View>
-                      <View style={styles.confirmActions}>
-                        <Pressable
-                          style={[styles.confirmYes, !freshRestaurant && styles.disabled]}
-                          disabled={!freshRestaurant}
-                          onPress={() => setVenueConfirmed(true)}
-                        >
-                          <Text style={styles.confirmYesText}>
-                            {freshRestaurant ? "✓ Tak, to ten lokal" : "Najpierw wybierz lokal"}
-                          </Text>
-                        </Pressable>
-                        <Pressable style={styles.confirmSkip} onPress={() => setVenueConfirmed(true)}>
-                          <Text style={styles.confirmSkipText}>Pomiń</Text>
-                        </Pressable>
-                      </View>
+                      <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
+                        <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
+                      </Pressable>
                     </View>
                   ) : (
                     renderRestaurant(freshRestaurant)
@@ -2465,6 +2432,7 @@ export default function App() {
           visible={showCamera}
           count={images.length}
           onCapture={onSerialCapture}
+          onFreeze={onCameraFreeze}
           onClose={() => setShowCamera(false)}
           peekEnabled={peekEnabled}
           onTogglePeek={togglePeek}
@@ -2485,6 +2453,17 @@ export default function App() {
           onCancel={() => setRenameTarget(null)}
           onSave={doRename}
         />
+        {showVenueSearch ? (
+          <View style={StyleSheet.absoluteFill}>
+            <VenueSearchScreen
+              initialLocation={restaurantCtx?.location ?? freshRestaurant?.location ?? null}
+              cuisine={menu?.cuisine ?? restaurantCtx?.menu.cuisine}
+              targetLang={targetLang}
+              onClose={() => setShowVenueSearch(false)}
+              onPick={(r) => { void pickRestaurant(r); setShowVenueSearch(false); }}
+            />
+          </View>
+        ) : null}
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -2645,39 +2624,9 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.accent,
   },
-  confirmTitle: { fontSize: 16, fontWeight: "800", color: colors.accent, marginBottom: 4 },
-  confirmSub: { fontSize: 13, color: colors.muted, marginBottom: 12, lineHeight: 18 },
   cacheNote: { fontSize: 12, color: colors.muted, marginBottom: 12, fontStyle: "italic" },
-  venueSearchRow: { flexDirection: "row", gap: 8, marginTop: 4, marginBottom: 12 },
-  venueSearchInput: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.badgeBg,
-  },
-  venueSearchBtn: {
-    paddingHorizontal: 16,
-    justifyContent: "center",
-    backgroundColor: colors.badgeBg,
-    borderRadius: 10,
-  },
-  venueSearchBtnText: { color: colors.accent, fontWeight: "700", fontSize: 16 },
-  confirmActions: { flexDirection: "row", gap: 10 },
-  confirmYes: { flex: 1, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
-  confirmYesText: { color: colors.buttonText, fontWeight: "800", fontSize: 15 },
-  confirmSkip: {
-    paddingHorizontal: 18,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: colors.badgeBg,
-    borderRadius: 10,
-  },
-  confirmSkipText: { color: colors.muted, fontWeight: "700", fontSize: 15 },
+  wrongVenueBtn: { marginTop: 10, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 9, backgroundColor: colors.badgeBg },
+  wrongVenueText: { color: colors.accent, fontWeight: "800", fontSize: 13 },
   lookupRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
   searchNearbyBtn: {
     flex: 1,
@@ -2691,11 +2640,8 @@ const styles = StyleSheet.create({
   inlineError: { color: colors.error, fontSize: 14, textAlign: "center", marginTop: 4 },
   savedRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
   savedNote: { color: colors.accent, fontWeight: "700", fontSize: 15 },
-  enterMenuBtn: { marginTop: 18, marginHorizontal: 16, alignSelf: "stretch", backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 16 },
-  enterMenuText: { color: "#fff", fontWeight: "800", fontSize: 15, textAlign: "center" },
   scanReadyBox: { alignSelf: "stretch", marginTop: 16 },
   scanReadyVenueHdr: { fontSize: 13, fontWeight: "800", color: colors.muted, marginHorizontal: 16, marginBottom: 8 },
-  scanReadySub: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: 8, marginHorizontal: 16 },
   scanBanner: { flexDirection: "row", alignItems: "center", backgroundColor: colors.badgeBg, borderRadius: 12, padding: 12, marginBottom: 16 },
   scanBannerTitle: { fontSize: 14, fontWeight: "800", color: colors.accent },
   scanBannerSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
@@ -2717,8 +2663,9 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", paddingVertical: 48 },
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
-  scanCurrentWrap: { alignItems: "center", marginTop: 14 },
-  scanCurrentImg: { width: 120, height: 150, borderRadius: 10, backgroundColor: colors.badgeBg, borderWidth: 1, borderColor: colors.accent },
+  scanThumbsWrap: { alignItems: "center", marginTop: 14, alignSelf: "stretch" },
+  scanThumbsRow: { paddingHorizontal: 16, gap: 8 },
+  scanThumb: { width: 84, height: 110, borderRadius: 10, backgroundColor: colors.badgeBg, borderWidth: 1, borderColor: colors.accent },
   scanPhase: { fontSize: 14, fontWeight: "600", color: colors.accent, marginTop: 12, textAlign: "center" },
   scanFoundName: { marginTop: 12, fontSize: 14, fontWeight: "800", color: colors.accent, alignSelf: "stretch", marginHorizontal: 16, textAlign: "center" },
   scanItemsHdr: { marginTop: 14, fontSize: 13, fontWeight: "700", color: colors.muted, alignSelf: "stretch", marginHorizontal: 16 },

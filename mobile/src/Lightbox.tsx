@@ -22,6 +22,8 @@ export interface LightboxPhoto {
   fromVenue?: boolean;
   fromVenueReason?: string;
   attribution?: string;
+  /** Dodatkowa notka pod zdjęciem (np. szybki podgląd „quick peek": kuchnia/lokal/jakość). */
+  note?: string;
 }
 
 export interface LightboxState {
@@ -137,6 +139,7 @@ export function Lightbox({
 
         {/* Skąd jest aktualnie oglądane zdjęcie. */}
         <View style={styles.infoBar} pointerEvents="none">
+          {cur.note ? <Text style={styles.peekNote} numberOfLines={2}>{cur.note}</Text> : null}
           {cur.fromVenue ? <Text style={styles.venueTag}>★ z tego lokalu</Text> : null}
           <View style={styles.sourceRow}>
             <View style={[styles.sourceDot, { backgroundColor: meta.color }]} />
@@ -169,6 +172,7 @@ const styles = StyleSheet.create({
   close: { position: "absolute", top: 52, right: 24 },
   closeText: { color: "#fff", fontSize: 26, fontWeight: "700" },
   infoBar: { position: "absolute", bottom: 36, alignSelf: "center", alignItems: "center", paddingHorizontal: 24 },
+  peekNote: { color: "#fff", fontSize: 13, fontWeight: "700", marginBottom: 8, maxWidth: 320, textAlign: "center" },
   venueTag: { color: "#f1c40f", fontSize: 13, fontWeight: "800", marginBottom: 6 },
   sourceRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   sourceDot: { width: 9, height: 9, borderRadius: 5 },

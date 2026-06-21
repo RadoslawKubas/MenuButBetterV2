@@ -38,6 +38,7 @@ export function CameraCapture({
   visible,
   count,
   onCapture,
+  onFreeze,
   onClose,
   peekEnabled,
   onTogglePeek,
@@ -49,6 +50,7 @@ export function CameraCapture({
   visible: boolean;
   count: number;
   onCapture: (uri: string, exif?: Record<string, unknown> | null) => Promise<void>;
+  onFreeze?: (uri: string, exif?: Record<string, unknown> | null) => void;
   onClose: () => void;
   peekEnabled: boolean;
   onTogglePeek: (on: boolean) => void;
@@ -176,7 +178,11 @@ export function CameraCapture({
     setBusy(true);
     try {
       const photo = await ref.current?.takePictureAsync({ quality: 1, exif: true });
-      if (photo?.uri) setPending({ uri: photo.uri, exif: (photo.exif ?? null) as Record<string, unknown> | null });
+      if (photo?.uri) {
+        const exif = (photo.exif ?? null) as Record<string, unknown> | null;
+        setPending({ uri: photo.uri, exif });
+        onFreeze?.(photo.uri, exif); // peek OD RAZU na zamrożonym kadrze (nie czekamy na „✓ Użyj")
+      }
     } catch {
       // nieudane zdjęcie — można pstryknąć ponownie
     } finally {
