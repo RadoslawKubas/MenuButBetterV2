@@ -1228,20 +1228,6 @@ app.get("/api/cost-log", async (c) => {
   const egress = otherRate("egress");
   // REALNE użycie z PRODUKCJI (skany z apki) — events: op, model, tokeny, koszt, data.cached, install_id
   // → CostEntry. Łączymy z lokalnymi sim-scanami labu. Token chroni globalnie (prodFetch go dokłada).
-  // REAL APP = realne urządzenia testera. Ma JEDEN telefon: iPhone 17 Pro (różne install_id = osobne
-  // instalacje/buildy tego samego telefonu, np. przejście na bundle .lab). Reszta (iPhone 14 Pro,
-  // test-install…) = fake/eksperyment. Stąd ratunek historii: app = zdarzenie z realnego urządzenia.
-  const APP_DEVICE_MODELS = new Set(["iPhone 17 Pro"]);
-  const appInstalls = new Set<string>();
-  try {
-    const ir = await prodFetch("/installs");
-    const installs = ((await ir.json()) as { installs?: Record<string, any>[] }).installs ?? [];
-    for (const i of installs) {
-      const id = (i.installId || i.install_id) as string | undefined;
-      const dev = (i.deviceModel || i.device_model || "") as string;
-      if (id && APP_DEVICE_MODELS.has(dev)) appInstalls.add(id);
-    }
-  } catch { /* brak installs → polegamy na markerze source=app */ }
   let prodEntries: CostEntry[] = [];
   let prodErr: string | null = null;
   try {
@@ -1290,13 +1276,9 @@ app.get("/api/cost-log", async (c) => {
   // ŹRÓDŁO: „app" = realna apka (prod + data.source==="app"). Reszta (lab sim, curl/eksperymenty, prod bez
   // markera) = eksperyment. Domyślnie liczymy TYLKO apkę; eksperymenty za przełącznikiem (mniej ważne).
   const srcParam = c.req.query("source") || "app";
-  // App = marker source==="app" (nowe buildy) LUB zdarzenie z realnego urządzenia (iPhone 17 Pro — ratunek
-  // historii). Lab sim / curl / fake → eksperyment.
-  const isApp = (e: CostEntry) => {
-    if ((e.meta?.data as { source?: string } | undefined)?.source === "app") return true;
-    const inst = e.meta?.installId as string | undefined;
-    return !!(inst && appInstalls.has(inst));
-  };
+  // App = marker source==="app". Nowe buildy wysyłają go (x-client); stare zdarzenia z realnego telefonu
+  // dostają go przez jednorazowy backfill (/admin/backfill-app-source). Reszta = eksperyment.
+  const isApp = (e: CostEntry) => (e.meta?.data as { source?: string } | undefined)?.source === "app";
   const inWindow = [...readCostLog(), ...prodEntries].filter((e) => e.ts >= cutoff);
   const appCount = inWindow.filter(isApp).length, expCount = inWindow.length - appCount;
   const entries = inWindow

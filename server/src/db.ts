@@ -130,6 +130,22 @@ export function logEvent(ev: EventInput): void {
   ).catch((e) => console.error("[db] logEvent:", (e as Error).message));
 }
 
+/** JEDNORAZOWY backfill: oznacz STARE zdarzenia z REALNYCH urządzeń (modele = telefon testera) jako
+ *  data.source="app" — żeby filtr statystyk „app" je łapał bez logiki per-urządzenie. Idempotentne. */
+export async function backfillAppSource(deviceModels: string[]): Promise<{ updated: number; installs: number }> {
+  const p = getPool();
+  if (!p || !ready) return { updated: 0, installs: 0 };
+  const ir = await p.query(`SELECT install_id FROM installs WHERE device_model = ANY($1)`, [deviceModels]);
+  const ids = ir.rows.map((r) => r.install_id).filter(Boolean);
+  if (!ids.length) return { updated: 0, installs: 0 };
+  const r = await p.query(
+    `UPDATE events SET data = COALESCE(data, '{}'::jsonb) || '{"source":"app"}'::jsonb
+     WHERE install_id = ANY($1) AND (data->>'source') IS DISTINCT FROM 'app'`,
+    [ids],
+  );
+  return { updated: r.rowCount ?? 0, installs: ids.length };
+}
+
 export interface Stats {
   enabled: boolean;
   since?: string | null;

@@ -16,7 +16,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource } from "./db.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
@@ -1018,6 +1018,15 @@ app.post("/install/register", async (c) => {
 
 // Lab: lista instalacji ze statystyką (urządzenie, wersja, od kiedy/ostatnia aktywność, skany, koszt, błędy).
 app.get("/installs", async (c) => c.json({ installs: await getInstalls() }));
+
+// JEDNORAZOWY backfill: oznacz stare zdarzenia z REALNYCH urządzeń (telefon testera) jako source=app —
+// żeby filtr statystyk „app" je łapał. Domyślnie iPhone 17 Pro. Idempotentny, chroniony tokenem (auth).
+app.post("/admin/backfill-app-source", async (c) => {
+  const b = await c.req.json<{ deviceModels?: string[] }>().catch(() => ({}) as { deviceModels?: string[] });
+  const models = (b.deviceModels?.length ? b.deviceModels : ["iPhone 17 Pro"]).map((m) => m.trim()).filter(Boolean);
+  const res = await backfillAppSource(models);
+  return c.json({ ok: true, ...res, deviceModels: models });
+});
 
 // Lab: nadaj nazwę instalacji.
 app.post("/install/name", async (c) => {
