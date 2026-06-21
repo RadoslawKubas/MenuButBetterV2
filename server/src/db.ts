@@ -335,9 +335,9 @@ export async function getRecentEvents(limit = 200): Promise<unknown[]> {
   const p = getPool();
   if (!p || !ready) return [];
   const r = await p.query(
-    `SELECT id, created_at, type, op, model, provider, input_tokens, output_tokens, cost_usd, data
+    `SELECT id, created_at, type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id
      FROM events ORDER BY id DESC LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 2000)],
+    [Math.min(Math.max(limit, 1), 3000)],
   );
   return r.rows;
 }
