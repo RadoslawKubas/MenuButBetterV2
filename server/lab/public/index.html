@@ -1041,6 +1041,26 @@ async function loadCacheSize(){
   const r=await api('/api/cache-size');
   document.getElementById('cacheSize').innerHTML=`${r.from==='prod'?'☁ ':'🖥 '}Wpisów: <b>${r.rows||0}</b> · rozmiar: <b>${fmtBytes(r.bytes)}</b>${r.enabled?'':' <span class="mut">(L1 w pamięci — bez Postgresa)</span>'} · koszt przechowywania: <b>${fmtUsd(r.storageCostMonthly)}/mies.</b> <span class="mut">(${r.storageUsdPerGbMonth}$/GB-mies., z cennika)</span>`;
 }
+// Rozbicie klucza cache na czytelne części. Klucz = `typ:wersja:część1|część2|…` (każda część znormalizowana:
+// bez akcentów, lowercase). CAŁA ta linia to dokładny klucz wyszukiwania. ∅ = pusta część (np. brak opisu).
+function labelCacheParts(kind, parts){
+  const L={
+    'item-enrich': parts[0]==='§sect' ? [['marker','§sect (tłum. nazwy SEKCJI)'],['nazwa sekcji',parts[1]],['język',parts[2]],['model',parts[3]]]
+                 : parts[0]==='§note' ? [['marker','§note (tłum. ADNOTACJI)'],['tekst',parts[1]],['język',parts[2]],['model',parts[3]]]
+                 : [['danie',parts[0]],['opis z menu',parts[1]],['kuchnia',parts[2]],['lokalizacja',parts[3]],['język',parts[4]],['model',parts[5]]],
+    'dish-info': [['danie',parts[0]],['opis',parts[1]],['kuchnia',parts[2]],['kraj',parts[3]],['język',parts[4]],['model',parts[5]]],
+    'repr-photos': [['termin (kanoniczna nazwa)',parts[0]],['kuchnia',parts[1]],['weryfikacja',parts[2]],['źródła',parts[3]],['liczba',parts[4]],['zakres',parts[5]]],
+    'vision-url': [['termin',parts[0]],['URL zdjęcia',parts.slice(1).join(':')]],
+  };
+  return L[kind] || parts.map((p,i)=>['część '+(i+1), p]);
+}
+function cacheKeyInfo(key){
+  const i1=key.indexOf(':'), i2=key.indexOf(':',i1+1);
+  if(i1<0||i2<0) return '';
+  const kind=key.slice(0,i1), ver=key.slice(i1+1,i2), parts=key.slice(i2+1).split('|');
+  const chips=labelCacheParts(kind,parts).map(([l,v])=>`<span style="display:inline-block; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 5px; margin:1px 3px 1px 0; font-size:10px"><span class="mut">${esc(l)}:</span> ${v?esc(v):'<span class="mut">∅</span>'}</span>`).join('');
+  return `<div style="margin-top:3px"><span class="mut" style="font-size:10px">🔑 typ <b>${esc(kind)}</b> · wersja <b>${esc(ver)}</b> · części (rozdzielone „|"):</span><div style="margin-top:2px">${chips}</div></div>`;
+}
 async function loadCacheBrowse(){
   const q=(document.getElementById('cacheQ').value||'').trim();
   const lim=+(document.getElementById('cacheLimit')?.value||500);
@@ -1048,10 +1068,12 @@ async function loadCacheBrowse(){
   CACHE_ROWS=r.rows||[];
   const box=document.getElementById('cacheBrowse');
   const capHit=CACHE_ROWS.length>=lim?` · <span style="color:#e0a030">osiągnięto limit ${lim} — zwiększ „pokaż", by zobaczyć więcej</span>`:'';
-  box.innerHTML = CACHE_ROWS.length ? `<div class="mut small" style="margin-bottom:4px">wyświetlono ${CACHE_ROWS.length} wpisów · ${r.from==='prod'?'☁ produkcja':'🖥 lokalny labu'} (${r.source==='pg'?'Postgres':'pamięć L1'})${capHit}</div>`+CACHE_ROWS.map((row,i)=>`
+  const legend=`<div class="mut small" style="margin-bottom:6px; line-height:1.4">wyświetlono ${CACHE_ROWS.length} wpisów · ${r.from==='prod'?'☁ produkcja':'🖥 lokalny labu'} (${r.source==='pg'?'Postgres':'pamięć L1'})${capHit}<br>💡 <b>Cała linia pod nazwą to DOKŁADNY klucz</b>, po którym cache wyszukuje. Format: <code>typ:wersja:część1|część2|…</code> (części rozdzielone „|", każda znormalizowana — bez akcentów, małe litery). <b>∅</b> = pusta część (np. danie bez opisu). Pod kluczem rozbicie na nazwane części.</div>`;
+  box.innerHTML = CACHE_ROWS.length ? legend+CACHE_ROWS.map((row,i)=>`
     <div class="cand" onclick="toggleCacheRow(${i})">
       <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(CACHE_LABELS[row.kind]||row.kind)}</b> <span class="mut small">trafień ${row.hits}</span></div>
       <div class="mut" style="font-size:11px; word-break:break-all">${esc(row.key)}</div>
+      ${cacheKeyInfo(row.key)}
       ${row.expiresAt?`<div class="mut small">wygasa ${esc(String(row.expiresAt).replace('T',' '))}</div>`:''}
       <div id="cacheR-${i}"></div>
     </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak wpisów (pasujących do filtra)</div>';
