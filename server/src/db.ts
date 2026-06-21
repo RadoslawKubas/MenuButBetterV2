@@ -120,6 +120,37 @@ export async function savePriceOverrides(o: PriceOverrides): Promise<void> {
   }
 }
 
+// Przypisanie SIEROT po CZASIE: log bez install_id (np. google_places z proxy /place-photo, ładowanego
+// przez <Image> bez nagłówków) dostaje install_id + sessionId NAJBLIŻSZEGO w czasie loga, który je MA
+// (zdjęcia lokalu ładują się tuż obok requestów skanu tej samej instancji). maxGapSec = bezpieczna granica.
+export async function attributeOrphansByTime(maxGapSec = 900): Promise<{ updated: number; remaining: number }> {
+  const p = getPool();
+  if (!p || !ready) return { updated: 0, remaining: 0 };
+  const r = await p.query(
+    `WITH near AS (
+       SELECT o.id,
+         (SELECT n.install_id FROM events n
+          WHERE n.install_id IS NOT NULL
+            AND abs(extract(epoch FROM (n.created_at - o.created_at))) <= $1
+          ORDER BY abs(extract(epoch FROM (n.created_at - o.created_at))) LIMIT 1) AS iid,
+         (SELECT n.data->>'sessionId' FROM events n
+          WHERE n.install_id IS NOT NULL
+            AND abs(extract(epoch FROM (n.created_at - o.created_at))) <= $1
+          ORDER BY abs(extract(epoch FROM (n.created_at - o.created_at))) LIMIT 1) AS sid
+       FROM events o WHERE o.install_id IS NULL
+     )
+     UPDATE events e
+     SET install_id = near.iid,
+         data = CASE WHEN near.sid IS NOT NULL
+                     THEN COALESCE(e.data, '{}'::jsonb) || jsonb_build_object('sessionId', near.sid)
+                     ELSE e.data END
+     FROM near WHERE e.id = near.id AND near.iid IS NOT NULL`,
+    [maxGapSec],
+  );
+  const rem = await p.query(`SELECT count(*)::int AS n FROM events WHERE install_id IS NULL`);
+  return { updated: r.rowCount ?? 0, remaining: rem.rows[0]?.n ?? 0 };
+}
+
 /** Zamyka pulę Postgresa (graceful shutdown). Best‑effort. */
 export async function closeDb(): Promise<void> {
   if (pool) {

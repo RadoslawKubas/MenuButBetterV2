@@ -16,7 +16,7 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, backfillAppSource, getSessionCost, readPriceOverrides, savePriceOverrides, attributeOrphansByTime } from "./db.ts";
 import { apiCallCost, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -1051,6 +1051,14 @@ app.post("/admin/backfill-app-source", async (c) => {
   const models = b.deviceModels?.length ? b.deviceModels.map((m) => m.trim()).filter(Boolean) : (installIds.length ? [] : ["iPhone 17 Pro"]);
   const res = await backfillAppSource({ deviceModels: models, installIds });
   return c.json({ ok: true, ...res, deviceModels: models, installIds });
+});
+
+// Przypisanie SIEROT po CZASIE: logi bez install_id (proxy /place-photo) dostają instancję/sesję
+// najbliższego w czasie loga, który je ma. maxGapSec opcjonalny (domyślnie 900s = 15 min).
+app.post("/admin/attribute-orphans", async (c) => {
+  const b = await c.req.json<{ maxGapSec?: number }>().catch(() => ({}) as { maxGapSec?: number });
+  const res = await attributeOrphansByTime(b.maxGapSec && b.maxGapSec > 0 ? b.maxGapSec : 900);
+  return c.json({ ok: true, ...res });
 });
 
 // WSPÓLNY CENNIK: lab edytuje override'y cen i WGRYWA je tutaj (cały obiekt). Serwer trzyma je w DB
