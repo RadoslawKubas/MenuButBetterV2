@@ -7,7 +7,9 @@ import type { GeoPoint } from "./types";
 
 export interface PreparedImage {
   uri: string; // skompresowany plik — do podglądu miniatury
-  base64: string;
+  base64: string; // wersja DO MODELU (pomniejszona) — tani payload
+  /** Wersja HI-RES (plik) — zapisywana do SAMPLA, do późniejszego strojenia rozmiarów/jakości. */
+  hiResUri?: string;
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF zdjęcia, jeśli były zaszyte. */
   exifLocation?: GeoPoint;
@@ -26,10 +28,25 @@ function exifToTime(exif: Record<string, unknown> | undefined | null): number | 
   return Number.isFinite(t) ? t : undefined;
 }
 
-// Wyższa rozdzielczość/jakość = lepszy OCR gęstych/małych czcionek i cen w menu.
-// 2000px @ 0.72 to dobry kompromis trafność↔rozmiar (zdjęcia z telefonu i tak są większe).
-const MAX_WIDTH = 2000;
-const JPEG_QUALITY = 0.72;
+// DWIE wersje zdjęcia:
+//  • DO MODELU — pomniejszone (tani/szybki payload, dobry OCR): 2000px @ 0.72.
+//  • DO SAMPLA — hi-res (do późniejszego strojenia rozmiarów/jakości w LAB): 3000px @ 0.85.
+// Strojone osobno; zdjęcia z telefonu i tak są większe (downscale, nie upscale dla typowych).
+const MODEL_WIDTH = 2000;
+const MODEL_QUALITY = 0.72;
+const HIRES_WIDTH = 3000;
+const HIRES_QUALITY = 0.85;
+
+/** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU → base64. */
+export async function downscaleForModel(uri: string): Promise<string | null> {
+  try {
+    const ref = await ImageManipulator.manipulate(uri).resize({ width: MODEL_WIDTH }).renderAsync();
+    const r = await ref.saveAsync({ compress: MODEL_QUALITY, format: SaveFormat.JPEG, base64: true });
+    return r.base64 ?? null;
+  } catch {
+    return null;
+  }
+}
 // Górny, rozsądny limit liczby zdjęć na jeden skan (duże menu robimy partiami).
 export const MAX_IMAGES = 40;
 // Skan PER ZDJĘCIE (1): lepszy progres, recovery (powtarzamy tylko padłą fotkę) i live preview
@@ -53,12 +70,22 @@ function exifToGeo(exif: Record<string, unknown> | undefined | null): GeoPoint |
 }
 
 async function compress(uri: string, exif?: Record<string, unknown> | null): Promise<PreparedImage> {
-  const ref = await ImageManipulator.manipulate(uri).resize({ width: MAX_WIDTH }).renderAsync();
-  const result = await ref.saveAsync({ compress: JPEG_QUALITY, format: SaveFormat.JPEG, base64: true });
-  if (!result.base64) throw new Error("Nie udało się przygotować zdjęcia.");
+  // DO MODELU — pomniejszone + base64.
+  const modelRef = await ImageManipulator.manipulate(uri).resize({ width: MODEL_WIDTH }).renderAsync();
+  const model = await modelRef.saveAsync({ compress: MODEL_QUALITY, format: SaveFormat.JPEG, base64: true });
+  if (!model.base64) throw new Error("Nie udało się przygotować zdjęcia.");
+  // DO SAMPLA — hi-res (tylko plik, bez base64 — nie trzymamy w pamięci).
+  let hiResUri: string | undefined;
+  try {
+    const hiRef = await ImageManipulator.manipulate(uri).resize({ width: HIRES_WIDTH }).renderAsync();
+    hiResUri = (await hiRef.saveAsync({ compress: HIRES_QUALITY, format: SaveFormat.JPEG })).uri;
+  } catch {
+    /* hi-res best-effort — gdy padnie, sampel zapisze wersję modelu (fallback w persistImage) */
+  }
   return {
-    uri: result.uri,
-    base64: result.base64,
+    uri: model.uri,
+    base64: model.base64,
+    hiResUri,
     mediaType: "image/jpeg",
     exifLocation: exifToGeo(exif),
     takenAt: exifToTime(exif),

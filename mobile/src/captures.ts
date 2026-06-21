@@ -9,7 +9,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
-import type { PreparedImage } from "./image";
+import { downscaleForModel, type PreparedImage } from "./image";
 import { getInstallId } from "./api";
 import { listScans, saveScan } from "./storage";
 import { DEFAULT_MODELS, type GeoPoint, type LocationSource, type Menu, type ModelId, type ModelRole, type Usage } from "./types";
@@ -123,10 +123,14 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
   const dest = new File(DIR, name);
   if (dest.exists) dest.delete();
   dest.create();
-  if (img.base64) {
+  if (img.hiResUri) {
+    // SAMPEL = wersja HI-RES (do strojenia rozmiarów/jakości w LAB). Model dostaje osobno pomniejszone;
+    // replay pomniejsza ten plik przed wysyłką (captureImageBase64).
+    new File(img.hiResUri).copy(dest);
+  } else if (img.base64) {
     dest.write(img.base64, { encoding: "base64" });
   } else {
-    // Awaryjnie: gdy z jakiegoś powodu brak base64, skopiuj plik źródłowy.
+    // Awaryjnie: gdy brak hi-res i base64, skopiuj plik źródłowy.
     new File(img.uri).copy(dest);
   }
   return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
@@ -282,12 +286,13 @@ export function resolveCaptureUri(path: string): string | undefined {
   return fileFor(path)?.uri ?? path;
 }
 
-/** Odczytuje zapisane zdjęcie jako base64 — do ponownego wysłania na serwer (replay). */
+/** Odczytuje zapisane zdjęcie do ponownego wysłania (replay). Sampel jest HI-RES → pomniejszamy do
+ *  rozmiaru modelu (jak przy świeżym skanie), żeby payload był taki sam. Fallback: surowy base64. */
 export async function captureImageBase64(im: CaptureImage): Promise<string | null> {
   try {
     const f = fileFor(im.path);
     if (!f?.exists) return null;
-    return await f.base64();
+    return (await downscaleForModel(f.uri)) ?? (await f.base64());
   } catch {
     return null;
   }
