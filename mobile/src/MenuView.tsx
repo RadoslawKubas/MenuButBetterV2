@@ -228,7 +228,7 @@ function InfoFooter({
     return (
       <View style={styles.infoRow}>
         <Text style={styles.infoAvail}>
-          ℹ️ Więcej info{photos.length > 0 ? " i zdjęcia" : ""} ✓
+          ℹ️ Więcej info{photos.length > 1 ? ` i ${photos.length} zdjęcia` : photos.length === 1 ? " i zdjęcie" : ""} ✓
         </Text>
       </View>
     );

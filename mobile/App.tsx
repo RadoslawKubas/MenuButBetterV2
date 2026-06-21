@@ -118,6 +118,10 @@ const DEFAULT_NEARBY_RADIUS = 800;
 // Mały promień do listy „w pobliżu" wysyłanej do vision przy skanie (venue_match) — na błąd GPS, mała
 // lista = mniej szumu. Większy zasięg jest tylko w ręcznym „Znajdź inny".
 const VENUE_MATCH_RADIUS = 220;
+// Ile zdjęć poglądowych TRZYMAĆ per danie. Serwer i tak WERYFIKUJE wizją ~9 kandydatów (cap = max(num·3,9)),
+// więc 3 zamiast 1 jest DARMOWE (ta sama weryfikacja) — tylko nie wyrzucamy reszty dobrych. Galeria dania
+// (InfoFooter) pokazuje je paskiem; wcześniej marnowaliśmy już zweryfikowane fotki.
+const REPR_PER_DISH = 3;
 
 // Czytelna etykieta modelu (np. „Gemini 2.5 Flash”) z id — do panelu „Ustawienia menu”.
 function modelLabel(id: ModelId | undefined | null): string {
@@ -647,7 +651,7 @@ export default function App() {
           void (async () => {
             try {
               const { photos } = await fetchDishPhotos(job.original, undefined, {
-                representativeOnly: true, num: 1, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, takeAll: costPrefs.takeAllPhotos,
+                representativeOnly: true, num: REPR_PER_DISH, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, takeAll: costPrefs.takeAllPhotos,
               });
               if (photos.length > 0) {
                 const cached = await cachePhotos(photos);
@@ -1698,7 +1702,7 @@ export default function App() {
           representativeOnly: true, // tanio: zdjęcie poglądowe (Serper→Wiki) + weryfikacja
           cuisine: baseMenu.cuisine,
           photoQuery: job.photoQuery,
-          num: 1,
+          num: REPR_PER_DISH,
           verifyModel: eff.verify,
           takeAll: costPrefs.takeAllPhotos,
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));

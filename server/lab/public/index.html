@@ -353,8 +353,9 @@
 
 <div class="modal" id="imgLightbox" onclick="if(event.target===this)closeGallery()">
   <div style="display:flex; flex-direction:column; align-items:center; max-width:94vw; max-height:90vh">
-    <img id="glImg" style="max-width:94vw; max-height:80vh; object-fit:contain; border-radius:8px; background:#000" />
-    <div style="margin-top:10px; display:flex; gap:14px; align-items:center">
+    <img id="glImg" style="max-width:94vw; max-height:78vh; object-fit:contain; border-radius:8px; background:#000" />
+    <div id="glCap" class="mut" style="margin-top:8px; text-align:center; max-width:94vw; font-size:13px; min-height:18px"></div>
+    <div style="margin-top:8px; display:flex; gap:14px; align-items:center">
       <button onclick="galleryNav(-1)" style="font-size:18px; padding:4px 14px">‹</button>
       <span id="glCounter" class="mut"></span>
       <button onclick="galleryNav(1)" style="font-size:18px; padding:4px 14px">›</button>
@@ -526,10 +527,21 @@ function capThumb(id, count, w, h){
   return `<div style="position:relative;flex:none;cursor:pointer" title="${c} zdj — klik, by przejrzeć" onclick="event.stopPropagation();openCaptureGallery('${id}',${c})">
     <img src="/api/image?id=${id}&n=0" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:6px;background:#000;display:block">${badge}</div>`;
 }
-function openCaptureGallery(id,total){ GAL={id,n:0,total:Math.max(1,total||1)}; document.getElementById('imgLightbox').style.display='flex'; showGallery(); }
-function showGallery(){ document.getElementById('glImg').src=`/api/image?id=${GAL.id}&n=${GAL.n}`; document.getElementById('glCounter').textContent=`${GAL.n+1} / ${GAL.total}`; }
-function galleryNav(d){ GAL.total>1 && (GAL.n=(GAL.n+d+GAL.total)%GAL.total, showGallery()); }
-function closeGallery(){ document.getElementById('imgLightbox').style.display='none'; }
+function openCaptureGallery(id,total){ GAL={mode:'cap', id, n:0, total:Math.max(1,total||1)}; document.getElementById('imgLightbox').style.display='flex'; showGallery(); }
+// Galeria zdjęć dań Z OCENĄ: rejestrujemy grupę (strip) i otwieramy ją od klikniętego indeksu — przegląd
+// lewo/prawo (strzałki / ‹ ›) bez wychodzenia z LAB, z podpisem ocena/werdykt/finał pod zdjęciem.
+function regPhotoGroup(items){ (window.__pg=window.__pg||[]).push(items); return window.__pg.length-1; }
+function openPhotoGallery(gid,idx){ const items=(window.__pg||[])[gid]; if(!items||!items.length) return; GAL={mode:'photo', items, n:Math.max(0,Math.min(idx||0,items.length-1))}; document.getElementById('imgLightbox').style.display='flex'; showGallery(); }
+function photoCapHtml(c){ if(!c) return '<span class="mut">nieoceniony (poza pulą weryfikacji vizją)</span>';
+  const pct=c.s!=null?Math.round(c.s*100)+'%':'?', col=c.fv?'#f1c40f':c.p?'#7fd6a0':'#ff8a80', verdict=c.fv?'★ z lokalu':c.p?'✓ trafione':'✗ odrzucone';
+  return `<b style="color:${col}">ocena ${pct} · ${verdict}</b>${c.fin?' · <b>⭐ w finalnej liście</b>':''}${c.src?` · <span class="mut">${esc(c.src)}</span>`:''}${c.fvr?`<br><span class="mut" style="font-size:11px">${esc(c.fvr)}</span>`:''}`;
+}
+function showGallery(){ const img=document.getElementById('glImg'), cnt=document.getElementById('glCounter'), cap=document.getElementById('glCap');
+  if(GAL.mode==='photo'){ const it=GAL.items[GAL.n]; img.referrerPolicy='no-referrer'; img.src=it.u; cnt.textContent=`${GAL.n+1} / ${GAL.items.length}`; cap.innerHTML=photoCapHtml(it.c); }
+  else { img.referrerPolicy=''; img.src=`/api/image?id=${GAL.id}&n=${GAL.n}`; cnt.textContent=`${GAL.n+1} / ${GAL.total}`; cap.innerHTML=''; }
+}
+function galleryNav(d){ if(!GAL) return; const len=GAL.mode==='photo'?GAL.items.length:GAL.total; if(len>1){ GAL.n=(GAL.n+d+len)%len; showGallery(); } }
+function closeGallery(){ GAL=null; document.getElementById('imgLightbox').style.display='none'; }
 document.addEventListener('keydown', e=>{ if(document.getElementById('imgLightbox').style.display!=='flex') return; if(e.key==='ArrowLeft')galleryNav(-1); else if(e.key==='ArrowRight')galleryNav(1); else if(e.key==='Escape')closeGallery(); });
 async function annSearch(){ const c=STATE.captures.find(x=>x.id===ANN_ID); const q=document.getElementById('annQuery').value.trim(); if(!q) return;
   document.getElementById('annCands').innerHTML='<div class="mut">szukam…</div>';
@@ -1292,11 +1304,11 @@ function renderStatsSessions(){
     else if(open){
       const flow=[...(SESSION_DETAIL[g.key]||[])].sort((a,b)=>(a.ts||0)-(b.ts||0));
       let cum=0;
-      const thumb=(u,c)=>{ const sc=!!c; const fv=sc&&c.fv, passed=sc&&c.p, fin=sc&&c.fin;
+      const thumb=(u,c,gid,idx)=>{ const sc=!!c; const fv=sc&&c.fv, passed=sc&&c.p, fin=sc&&c.fin;
         const border=!sc?'#555':fv?'#f1c40f':passed?'#7fd6a0':'#b3261e';
         const badge=!sc?'—':(c.s!=null?Math.round(c.s*100):'?');
         const title=!sc?'nie oceniony (poza pulą weryfikacji)':`ocena ${c.s!=null?Math.round(c.s*100)+'%':'?'} · ${fv?'z lokalu':passed?'trafione':'odrzucone'}${fin?' · W FINALE ⭐':''}`;
-        return `<a href="${esc(u)}" target="_blank" rel="noopener" title="${esc(title)}" style="position:relative; display:inline-block; line-height:0"><img src="${esc(u)}" loading="lazy" onerror="this.style.opacity=0.12;this.style.background='#222'" style="width:50px; height:38px; object-fit:cover; border-radius:4px; border:2px solid ${border}; ${sc&&!passed?'opacity:0.5':''}"><span style="position:absolute; bottom:1px; right:1px; background:rgba(0,0,0,0.78); color:#fff; font-size:9px; font-weight:800; padding:0 2px; border-radius:3px">${badge}</span>${fin?'<span style="position:absolute; top:0; left:1px; font-size:10px">⭐</span>':''}</a>`; };
+        return `<div onclick="openPhotoGallery(${gid},${idx})" title="${esc(title)}" style="position:relative; display:inline-block; line-height:0; cursor:pointer"><img src="${esc(u)}" loading="lazy" onerror="this.style.opacity=0.12;this.style.background='#222'" style="width:50px; height:38px; object-fit:cover; border-radius:4px; border:2px solid ${border}; ${sc&&!passed?'opacity:0.5':''}"><span style="position:absolute; bottom:1px; right:1px; background:rgba(0,0,0,0.78); color:#fff; font-size:9px; font-weight:800; padding:0 2px; border-radius:3px">${badge}</span>${fin?'<span style="position:absolute; top:0; left:1px; font-size:10px">⭐</span>':''}</div>`; };
       const rows=flow.slice(0,300).map(e=>{ cum+=(e.totalCost||0);
         const d=(e.meta&&e.meta.data)||{}; const dish=d.dish||(e.meta&&e.meta.dish)||''; const cands=d.cands||[]; const searched=d.searched||[];
         const cmap={}; cands.forEach(c=>{ cmap[c.u]=c; });
@@ -1305,8 +1317,8 @@ function renderStatsSessions(){
           <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}${d.cached?' · <span style="color:#7fd6a0">🗄 z cache</span>':''}</span>
           <span style="white-space:nowrap">+${fmtUsd(e.totalCost)} &nbsp;<b style="color:var(--acc)">Σ ${fmtUsd(cum)}</b></span></div>`;
         let strips='';
-        if(searched.length){ strips=`<div style="padding:1px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05)">${searched.map(sp=>{ const us=sp.urls||[]; const fin=us.filter(u=>cmap[u]&&cmap[u].fin).length; return `<div class="mut" style="font-size:9px; margin-top:3px">🔎 ${esc(sp.provider)} — ${us.length} zwróconych${fin?` · ⭐ ${fin} w finale`:''}:</div><div style="display:flex; gap:3px; flex-wrap:wrap; margin-top:1px">${us.map(u=>thumb(u,cmap[u])).join('')}</div>`; }).join('')}</div>`; }
-        else if(cands.length){ strips=`<div style="padding:2px 0 6px 12px; border-bottom:1px solid rgba(255,255,255,0.05)"><div class="mut" style="font-size:9px">${d.cached?'🗄 z cache':'wynik'} (ocena %, ramka = werdykt):</div><div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:1px">${cands.map(c=>thumb(c.u,c)).join('')}</div></div>`; }
+        if(searched.length){ strips=`<div style="padding:1px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05)">${searched.map(sp=>{ const us=sp.urls||[]; const fin=us.filter(u=>cmap[u]&&cmap[u].fin).length; const gid=regPhotoGroup(us.map(u=>({u,c:cmap[u]}))); return `<div class="mut" style="font-size:9px; margin-top:3px">🔎 ${esc(sp.provider)} — ${us.length} zwróconych${fin?` · ⭐ ${fin} w finale`:''}:</div><div style="display:flex; gap:3px; flex-wrap:wrap; margin-top:1px">${us.map((u,idx)=>thumb(u,cmap[u],gid,idx)).join('')}</div>`; }).join('')}</div>`; }
+        else if(cands.length){ const gidC=regPhotoGroup(cands.map(c=>({u:c.u,c}))); strips=`<div style="padding:2px 0 6px 12px; border-bottom:1px solid rgba(255,255,255,0.05)"><div class="mut" style="font-size:9px">${d.cached?'🗄 z cache':'wynik'} (ocena %, ramka = werdykt · klik = galeria):</div><div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:1px">${cands.map((c,idx)=>thumb(c.u,c,gidC,idx)).join('')}</div></div>`; }
         return main+strips; }).join('');
       detail=`<div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.18)"><div class="mut small" style="margin-bottom:4px">Przepływ kosztów (suma do ${fmtUsd(g.totalCost)}). Zdjęcia ZWRÓCONE przez API z oceną vizji: liczba = ocena %, ramka <b style="color:#f1c40f">★ z lokalu</b> · <b style="color:#7fd6a0">✓ trafione</b> · <b style="color:#ff8a80">✗ odrzucone</b> · <b style="color:#888">— nieoceniony</b>, <b>⭐ = w finalnej liście</b>. Klik = pełne zdjęcie.</div>${rows}${flow.length>300?`<div class="mut small" style="margin-top:4px">…+${flow.length-300} kolejnych operacji</div>`:''}</div>`;
     }
