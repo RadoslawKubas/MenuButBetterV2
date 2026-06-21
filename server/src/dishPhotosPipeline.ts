@@ -43,6 +43,9 @@ export interface DishPhotosParams {
   representativeOnly?: boolean;
   /** Pomiń cache (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
+  /** „Bierz wszystko": zwróć też zdjęcia ODRZUCONE (poniżej progu), oznaczone, posortowane — do wglądu.
+   *  W labie/teście włączone i tak (żeby było widać, co realnie wpada). Domyślnie w apce wyłączone. */
+  takeAll?: boolean;
 }
 
 export interface OutPhoto {
@@ -56,6 +59,10 @@ export interface OutPhoto {
   fromVenueReason?: string;
   /** Zdjęcie poglądowe podane Z CACHE (nie wymagało płatnego wyszukania/weryfikacji). */
   cached?: boolean;
+  /** Ocena vision 0..1 (jak bardzo zdjęcie pasuje do dania). Zapamiętana, by pokazać na podglądzie. */
+  score?: number;
+  /** Odrzucone (poniżej progu jakości) — zwracane tylko przy „bierz wszystko"/teście, oznaczone. */
+  rejected?: boolean;
 }
 
 export interface DbgCandidate {
@@ -121,14 +128,15 @@ export function venueNameInUrl(contextUrl: string | undefined, name: string): bo
  * żeby refresh trafiał DOKŁADNIE w ten sam wpis. Zależy od: termin generyczny (photo_query lub
  * nazwa) + kuchnia + model weryfikacji + tryb źródeł (CC/web) + liczba zdjęć.
  */
-export function reprPhotoCacheKey(args: { dish: string; photoQuery?: string; cuisine?: string; verifyModel?: string; num?: number; verify?: boolean }): string {
+export function reprPhotoCacheKey(args: { dish: string; photoQuery?: string; cuisine?: string; verifyModel?: string; num?: number; verify?: boolean; takeAll?: boolean }): string {
   const genericTerm = args.photoQuery?.trim() || args.dish.trim();
   const cuisine = args.cuisine?.trim() || undefined;
   const verifyModel = args.verifyModel?.trim() || "claude-sonnet-4-6";
   const num = args.num ?? 4;
   const ccFirst = process.env.REPRESENTATIVE_CC_FIRST === "1";
   const verifyFlag = args.verify !== false;
-  return cacheKey("repr-photos", genericTerm, cuisine, verifyFlag ? verifyModel : "noverify", ccFirst ? "cc" : "web", num);
+  // takeAll zmienia WYNIK (dochodzą odrzucone + wszystkie dobre) → osobny wpis cache.
+  return cacheKey("repr-photos", genericTerm, cuisine, verifyFlag ? verifyModel : "noverify", ccFirst ? "cc" : "web", num, args.takeAll ? "all" : "top");
 }
 
 /**
@@ -246,7 +254,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       };
     });
   // Buduje finalne zdjęcie z werdyktem „z lokalu" + powodem (spójnie we wszystkich tierach).
-  const outPhoto = (ph: DishPhoto, o: { verified: boolean; representative: boolean; source?: string }): OutPhoto => {
+  const outPhoto = (ph: DishPhoto, o: { verified: boolean; representative: boolean; source?: string; score?: number; rejected?: boolean }): OutPhoto => {
     const fv = fromVenueInfo(ph);
     return {
       url: ph.url,
@@ -256,6 +264,8 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       representative: o.representative,
       fromVenue: fv.isVenue,
       fromVenueReason: fv.reason,
+      score: o.score,
+      rejected: o.rejected,
     };
   };
 
@@ -285,49 +295,66 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   // Zdjęcia POGLĄDOWE (typ dania). Kolejność źródeł zależy od REPRESENTATIVE_CC_FIRST:
   //  • domyślnie (tryb testowy): Serper (Google Images, ~93% trafień) → Wikimedia → Openverse,
   //  • CC‑first (produkcja, legalnie bezpieczne): Wikimedia → Openverse (licencje CC/PD) → Serper.
+  // Zbieramy ze WSZYSTKICH 3 źródeł (Serper + Wikimedia + Openverse) i sortujemy wg oceny vision.
+  // REPRESENTATIVE_CC_FIRST wpływa już TYLKO na priorytet przy remisie (które źródło „wygrywa" tie).
   const CC_FIRST = process.env.REPRESENTATIVE_CC_FIRST === "1";
   async function representatives(verify: boolean): Promise<{ photos: OutPhoto[]; usage: Usage }> {
-    const pool = Math.max(num * 2, 6);
+    const perSource = Math.max(num * 2, 6);
     const sources: { name: string; run: () => Promise<DishPhoto[]> }[] = [
-      { name: "Serper (web)", run: () => genericWebImages(genericTerm, pool, cuisine) },
-      { name: "Wikimedia", run: () => new WikimediaProvider(pool).find(genericTerm) },
-      { name: "Openverse", run: () => new OpenverseProvider(pool).find(genericTerm) },
+      { name: "Serper (web)", run: () => genericWebImages(genericTerm, perSource, cuisine) },
+      { name: "Wikimedia", run: () => new WikimediaProvider(perSource).find(genericTerm) },
+      { name: "Openverse", run: () => new OpenverseProvider(perSource).find(genericTerm) },
     ];
     const ordered = CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources;
-    let provider = ordered[0]!.name;
-    let found: DishPhoto[] = [];
-    for (const s of ordered) {
-      provider = s.name;
-      found = await s.run().catch(() => []);
-      if (found.length > 0) break;
+    const lists = await Promise.all(ordered.map((s) => s.run().catch(() => [] as DishPhoto[])));
+    const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
+    // Scal RÓWNOMIERNIE (round-robin po źródłach), dedup po url — każde źródło ma reprezentację.
+    const merged: DishPhoto[] = [];
+    const seen = new Set<string>();
+    const maxLen = Math.max(0, ...lists.map((l) => l.length));
+    for (let i = 0; i < maxLen; i++) for (const l of lists) {
+      const ph = l[i];
+      if (ph?.url && !seen.has(ph.url)) { seen.add(ph.url); merged.push(ph); }
     }
-    const step: DbgStep = { tier: "Poglądowe (typ dania)", provider, query: genericTerm, returned: found.length };
+    // Sufit liczby zdjęć do WERYFIKACJI (koszt vision) — z 3 źródeł, ale bez rozdmuchania.
+    const cands = merged.slice(0, Math.max(num * 3, 9));
+    const provider = usedProviders.join(" + ") || ordered[0]!.name;
+    const step: DbgStep = { tier: "Poglądowe (typ dania)", provider, query: genericTerm, returned: cands.length };
     dbg.steps.push(step);
-    if (found.length === 0) return { photos: [], usage: ZERO_USAGE };
+    if (cands.length === 0) return { photos: [], usage: ZERO_USAGE };
     const srcOf = (ph: DishPhoto) => (ph.domain ? photoSourceCategory(ph.domain) : ph.source);
     if (!verify) {
-      step.passed = Math.min(found.length, num);
-      step.candidates = candListOf(found);
+      step.passed = Math.min(cands.length, num);
+      step.candidates = candListOf(cands);
       return {
-        photos: found.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) })),
+        photos: cands.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) })),
         usage: ZERO_USAGE,
       };
     }
-    const { scores, textOverlay, usage } = await scoreDishPhotos(genericTerm, found.map((ph) => ph.url), { cuisine, model: verifyModel, noCache: p.noCache });
-    const scored = found.map((ph, i) => ({ ...ph, score: scores[i] ?? 0, textOverlay: !!textOverlay[i] }));
+    const { scores, textOverlay, usage } = await scoreDishPhotos(genericTerm, cands.map((ph) => ph.url), { cuisine, model: verifyModel, noCache: p.noCache });
+    const scored = cands.map((ph, i) => ({ ...ph, score: scores[i] ?? 0, textOverlay: !!textOverlay[i] }));
     step.candidates = candScoredOf(scored);
     const rs = (ph: { score: number; textOverlay?: boolean }) => ph.score - (ph.textOverlay ? 0.15 : 0);
-    const filtered = scored.filter((ph) => ph.score >= MATCH_THRESHOLD).sort((a, b) => rs(b) - rs(a));
-    step.passed = filtered.length;
-    const photos = filtered.slice(0, num).map((ph) => outPhoto(ph, { verified: false, representative: true, source: srcOf(ph) }));
-    return { photos, usage };
+    // ADDYTYWNIE: nic nie wyrzucamy z listy roboczej, tylko sortujemy wg jakości.
+    const sorted = [...scored].sort((a, b) => rs(b) - rs(a));
+    const good = sorted.filter((ph) => ph.score >= MATCH_THRESHOLD);
+    const bad = sorted.filter((ph) => ph.score < MATCH_THRESHOLD);
+    step.passed = good.length;
+    // „Bierz wszystko" (ustawienie apki) albo TEST (noCache) → zwróć WSZYSTKIE dobre + odrzucone (oznaczone,
+    // posortowane). Domyślnie (apka) → tylko `num` najlepszych — żeby nie ściągać dziesiątek fotek na danie.
+    const wantAll = !!p.takeAll || !!p.noCache;
+    const mk = (ph: (typeof scored)[number], rejected: boolean) =>
+      outPhoto(ph, { verified: false, representative: true, source: srcOf(ph), score: r2(ph.score), rejected: rejected || undefined });
+    const goodOut = (wantAll ? good : good.slice(0, num)).map((ph) => mk(ph, false));
+    const badOut = wantAll ? bad.map((ph) => mk(ph, true)) : [];
+    return { photos: [...goodOut, ...badOut], usage };
   }
 
   // CACHE ① zdjęć POGLĄDOWYCH (typ dania) — niezależnych od lokalu. Klucz: termin generyczny +
   // kuchnia + model weryfikacji + tryb źródeł + liczba. Trafienie = zero płatnych wywołań
   // (ani Serper, ani vision). Pomijany przy noCache (LAB / porównania modeli).
   const reprCacheKey = (verifyFlag: boolean) =>
-    reprPhotoCacheKey({ dish, photoQuery: p.photoQuery, cuisine, verifyModel, num, verify: verifyFlag });
+    reprPhotoCacheKey({ dish, photoQuery: p.photoQuery, cuisine, verifyModel, num, verify: verifyFlag, takeAll: p.takeAll });
   async function cachedRepresentatives(verifyFlag: boolean): Promise<{ photos: OutPhoto[]; usage: Usage; cached: boolean }> {
     const ck = reprCacheKey(verifyFlag);
     const hit = await cacheGet<OutPhoto[]>("repr-photos", ck, { op: "dish-photos", bypass: p.noCache });

@@ -652,6 +652,7 @@ interface DishPhotosBody {
   verify?: boolean; // weryfikacja vision (DOMYŚLNIE WŁĄCZONA; wyłącz przez verify:false)
   verifyModel?: string; // model weryfikacji zdjęć (Claude/GPT). Domyślnie Sonnet.
   representativeOnly?: boolean; // tylko poglądowe (Wikimedia, free, bez SerpApi/vision) — do tła
+  takeAll?: boolean; // „bierz wszystko": zwróć też odrzucone (oznaczone) + wszystkie dobre, posortowane
 }
 
 // Cała logika toru (tier 1/2/3 + weryfikacja + flaga fromVenue) jest w runDishPhotos
@@ -683,6 +684,7 @@ app.post("/dish-photos", async (c) => {
       verify: body.verify,
       verifyModel,
       representativeOnly: body.representativeOnly,
+      takeAll: body.takeAll,
     });
     logEvent({
       type: "ai",
