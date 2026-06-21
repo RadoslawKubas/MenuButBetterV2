@@ -13,7 +13,7 @@ import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantI
 import { findTripAdvisor } from "./tripadvisor.ts";
 import { runDishPhotos, reprPhotoCacheKey } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
-import { matchVenuePhotos, type VenueTaPhoto } from "./venuePhotos.ts";
+import { matchVenuePhotos, type VenueTaPhoto, type VenueMatch } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
@@ -939,14 +939,24 @@ app.post("/venue-photos", async (c) => {
       certain?: boolean; // lokal pewny? (z /restaurant: nameVerified && !guessedByLocation)
     };
     const venueModel = body.model?.trim() || "claude-sonnet-4-6";
-    const { matches, usage } = await matchVenuePhotos({
-      photoNames: Array.isArray(body.photoNames) ? body.photoNames : [],
-      taPhotos: Array.isArray(body.taPhotos) ? body.taPhotos : [],
-      dishes: Array.isArray(body.dishes) ? body.dishes : [],
-      cuisine: body.cuisine,
-      model: venueModel,
-      certain: body.certain !== false,
-    });
+    const photoNames = Array.isArray(body.photoNames) ? body.photoNames : [];
+    const taPhotos = Array.isArray(body.taPhotos) ? body.taPhotos : [];
+    const dishes = Array.isArray(body.dishes) ? body.dishes : [];
+    const certain = body.certain !== false;
+    // CACHE Tier 0: ten sam lokal (te same zdjęcia) + te same dania + model → ten sam werdykt. Trafienie
+    // omija I pobranie zdjęć z Google ($), I vision ($) — klucz po HASHU zdjęć + dań (nie po bajtach skanu),
+    // więc trafia nawet przy ŚWIEŻYM zdjęciu menu tego samego lokalu. Trzymamy URL-e + werdykt, nie bajty.
+    const photoSig = createHash("sha256").update(JSON.stringify([photoNames, taPhotos.map((p) => p.url)])).digest("hex").slice(0, 32);
+    const dishSig = createHash("sha256").update(dishes.join("\n")).digest("hex").slice(0, 32);
+    const vck = cacheKey("venue-match", photoSig, dishSig, body.cuisine ?? "", certain ? "c" : "u", venueModel);
+    const hasPhotos = photoNames.length > 0 || taPhotos.length > 0;
+    const cachedMatches = hasPhotos ? await cacheGet<VenueMatch[]>("venue-match", vck, { op: "venue-photos" }) : null;
+    if (cachedMatches) {
+      logEvent({ type: "ai", op: "venue-photos", model: venueModel, provider: apiTag(venueModel), inputTokens: 0, outputTokens: 0, costUsd: 0, data: { dishes: dishes.length, matches: cachedMatches.length, cached: true } });
+      return c.json({ matches: cachedMatches, usage: ZERO_USAGE, cached: true });
+    }
+    const { matches, usage } = await matchVenuePhotos({ photoNames, taPhotos, dishes, cuisine: body.cuisine, model: venueModel, certain });
+    if (hasPhotos) void cacheSet("venue-match", vck, matches);
     logEvent({
       type: "ai",
       op: "venue-photos",
@@ -955,7 +965,7 @@ app.post("/venue-photos", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dishes: Array.isArray(body.dishes) ? body.dishes.length : 0, matches: matches.length },
+      data: { dishes: dishes.length, matches: matches.length },
     });
     return c.json({ matches, usage });
   } catch (e) {

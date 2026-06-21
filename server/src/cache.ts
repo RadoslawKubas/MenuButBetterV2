@@ -20,6 +20,7 @@ export const CACHE_VERSION = {
   "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
   "menu-structure": 7, // przebieg 1: struktura menu (v7: + course/surcharge w pozycji = zestaw z podgrupami i dopłatą)
   "item-enrich": 4, // przebieg 2: wzbogacenie (v4: photo_query „podana potrawa", krótki opis 1 zdanie, bez peek-kuchni)
+  "venue-match": 1, // Tier 0: dopasowanie zdjęć lokalu do dań (po placeId/zdjęciach + dania) — omija pobranie zdjęć I vision
   "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
@@ -31,6 +32,7 @@ const TTL_DAYS: Record<CacheKind, number> = {
   "vision-url": 45,
   "menu-structure": 120,
   "item-enrich": 200,
+  "venue-match": 30, // zdjęcia lokalu (URL-e Google) z czasem rotują → krócej; klucz po zdjęciach i tak chroni
   "bad-photo": 365, // złe zdjęcie raczej nie „naprawi się" samo — pamiętaj długo
 };
 
