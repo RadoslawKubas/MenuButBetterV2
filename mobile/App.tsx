@@ -1406,6 +1406,81 @@ export default function App() {
     );
   }
 
+  // WSPÓLNY render detalu menu — TEN SAM kod dla ŚWIEŻEGO skanu i dla otwartego z historii (karta lokalu,
+  // menu, lokalizacja, meta, zdjęcia źródłowe, akcje). `menu` osobno (dla świeżego jest LIVE ze stanu).
+  // `scanning` → akcje mutujące są disabled (w trakcie odczytu), ale ZAWSZE WIDOCZNE — odblokują się po skanie.
+  function renderMenuDetail(args: {
+    menu: Menu;
+    savedScan: SavedScan | null;
+    scanId: string | null;
+    restaurant: RestaurantInfo | null;
+    restaurantLoading: boolean;
+    targetLang: string;
+    onItemPress: (si: number, ii: number) => void;
+    onSearchMore: (si: number, ii: number) => void;
+    scanning: boolean;
+    enriching: boolean;
+  }) {
+    const { menu: m, savedScan: ss, scanId, restaurant: r, scanning } = args;
+    const loc = ss?.location ?? null;
+    const dis = scanning;
+    return (
+      <View>
+        {r || args.restaurantLoading ? (
+          <View style={styles.confirmBox}>
+            {renderRestaurant(r)}
+            <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
+              <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
+            </Pressable>
+          </View>
+        ) : (
+          renderRestaurant(r)
+        )}
+        <MenuView
+          menu={m}
+          infoLoading={infoLoading}
+          photoLoading={photoLoading}
+          onItemPress={args.onItemPress}
+          onSearchMorePhotos={args.onSearchMore}
+          enriching={args.enriching}
+          nameFallback={r?.name}
+        />
+        {loc ? (
+          <Text style={styles.geo}>
+            📍 {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)}
+            {ss?.locationSource === "exif" ? "  (ze zdjęcia)" : ss?.locationSource === "device" ? "  (Twoja pozycja przy skanie)" : ""}
+          </Text>
+        ) : ss ? (
+          <Text style={styles.geo}>📍 Bez zapisanej pozycji{ss.useExifLocation === false && ss.useDeviceLocation === false ? " (lokalizacja była wyłączona przy skanie)" : ""}</Text>
+        ) : null}
+        {ss ? renderScanMeta(ss) : null}
+        {ss?.sourcePhotos && ss.sourcePhotos.length > 0 ? (
+          <Pressable style={styles.sourcePhotosBtn} onPress={() => setSourceLb({ photos: ss.sourcePhotos!.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })), index: 0 })}>
+            <Text style={styles.sourcePhotosText}>📷 Zdjęcia źródłowe menu ({ss.sourcePhotos.length})</Text>
+          </Pressable>
+        ) : null}
+        {scanId ? (
+          <>
+            <Pressable style={[styles.button, styles.secondary, (dis || appending) && styles.disabled]} disabled={dis || appending} onPress={() => chooseAppendSource(scanId, m, args.targetLang, !!ss)}>
+              <Text style={styles.secondaryText}>{appending ? "⏳ Dokładam zdjęcia…" : "➕ Dodaj zdjęcia (uzupełnij menu)"}</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.secondary, dis && styles.disabled]} disabled={dis} onPress={() => refreshScanPhotos(scanId, m, true, r)}>
+              <Text style={styles.secondaryText}>{r ? "🔄 Odśwież zdjęcia (doszukaj z lokalu)" : "🔄 Odśwież zdjęcia dań"}</Text>
+            </Pressable>
+            {ss ? (
+              <Pressable style={[styles.button, styles.secondary, dis && styles.disabled]} disabled={dis} onPress={() => setRenameTarget(ss)}>
+                <Text style={styles.secondaryText}>✏️ Zmień nazwę menu</Text>
+              </Pressable>
+            ) : null}
+            <Pressable style={[styles.button, styles.danger, dis && styles.disabled]} disabled={dis} onPress={() => removeSaved(scanId)}>
+              <Text style={styles.buttonText}>Usuń z historii</Text>
+            </Pressable>
+          </>
+        ) : null}
+      </View>
+    );
+  }
+
   async function loadInfo(opts: {
     menu: Menu;
     scanId: string | null;
@@ -2045,78 +2120,20 @@ export default function App() {
         ) : (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {/* PODGLĄD ZAPISANEGO MENU */}
-          {showingDetail && openScan ? (
-            <View>
-              {renderRestaurant(openScan.restaurant ?? null)}
-              <MenuView
-                menu={openScan.menu}
-                infoLoading={infoLoading}
-                photoLoading={photoLoading}
-                onItemPress={onDetailItemPress}
-                onSearchMorePhotos={onDetailSearchMore}
-                nameFallback={openScan.restaurant?.name}
-              />
-              {openScan.location ? (
-                <Text style={styles.geo}>
-                  📍 {openScan.location.lat.toFixed(5)}, {openScan.location.lng.toFixed(5)}
-                  {openScan.locationSource === "exif"
-                    ? "  (ze zdjęcia)"
-                    : openScan.locationSource === "device"
-                      ? "  (Twoja pozycja przy skanie)"
-                      : ""}
-                </Text>
-              ) : (
-                <Text style={styles.geo}>
-                  📍 Bez zapisanej pozycji
-                  {openScan.useExifLocation === false && openScan.useDeviceLocation === false
-                    ? " (lokalizacja była wyłączona przy skanie)"
-                    : ""}
-                </Text>
-              )}
-              {renderScanMeta(openScan)}
-              {openScan.sourcePhotos && openScan.sourcePhotos.length > 0 ? (
-                <Pressable
-                  style={styles.sourcePhotosBtn}
-                  onPress={() =>
-                    setSourceLb({
-                      photos: openScan.sourcePhotos!.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })),
-                      index: 0,
-                    })
-                  }
-                >
-                  <Text style={styles.sourcePhotosText}>📷 Zdjęcia źródłowe menu ({openScan.sourcePhotos.length})</Text>
-                </Pressable>
-              ) : null}
-              <Pressable
-                style={[styles.button, styles.secondary, appending && styles.disabled]}
-                disabled={appending}
-                onPress={() =>
-                  chooseAppendSource(openScan.id, openScan.menu, openScan.targetLang, true)
-                }
-              >
-                <Text style={styles.secondaryText}>
-                  {appending ? "⏳ Dokładam zdjęcia…" : "➕ Dodaj zdjęcia (uzupełnij menu)"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.button, styles.secondary]}
-                onPress={() => refreshScanPhotos(openScan.id, openScan.menu, true, openScan.restaurant)}
-              >
-                <Text style={styles.secondaryText}>
-                  {openScan.restaurant ? "🔄 Odśwież zdjęcia (doszukaj z lokalu)" : "🔄 Odśwież zdjęcia dań"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.button, styles.secondary]}
-                onPress={() => setRenameTarget(openScan)}
-              >
-                <Text style={styles.secondaryText}>✏️ Zmień nazwę menu</Text>
-              </Pressable>
-              <Pressable style={[styles.button, styles.danger]} onPress={() => removeSaved(openScan.id)}>
-                <Text style={styles.buttonText}>Usuń z historii</Text>
-              </Pressable>
-            </View>
-          ) : null}
+          {showingDetail && openScan
+            ? renderMenuDetail({
+                menu: openScan.menu,
+                savedScan: openScan,
+                scanId: openScan.id,
+                restaurant: openScan.restaurant ?? null,
+                restaurantLoading: false,
+                targetLang: openScan.targetLang,
+                onItemPress: onDetailItemPress,
+                onSearchMore: onDetailSearchMore,
+                scanning: false,
+                enriching: false,
+              })
+            : null}
 
           {/* HISTORIA */}
           {!showingDetail && tab === "history" ? (
@@ -2419,40 +2436,20 @@ export default function App() {
                   {scanFromCache ? (
                     <Text style={styles.cacheNote}>🗄 Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
                   ) : null}
-                  {/* Lokal: zakładamy, że trafiony (bez potwierdzania). Zły? „Znajdź inny" → osobny ekran
-                      z mapą / GPS / szukaniem po nazwie i mieście. */}
-                  {freshRestaurant || restaurantLoading ? (
-                    <View style={styles.confirmBox}>
-                      {renderRestaurant(freshRestaurant)}
-                      <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
-                        <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
-                      </Pressable>
-                    </View>
-                  ) : (
-                    renderRestaurant(freshRestaurant)
-                  )}
-                  <MenuView
-                    menu={menu}
-                    infoLoading={infoLoading}
-                    photoLoading={photoLoading}
-                    onItemPress={onFreshItemPress}
-                    onSearchMorePhotos={onFreshSearchMore}
-                    enriching={status === "scanning"}
-                    nameFallback={freshRestaurant?.name}
-                  />
-                  {status === "done" && freshScanId ? (
-                    <Pressable
-                      style={[styles.button, styles.secondary, appending && styles.disabled]}
-                      disabled={appending}
-                      onPress={() =>
-                        chooseAppendSource(freshScanId, menu, targetLang, false)
-                      }
-                    >
-                      <Text style={styles.secondaryText}>
-                        {appending ? "⏳ Dokładam zdjęcia…" : "➕ Dodaj zdjęcia (uzupełnij menu)"}
-                      </Text>
-                    </Pressable>
-                  ) : null}
+                  {/* TEN SAM render co historia — karta lokalu, menu i WSZYSTKIE akcje; w trakcie skanu akcje
+                      mutujące są disabled (odblokują się po odczycie). */}
+                  {renderMenuDetail({
+                    menu,
+                    savedScan: freshScanId ? scans.find((s) => s.id === freshScanId) ?? null : null,
+                    scanId: freshScanId,
+                    restaurant: freshRestaurant,
+                    restaurantLoading,
+                    targetLang,
+                    onItemPress: onFreshItemPress,
+                    onSearchMore: onFreshSearchMore,
+                    scanning: status === "scanning",
+                    enriching: status === "scanning",
+                  })}
                 </View>
               ) : null}
             </>

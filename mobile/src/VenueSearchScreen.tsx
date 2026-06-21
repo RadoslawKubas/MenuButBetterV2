@@ -34,7 +34,7 @@ const DEFAULT_CENTER: GeoPoint = { lat: 40.4168, lng: -3.7038 }; // Madryt — z
 const NEARBY_RADIUS = 1500;
 
 /** Mapa: dziś OSM/Leaflet w WebView (wszędzie działa). Pin rysujemy w RN na środku — środek = punkt szukania. */
-function VenueMap({ center, onCenterChange, webRef }: { center: GeoPoint; onCenterChange: (g: GeoPoint) => void; webRef: React.RefObject<WebView | null> }) {
+function VenueMap({ center, scanLocation, selectedVenue, onCenterChange, webRef }: { center: GeoPoint; scanLocation: GeoPoint | null; selectedVenue: GeoPoint | null; onCenterChange: (g: GeoPoint) => void; webRef: React.RefObject<WebView | null> }) {
   // HTML budujemy RAZ (z pierwszym centrum); kolejne re-centrowania idą przez injectJavaScript(recenter()).
   const html = useMemo(
     () => `<!DOCTYPE html><html><head>
@@ -49,11 +49,20 @@ function VenueMap({ center, onCenterChange, webRef }: { center: GeoPoint; onCent
   function send(){var c=map.getCenter();if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({lat:c.lat,lng:c.lng}));}
   map.on('moveend',send);
   window.recenter=function(la,ln){map.setView([la,ln],16);};
+  // MIEJSCE SKANU (zawsze widoczne) — niebieskie kółko.
+  ${scanLocation ? `L.circleMarker([${scanLocation.lat},${scanLocation.lng}],{radius:8,color:'#2b6cb0',fillColor:'#5aa9e6',fillOpacity:0.95,weight:3}).addTo(map).bindTooltip('📷 miejsce skanu');` : ""}
+  // WYBRANY LOKAL — pin (ustawiany po kliknięciu wyniku).
+  var venueM=null;
+  window.setVenue=function(la,ln){ if(venueM){map.removeLayer(venueM);venueM=null;} if(la==null||ln==null)return; venueM=L.marker([la,ln]).addTo(map).bindTooltip('🏠 wybrany lokal',{permanent:true,direction:'top'}); map.setView([la,ln],16); };
 </script></body></html>`,
-    // celowo bez `center` w zależnościach — przebudowa HTML zresetowałaby przesunięcie mapy
+    // celowo bez zależności — przebudowa HTML zresetowałaby przesunięcie mapy (scanLocation jest stały)
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+  // Klik w wynik → pin wybranego lokalu (i re-centrowanie). Inject, gdy WebView gotowy.
+  useEffect(() => {
+    webRef.current?.injectJavaScript(`window.setVenue&&window.setVenue(${selectedVenue ? `${selectedVenue.lat},${selectedVenue.lng}` : "null,null"});true;`);
+  }, [selectedVenue, webRef]);
   return (
     <View style={styles.mapWrap}>
       <WebView
@@ -86,6 +95,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
   const [city, setCity] = useState("");
   const [cuisineQ, setCuisineQ] = useState(cuisine ?? ""); // kuchnia z menu — edytowalna, zawęża „w pobliżu"
   const [results, setResults] = useState<RestaurantInfo[]>([]);
+  const [selected, setSelected] = useState<RestaurantInfo | null>(null); // klik wyniku → zaznacz na mapie (bez zamykania)
   const [loading, setLoading] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -177,7 +187,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
         <View style={{ width: 64 }} />
       </View>
 
-      <VenueMap center={center} onCenterChange={setCenter} webRef={webRef} />
+      <VenueMap center={center} scanLocation={initialLocation} selectedVenue={selected?.location ?? null} onCenterChange={setCenter} webRef={webRef} />
       <View style={styles.mapActions}>
         <Pressable style={[styles.mapBtn, styles.mapBtnPrimary]} onPress={() => searchAt(center)} disabled={loading}>
           <Text style={styles.mapBtnPrimaryText}>🔍 Szukaj tutaj</Text>
@@ -233,9 +243,9 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
         ) : null}
         {note && !loading ? <Text style={styles.noteText}>{note}</Text> : null}
         {results.map((r) => (
-          <View key={r.placeId} style={styles.card}>
-            <Pressable style={{ flex: 1 }} onPress={() => onPick(r)}>
-              <Text style={styles.cardName} numberOfLines={1}>{r.name}</Text>
+          <View key={r.placeId} style={[styles.card, selected?.placeId === r.placeId && styles.cardSelected]}>
+            <Pressable style={{ flex: 1 }} onPress={() => setSelected(r)}>
+              <Text style={styles.cardName} numberOfLines={1}>{selected?.placeId === r.placeId ? "📍 " : ""}{r.name}</Text>
               {r.address ? <Text style={styles.cardAddr} numberOfLines={1}>{r.address}</Text> : null}
               <Text style={styles.cardMeta}>
                 {r.rating != null ? `★ ${r.rating.toFixed(1)}${r.ratingCount != null ? ` (${r.ratingCount})` : ""}` : "bez ocen"}
@@ -285,6 +295,7 @@ const styles = StyleSheet.create({
   centerRow: { flexDirection: "row", alignItems: "center", paddingVertical: 16 },
   noteText: { color: colors.muted, fontSize: 13, paddingVertical: 12, lineHeight: 18 },
   card: { flexDirection: "row", alignItems: "center", backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: colors.badgeBg },
+  cardSelected: { borderColor: colors.accent, backgroundColor: colors.accent + "14" }, // klik → zaznaczony na mapie
   cardName: { fontSize: 15, fontWeight: "800", color: colors.text },
   cardAddr: { fontSize: 12.5, color: colors.muted, marginTop: 2 },
   cardMeta: { fontSize: 12, color: colors.muted, marginTop: 3 },
