@@ -507,6 +507,9 @@ async function structureClaude(
 // Odtwarza licznik pozycji i nazwy z gotowej struktury (cache) — apka pokazuje to samo, co przy
 // realnym odczycie. photoQuery puste → apka NIE prefetchuje (zrobi to po enrich z dobrym hasłem).
 function replayStructureItems(structure: MenuStructure, opts: ExtractOptions): void {
+  // Z cache też zgłoś KUCHNIĘ (jak streaming) — apka potrzebuje DETERMINISTYCZNEJ kuchni ze struktury do
+  // STABILNEGO klucza cache enrichu/zdjęć. Bez tego re-skan szedł z niestabilnym peek → cache nie trafiał.
+  if (structure.cuisine) opts.onMeta?.({ cuisine: structure.cuisine });
   if (!opts.onProgress && !opts.onItem) return;
   let n = 0;
   for (const s of structure.sections) for (const it of s.items) {

@@ -613,9 +613,10 @@ export default function App() {
           ...prev,
           { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
         ]);
-        // Rolling enrich: danie do kolejki; flush co ~8 (enrich startuje w trakcie struktury).
+        // Rolling enrich: danie do kolejki; flush co ~8, ALE dopiero gdy znamy kuchnię ze struktury
+        // (stabilny klucz cache). Do tego czasu kolejka rośnie — onMeta ją opróżni, gdy kuchnia dojdzie.
         enrichQueue.push(stub);
-        if (enrichQueue.length >= ENRICH_FLUSH) flushEnrich();
+        if (cuisineReady && enrichQueue.length >= ENRICH_FLUSH) flushEnrich();
       };
       // (martwe w dwufazowym — server structureOnly nie emituje enrich-item; zostaje dla zgodności sygnatury)
       const onEnrichItem = (stub: ScanItemStub) => {
@@ -634,6 +635,11 @@ export default function App() {
       // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
       let enrichUsage: Usage = ZERO_USAGE;
       let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
+      // Kuchnia ze STRUKTURY (onMeta) jest DETERMINISTYCZNA (przy re-skanie struktura z cache → ta sama
+      // kuchnia). Peek to osobne, niestabilne wywołanie. Dla STABILNEGO klucza cache enrichu (kuchnia jest
+      // jego częścią) NIE flushujemy enrichu, póki nie znamy kuchni ze struktury — inaczej wczesne partie
+      // szły z pustą/peek kuchnią, klucz różnił się co skan i cache nie trafiał. Patrz [[menubutbetter-cache]].
+      let cuisineReady = false;
       let scanReadName = ""; // ostatnia nazwa lokalu ze streamu (fallback, gdy venue_match nie trafi)
       let nearbyCands: RestaurantInfo[] = []; // kandydaci „w pobliżu" (do vision: venue_match)
       // POGLĄDOWE W TRAKCIE: gdy rolling da photo_query, od razu dociągamy tanie poglądowe (Serper/Wiki),
@@ -783,7 +789,11 @@ export default function App() {
         onScanItem,
         (m) => {
           if (myGen !== scanGenRef.current) return; // spóźniony meta STAREGO skanu — nie dotykaj bieżącego
-          if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
+          if (m.cuisine && m.cuisine.trim()) {
+            scanCuisine = m.cuisine.trim();
+            // Kuchnia ze struktury znana → odblokuj rolling enrich i opróżnij to, co czekało.
+            if (!cuisineReady) { cuisineReady = true; flushEnrich(); }
+          }
 
           // venue_match (przychodzi PO sparsowaniu struktury): vision wskazało lokal z „w pobliżu". Ma
           // PIERWSZEŃSTWO nad zgadywaniem po nazwie. by='name' → pewny; by='cuisine' → zgadnięty (Tier 0
@@ -920,6 +930,9 @@ export default function App() {
           /* tłumaczenie grup padło — zostaną oryginalne nazwy sekcji */
         }
         setScanPhase({ label: "Tłumaczę i opisuję dania…" });
+        // Backstop: gdyby onMeta nie dało kuchni, weź ją z gotowej struktury (deterministyczna) — żeby
+        // ostatnia (i ewentualnie cała) partia poszła ze STABILNĄ kuchnią, nie z peek.
+        if (!cuisineReady && merged.cuisine) { scanCuisine = merged.cuisine; cuisineReady = true; }
         flushEnrich(); // domknij ostatnią paczkę (<8 dań)
         try {
           await Promise.all(enrichJobs);
