@@ -30,12 +30,11 @@ function exifToTime(exif: Record<string, unknown> | undefined | null): number | 
 
 // DWIE wersje zdjęcia:
 //  • DO MODELU — pomniejszone (tani/szybki payload, dobry OCR): 2000px @ 0.72.
-//  • DO SAMPLA — hi-res (do późniejszego strojenia rozmiarów/jakości w LAB): 3000px @ 0.85.
-// Strojone osobno; zdjęcia z telefonu i tak są większe (downscale, nie upscale dla typowych).
+//  • DO SAMPLA — ORYGINAŁ z telefonu (pełna rozdzielczość), tylko przekodowany na JPEG (nie wielka bitmapa) —
+//    żeby lokalnie widzieć dokładnie to, co zrobił aparat, i móc potem stroić rozmiary w LAB.
 const MODEL_WIDTH = 2000;
 const MODEL_QUALITY = 0.72;
-const HIRES_WIDTH = 3000;
-const HIRES_QUALITY = 0.85;
+const SAMPLE_QUALITY = 0.92;
 
 /** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU → base64. */
 export async function downscaleForModel(uri: string): Promise<string | null> {
@@ -74,13 +73,13 @@ async function compress(uri: string, exif?: Record<string, unknown> | null): Pro
   const modelRef = await ImageManipulator.manipulate(uri).resize({ width: MODEL_WIDTH }).renderAsync();
   const model = await modelRef.saveAsync({ compress: MODEL_QUALITY, format: SaveFormat.JPEG, base64: true });
   if (!model.base64) throw new Error("Nie udało się przygotować zdjęcia.");
-  // DO SAMPLA — hi-res (tylko plik, bez base64 — nie trzymamy w pamięci).
+  // DO SAMPLA — ORYGINAŁ (bez resize), tylko przekodowany na JPEG (nie wielka bitmapa). Tylko plik.
   let hiResUri: string | undefined;
   try {
-    const hiRef = await ImageManipulator.manipulate(uri).resize({ width: HIRES_WIDTH }).renderAsync();
-    hiResUri = (await hiRef.saveAsync({ compress: HIRES_QUALITY, format: SaveFormat.JPEG })).uri;
+    const hiRef = await ImageManipulator.manipulate(uri).renderAsync();
+    hiResUri = (await hiRef.saveAsync({ compress: SAMPLE_QUALITY, format: SaveFormat.JPEG })).uri;
   } catch {
-    /* hi-res best-effort — gdy padnie, sampel zapisze wersję modelu (fallback w persistImage) */
+    /* best-effort — gdy padnie, sampel zapisze wersję modelu (fallback w persistImage) */
   }
   return {
     uri: model.uri,
