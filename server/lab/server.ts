@@ -940,6 +940,17 @@ app.post("/api/install-name", async (c) => {
   }
 });
 
+// Oznacz logi instancji jako z urządzenia (source=app) — proxy do prod backfillu po install_id.
+app.post("/api/backfill-app-source", async (c) => {
+  const b = await c.req.json<{ installIds?: string[]; deviceModels?: string[] }>().catch(() => ({}));
+  try {
+    const r = await prodFetch("/admin/backfill-app-source", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+    return c.json(await r.json());
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
 app.post("/api/server-samples/delete", async (c) => {
   const { id } = await c.req.json<{ id: number }>();
   if (!id) return c.json({ error: "brak id" }, 400);

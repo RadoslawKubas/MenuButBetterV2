@@ -379,6 +379,11 @@ let WITH_VENUE = false, PROMPTS = null, SHOW_ARCHIVED = false;
 let LAST_RESULTS = null, LAST_JUDGMENTS = null, CURRENT_RUN_ID = null, JUDGE_MODEL = 'claude-opus-4-8', JUDGE_DEEP = true, map, markers = [];
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
+// Kopiowanie do schowka (localhost = bezpieczny kontekst; fallback execCommand) + „chip" z ID do wskazania.
+function copyText(t){ try{ navigator.clipboard.writeText(String(t)); }catch(e){ const ta=document.createElement('textarea'); ta.value=String(t); document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(_){} ta.remove(); } }
+function idChip(id, n){ if(!id) return ''; id=String(id); n=n||16; const short=id.length>n?id.slice(0,n)+'…':id;
+  return `<span class="mut" style="font-size:10px; font-family:ui-monospace,monospace">${esc(short)}</span> <button onclick="event.stopPropagation(); copyText('${esc(id)}'); var o=this.textContent; this.textContent='✓ skopiowano'; setTimeout(()=>this.textContent=o,1000)" title="kopiuj pełne ID: ${esc(id)}" style="padding:0 6px; font-size:10px; cursor:pointer; vertical-align:middle">⧉ ID</button>`; }
+
 async function api(path, body) {
   const res = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
   return res.json();
@@ -1290,7 +1295,7 @@ function renderStatsSessions(){
     }
     return `<div class="step" style="margin-bottom:8px">
       <div onclick="toggleSession(${i})" style="cursor:pointer; display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${open?'▾':'▸'} ${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
-      <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()}</div>
+      <div class="mut" style="font-size:10px; margin-top:2px">🕘 ${new Date(start).toLocaleString()} → ${new Date(end).toLocaleString()} · sesja: ${idChip(g.key,20)}</div>
       <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek (${s.photoOps} szukań) · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
       ${byOpBar(s.byOp,13)}
       <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(s.byOp,true)}</div>
@@ -1320,7 +1325,7 @@ async function loadServerSamples(btn){
     const m=x.meta||{}; const name=m.name||m.restaurantHint||('sample '+String(x.hash).slice(0,8));
     const inst = x.installId ? `<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(x.installId)}')">📱 z instancji: ${instLabel(x.installId)}</div>` : '<div class="mut small">📱 instancja nieznana (stary build)</div>';
     return `<div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div>${inst}<div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
+      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div>${inst}<div class="mut" style="font-size:10px">hash: ${idChip(String(x.hash),18)}${x.id!=null?` · serw. #${x.id}`:''}</div></div>
       <div style="display:flex; gap:6px; white-space:nowrap"><button class="primary" onclick="importServerSample(${x.id},this)" style="padding:3px 8px; font-size:12px">⬇ Importuj</button><button onclick="deleteServerSample(${x.id})" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑</button></div>
     </div>`;
   }).join('') : '<div class="mut small">Brak nieimportowanych sampli na serwerze.</div>';
@@ -1352,6 +1357,7 @@ function sampleCard(c, archived){
     <div style="flex:1; min-width:0">
       <div style="font-weight:700">${archived?'🗄 ':''}${isNew?'<span class="badge pass" style="margin-right:4px">NEW</span>':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
       <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
+      <div class="mut small">id: ${idChip(c.id,18)}</div>
       ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
       <div class="mut small" style="cursor:pointer" title="kliknij, by poprawić/usunąć wynik" onclick="editCaptureResult('${c.id}')">wynik: ${esc(res)} ✏️</div>
       ${c.groundTruth
@@ -1421,7 +1427,7 @@ async function loadAppSamples(btn){
   box.innerHTML = list.length ? list.map(x=>{
     const m=x.meta||{}; const name=m.name||m.restaurantHint||('sample '+String(x.hash).slice(0,8));
     return `<div class="cand" style="display:flex; justify-content:space-between; gap:8px; align-items:center">
-      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div><div class="mut" style="font-size:10px">hash ${esc(String(x.hash).slice(0,16))}</div></div>
+      <div><b>${esc(name)}</b><div class="mut small">${m.images?m.images+' zdj · ':''}${fmtBytes(x.bytes)} · ${new Date(x.createdAt).toLocaleString()}${m.locationHint?' · '+esc(m.locationHint):''}</div><div class="mut" style="font-size:10px">hash: ${idChip(String(x.hash),18)}${x.id!=null?` · serw. #${x.id}`:''}</div></div>
       <button onclick="deleteAppSample(${x.id})" style="padding:3px 8px; font-size:12px; color:var(--err)">🗑 usuń</button>
     </div>`;
   }).join('') : '<div class="mut small">Pusto — nic nie czeka na import w apce.</div>';
@@ -1524,13 +1530,26 @@ function instCard(i,ix){
       <button onclick="renameInstance('${esc(i.installId)}')" style="padding:2px 7px; font-size:11px; white-space:nowrap">✏️ nazwa</button>
     </div>
     <div class="mut small">📱 ${esc(dev)}${os?' · '+esc(os):''}${i.appVersion?' · '+esc(i.appVersion):''}</div>
+    <div class="mut small" style="margin-top:2px">install: ${idChip(i.installId,22)}</div>
     <div class="mut small">od ${i.firstSeen?new Date(i.firstSeen).toLocaleString():'?'} · ostatnio ${i.lastActivity?new Date(i.lastActivity).toLocaleString():(i.lastSeen?new Date(i.lastSeen).toLocaleString():'?')}</div>
     <div class="mut small">📖 ${i.scans} skanów · 💲 ${fmtUsd(i.costUsd)} · 🐞 ${i.errors} błędów · ${i.events} zdarzeń</div>
-    <div style="margin-top:6px"><button onclick="toggleInstActivity('${esc(i.installId)}',${ix})" style="padding:2px 7px; font-size:11px">📋 aktywność / szczegóły</button></div>
+    <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap">
+      <button onclick="toggleInstActivity('${esc(i.installId)}',${ix})" style="padding:2px 7px; font-size:11px">📋 aktywność / szczegóły</button>
+      <button onclick="markInstanceFromDevice('${esc(i.installId)}',this)" title="Oznacz WSZYSTKIE logi tej instancji jako source=app (realne z urządzenia, nie test). Do starych buildów bez markera." style="padding:2px 7px; font-size:11px">📲 oznacz jako z urządzenia</button>
+    </div>
     <div id="instact-${ix}"></div>
   </div>`;
 }
 async function renameInstance(id){ const cur=INST_NAMES[id]||''; const name=prompt('Nazwa instancji (puste = usuń):', cur); if(name===null) return; await api('/api/install-name',{installId:id, name:name.trim()}); loadInstances(); }
+// Oznacz WSZYSTKIE logi instancji jako z urządzenia (source=app) — backfill po install_id na prodzie.
+async function markInstanceFromDevice(id, btn){
+  if(!confirm('Oznaczyć WSZYSTKIE logi tej instancji jako „z urządzenia" (source=app, nie test/eksperyment)?\n\nTo zmienia dane na serwerze. Dla starych buildów bez markera x-client:app.')) return;
+  const o=btn.textContent; btn.disabled=true; btn.textContent='⏳ oznaczam…';
+  try{ const r=await api('/api/backfill-app-source',{installIds:[id]});
+    btn.textContent = (r&&r.ok) ? `✓ ${r.updated} logów oznaczonych` : ('✗ '+((r&&r.error)||'błąd'));
+  }catch(e){ btn.textContent='✗ błąd połączenia'; }
+  setTimeout(()=>{ btn.disabled=false; btn.textContent=o; loadInstances(); }, 1400);
+}
 async function toggleInstActivity(id,ix){
   const el=document.getElementById('instact-'+ix); if(!el) return;
   if(el.innerHTML){ el.innerHTML=''; return; }
