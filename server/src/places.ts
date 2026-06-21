@@ -20,6 +20,9 @@ export interface RestaurantInfo {
   location: { lat: number; lng: number } | null;
   country: string | null;
   city: string | null;
+  /** Rodzaj kuchni/typ lokalu z Google (np. „japanese", „pizza", „sushi") — do listy kandydatów dla vision
+   *  i do pokazania na karcie wyszukiwania. Pochodzi z primaryType/types Places. */
+  cuisine?: string | null;
   /** Nazwy zasobów zdjęć Google (do proxy /place-photo). */
   photoNames: string[];
   /** Dane z TripAdvisor (ocena + realny link), jeśli skonfigurowane. */
@@ -84,10 +87,21 @@ function pickComponent(components: PlaceComponent[] | undefined, type: string): 
   return components?.find((c) => c.types?.includes(type))?.longText ?? null;
 }
 
+// Czytelna „kuchnia"/typ z Google types (np. „japanese_restaurant" → „japanese", „pizza_restaurant" →
+// „pizza"). Generyczne („restaurant"/„food") pomijamy. Do listy kandydatów dla vision i na kartę.
+function cuisineFromTypes(primaryType?: string, types?: string[]): string | null {
+  const list = [primaryType, ...(types ?? [])].filter((t): t is string => !!t);
+  const t = list.find((x) => x.endsWith("_restaurant") && x !== "restaurant") || list.find((x) => !["restaurant", "food", "point_of_interest", "establishment", "store"].includes(x));
+  if (!t) return null;
+  const label = t.replace(/_restaurant$/, "").replace(/_/g, " ").trim();
+  return label || null;
+}
+
 function toInfo(p: Place): RestaurantInfo {
   return {
     placeId: p.id,
     name: p.displayName?.text ?? "",
+    cuisine: cuisineFromTypes(p.primaryType, p.types),
     address: p.formattedAddress ?? null,
     rating: p.rating ?? null,
     ratingCount: p.userRatingCount ?? null,

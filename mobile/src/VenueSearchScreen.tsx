@@ -248,6 +248,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
               <Text style={styles.cardName} numberOfLines={1}>{selected?.placeId === r.placeId ? "📍 " : ""}{r.name}</Text>
               {r.address ? <Text style={styles.cardAddr} numberOfLines={1}>{r.address}</Text> : null}
               <Text style={styles.cardMeta}>
+                {r.cuisine ? `🍽 ${r.cuisine} · ` : ""}
                 {r.rating != null ? `★ ${r.rating.toFixed(1)}${r.ratingCount != null ? ` (${r.ratingCount})` : ""}` : "bez ocen"}
                 {r.openNow != null ? ` · ${r.openNow ? "otwarte" : "zamknięte"}` : ""}
               </Text>

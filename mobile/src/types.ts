@@ -171,6 +171,8 @@ export interface TripAdvisorInfo {
 export interface RestaurantInfo {
   placeId: string;
   name: string;
+  /** Rodzaj kuchni/typ lokalu z Google (np. „japanese", „pizza") — pokazywany na karcie wyszukiwania. */
+  cuisine?: string | null;
   address: string | null;
   rating: number | null;
   ratingCount: number | null;

@@ -137,6 +137,9 @@ interface ScanBody {
   structureOnly?: boolean;
   /** Sekcje z wcześniejszych partii (ciągłość grup między stronami przy menu dzielonym na partie). */
   knownSections?: string[];
+  /** Lokale „w pobliżu" (Nearby Search z apki, mały promień) — nazwa + kuchnia. Vision wskaże, do
+   *  którego pasuje menu (venue_match), zwracane w kroku „meta". */
+  nearbyVenues?: { name?: string; cuisine?: string | null }[];
 }
 
 /** Normalizuje wejście (tablica lub pojedyncze) do InputImage[]. Rzuca przy błędzie. */
@@ -148,6 +151,16 @@ const MAX_TOTAL_BASE64 = 36_000_000;
 /** Hash pojedynczego zdjęcia (z base64) — klucz rejestru „złych kadrów" + identyfikacja dla apki. */
 function photoHash(base64: string): string {
   return createHash("sha256").update(base64).digest("hex").slice(0, 32);
+}
+
+/** Sanityzacja listy „w pobliżu" z apki → {name, cuisine}. Cap 12 (krótka lista do promptu). */
+function sanitizeNearby(v: { name?: string; cuisine?: string | null }[] | undefined): { name: string; cuisine?: string | null }[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v
+    .filter((x) => x && typeof x.name === "string" && x.name.trim().length > 0)
+    .slice(0, 12)
+    .map((x) => ({ name: x.name!.trim(), cuisine: typeof x.cuisine === "string" && x.cuisine.trim() ? x.cuisine.trim() : null }));
+  return out.length ? out : undefined;
 }
 
 /** Komunikat o przekroczeniu dziennego budżetu (twardy hamulec). */
@@ -238,6 +251,7 @@ app.post("/scan", async (c) => {
         enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
         structureOnly: body.structureOnly === true,
         knownSections: Array.isArray(body.knownSections) ? body.knownSections.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 40) : undefined,
+        nearbyVenues: sanitizeNearby(body.nearbyVenues),
         // Postęp odczytu na żywo: krok z licznikiem pozycji (gdy wzrośnie).
         onProgress: wantSteps
           ? (p) => {
@@ -308,7 +322,7 @@ app.post("/scan", async (c) => {
 // naturalny pasek postępu), serwer buforuje per SESJA i dopiero w /scan/run TNIE PO ROZMIARZE na partie
 // modelu, skanuje (równolegle, z ciągłością grup) i streamuje strukturę. Serwer = autorytet wielkości. ───
 interface ScanSession {
-  params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId };
+  params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId; nearbyVenues?: { name: string; cuisine?: string | null }[] };
   // index (kolejność dodania) → zdjęcie + takenAt (EXIF). Idempotentne (retry nadpisuje ten sam index).
   // KOLEJNOŚĆ DO AI ustalamy po `takenAt` (data zrobienia), z indeksem jako tie-breakerem — model dostaje
   // strony w kolejności, w jakiej user je fotografował.
@@ -363,6 +377,7 @@ app.post("/scan/start", async (c) => {
       cuisineHint: body.cuisineHint?.trim() || undefined,
       model: isModelId(body.model) ? body.model : undefined,
       enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
+      nearbyVenues: sanitizeNearby(body.nearbyVenues),
     },
     photos: new Map(),
     createdAt: Date.now(),
@@ -428,6 +443,8 @@ app.post("/scan/run", async (c) => {
           targetLang: s.params.targetLang, restaurantHint: s.params.restaurantHint, locationHint: s.params.locationHint,
           cuisineHint: s.params.cuisineHint, model, enrichModel: s.params.enrichModel, structureOnly: true,
           knownSections: bi === 0 ? undefined : knownSections,
+          // Lista „w pobliżu" tylko do PIERWSZEJ partii (ma okładkę/szyld) — venue_match emitowany raz.
+          nearbyVenues: bi === 0 ? s.params.nearbyVenues : undefined,
           onItem: wantSteps ? (it) => { st.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {}); } : undefined,
           onMeta: wantSteps ? (m) => { st.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {}); } : undefined,
         });

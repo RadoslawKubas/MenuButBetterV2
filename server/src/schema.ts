@@ -116,6 +116,8 @@ export interface MenuStructure {
   readable: boolean;
   /** true = jakość słaba (np. czytelne działy, ale pozycje za małe/rozmyte) — wynik może być NIEPEŁNY. */
   low_quality: boolean;
+  /** Wskazany lokal z listy „W POBLIŻU" (gdy była w prompcie), lub null. `index` = pozycja na liście. */
+  venue_match?: { index: number; by: "name" | "cuisine" } | null;
 }
 
 export const STRUCTURE_SCHEMA = {
@@ -155,14 +157,24 @@ export const STRUCTURE_SCHEMA = {
     notes: { type: "array", description: NOTES_SCHEMA_DESC, items: NOTE_SCHEMA_ITEM },
     readable: { type: "boolean", description: "Czy zdjęcia są dość czytelne, by odczytać menu. false = za słaba jakość (rozmazane, za ciemne, prześwietlone, ucięte) i nie da się sensownie nic transkrybować — wtedy zostaw sections puste." },
     low_quality: { type: "boolean", description: "true = jakość SŁABA: dało się odczytać część (np. nazwy działów/sekcji), ale pozycje są za małe/rozmyte/ucięte i wynik może być NIEPEŁNY albo niepewny. Mimo to wypisz wszystko, co dało się odczytać. false = zdjęcie wyraźne, odczyt pełny." },
+    venue_match: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        index: { type: "integer", description: "Indeks (0-based) lokalu z listy W POBLIŻU (jeśli była podana), który pasuje do TEGO menu." },
+        by: { type: "string", enum: ["name", "cuisine"], description: "name = dopasowano po NAZWIE widocznej na karcie; cuisine = po KUCHNI/stylu (gdy nazwy nie widać)." },
+      },
+      required: ["index", "by"],
+      description: "Gdy w prompcie była lista W POBLIŻU: wskaż lokal pasujący do tego menu. NAJPIERW po nazwie widocznej na karcie (by=name). Jeśli nazwy NIE widać, możesz dopasować po kuchni (by=cuisine) ale TYLKO gdy jednoznaczne (jeden taki w okolicy). Brak listy / brak pewnego dopasowania → null.",
+    },
   },
-  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections", "notes", "readable", "low_quality"],
+  required: ["restaurant_name", "restaurant_address", "restaurant_language", "cuisine", "sections", "notes", "readable", "low_quality", "venue_match"],
 } as const;
 
 // Przebieg 2 (TEKST, wsadowo po nazwach): wzbogaca pozycje o pola, które NIE wymagają obrazu —
 // tłumaczenie, photo_query/_local, branded, generowany opis, składniki, alergeny, kategoria, dieta,
-// ostrość — z kontekstu (kuchnia/kraj/język). Tanie, cache'owalne per pozycja. `index` = globalny
-// numer pozycji (po spłaszczeniu sekcji), `sections[].index` = pozycja sekcji w tablicy.
+// ostrość — z kontekstu (kuchnia/kraj/język). Tanie, cache'owalne per pozycja. `index` = numer pozycji
+// z LISTY PODANEJ W PROMPCIE (te same numery, gęste 0..N-1), tak samo `sections[].index`/`notes[].index`.
 export const ENRICH_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -182,7 +194,7 @@ export const ENRICH_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          index: { type: "integer", description: "Globalny numer pozycji z wejścia (po spłaszczeniu)." },
+          index: { type: "integer", description: "Numer pozycji z listy POZYCJE podanej w prompcie (ten sam numer w [..])." },
           translated: { type: "string" },
           photo_query: { type: "string", description: "KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności; opisz CZYM danie jest, nie markową/lokalną nazwą. Np. 'Mango'→'mango chicken curry indian'." },
           photo_query_local: { type: "string", description: "Nazwa do zdjęć W JĘZYKU KRAJU lokalu (z lokalizacji). Gdy język menu = język kraju, zwykle = original; gdy się nie da — powtórz photo_query." },

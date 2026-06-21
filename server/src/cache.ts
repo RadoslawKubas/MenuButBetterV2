@@ -17,7 +17,7 @@ export const CACHE_VERSION = {
   "vision-url": 1, // werdykt vision dla pojedynczego (termin,URL)
   "menu-scan": 4, // odczyt menu z DOKŁADNIE tego samego zestawu plików (hash) + ten sam kontekst (v4: zestawy + readable/low_quality)
   "menu-structure": 4, // przebieg 1: struktura menu (transkrypcja) per zestaw plików + model (v4: zestawy/menu dnia + info grupowe + jakość)
-  "item-enrich": 2, // przebieg 2: wzbogacenie pozycji (v2: tłumaczenie opisu z karty menu_description_translated)
+  "item-enrich": 3, // przebieg 2: wzbogacenie pozycji (v3: indeksy GĘSTE-lokalne — flush wpisów zatrutych rozjazdem indeksów przy re-skanie z częściowym cache)
   "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;

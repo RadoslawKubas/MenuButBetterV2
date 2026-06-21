@@ -59,7 +59,13 @@ export interface ExtractOptions {
   onEnrichItem?: (item: ScanItemStub) => void;
   /** Nazwa lokalu + KUCHNIA NA ŻYWO — gdy tylko model je ustali (kuchnia jest w JSON przed daniami),
    *  nie czekając na koniec. Apka używa kuchni do wczesnego, spójnego enrichu (klucz cache). */
-  onMeta?: (m: { restaurantName?: string; cuisine?: string }) => void;
+  onMeta?: (m: {
+    restaurantName?: string;
+    cuisine?: string;
+    /** Który lokal z `nearbyVenues` model wskazał jako pasujący do tego menu (lub null). Emitowane
+     *  po sparsowaniu struktury (na końcu, bo to obiekt — nie da się go wyłuskać ze strumienia). */
+    venueMatch?: { index: number; by: "name" | "cuisine" } | null;
+  }) => void;
   /** Pomiń cache skanu (LAB / porównania modeli — by liczyć realny koszt). */
   noCache?: boolean;
   /** Tylko STRUKTURA (vision) — bez enrichu. Zwraca Menu z oryginalnymi nazwami; enrich robi /enrich. */
@@ -67,6 +73,9 @@ export interface ExtractOptions {
   /** Nazwy sekcji/grup ze WCZEŚNIEJSZYCH stron (gdy menu dzielone na partie) — ciągłość grup między
    *  kartkami: strona bez nagłówka kontynuuje znaną sekcję zamiast tworzyć „(bez tytułu)". */
   knownSections?: string[];
+  /** Lokale „w pobliżu" (Nearby Search z apki, mały promień) — nazwa + kuchnia. Doklejane do promptu
+   *  struktury, by vision wskazało venue_match (do którego z nich pasuje to menu). Pusto = brak listy. */
+  nearbyVenues?: { name: string; cuisine?: string | null }[];
 }
 
 /** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
@@ -358,6 +367,11 @@ function contextTextStructure(opts: ExtractOptions, n: number): string {
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
     (opts.cuisineHint ? `Wstępnie rozpoznana kuchnia: ${opts.cuisineHint} (wskazówka — zweryfikuj z treścią).\n` : "") +
+    (opts.nearbyVenues?.length
+      ? `W POBLIŻU (z GPS) są te lokale:\n` +
+        opts.nearbyVenues.map((v, i) => `  ${i}) ${v.name}${v.cuisine ? ` — ${v.cuisine}` : ""}`).join("\n") +
+        `\nJeśli to menu należy do JEDNEGO z nich — wskaż go w polu venue_match. NAJPIERW po nazwie widocznej na karcie/szyldzie (by='name'); jeśli nazwy nie widać, a po KUCHNI pasuje JEDNOZNACZNIE jeden (jeden taki w okolicy) — wskaż go (by='cuisine'). Brak pewnego dopasowania → venue_match=null.\n`
+      : "") +
     (opts.knownSections?.length
       ? `UWAGA — to KOLEJNE strony tego samego menu. Sekcje/grupy z wcześniejszych stron: ${opts.knownSections.join(", ")}. ` +
         `Jeśli strona ZACZYNA się od pozycji BEZ widocznego nagłówka grupy, prawdopodobnie KONTYNUUJĄ one ostatnią grupę z poprzedniej strony — przypisz je do PASUJĄCEJ znanej sekcji (DOKŁADNIE ta sama nazwa), NIE twórz „(bez tytułu)".\n`
@@ -404,6 +418,14 @@ export async function extractMenu(
     structure = s.structure;
     total = addUsage(total, s.usage);
     if (!opts.noCache) void cacheSet("menu-structure", sck, structure);
+  }
+
+  // venue_match: który z „W POBLIŻU" wskazał model. Emituj RAZ po sparsowaniu (to obiekt — nie da się
+  // go wyłuskać ze strumienia jak restaurant_name). Tylko gdy lista była podana (inaczej nie ma sensu).
+  if (opts.onMeta && opts.nearbyVenues?.length) {
+    const vm = structure.venue_match;
+    const ok = vm && typeof vm.index === "number" && vm.index >= 0 && vm.index < opts.nearbyVenues.length;
+    opts.onMeta({ venueMatch: ok ? { index: vm!.index, by: vm!.by === "cuisine" ? "cuisine" : "name" } : null });
   }
 
   const readable = structure.readable !== false; // brak pola → traktuj jako czytelne
@@ -601,7 +623,8 @@ function emitEnrichItems(text: string, state: { emitted: number }, items: { gi: 
       try {
         const o = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
         if (typeof o.index === "number" && typeof o.photo_query === "string") {
-          const orig = items.find((x) => x.gi === o.index)?.original;
+          // index = pozycja na liście wysłanej do modelu (gęsta), więc bierzemy wprost items[index].
+          const orig = items[o.index]?.original;
           if (orig) {
             onItem({
               original: orig,
@@ -640,10 +663,13 @@ async function enrichCall(
     (opts.locationHint ? `Lokalizacja: ${opts.locationHint}.\n` : "") +
     (opts.restaurantHint ? `Lokal: ${opts.restaurantHint}.\n` : "") +
     `Język docelowy: ${opts.targetLang}.\n\n`;
-  const sectsTxt = sects.length ? "SEKCJE (index → nazwa) do przetłumaczenia:\n" + sects.map((s) => `[${s.idx}] ${s.name}`).join("\n") + "\n\n" : "";
-  const itemsTxt = items.length ? "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n" + items.map((it) => `[${it.gi}] ${it.original}${it.menu_description ? ` | ${it.menu_description}` : ""}`).join("\n") : "";
-  const notesTxt = notes.length ? "\n\nADNOTACJE (index → tekst) do przetłumaczenia:\n" + notes.map((n) => `[${n.idx}] ${n.text}`).join("\n") : "";
-  const userText = ctx + sectsTxt + itemsTxt + notesTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji, pozycji i adnotacji), używając tych samych numerów index.";
+  // INDEKS = pozycja na PODANEJ niżej liście (GĘSTE 0..N-1), NIE numer globalny. Mapowanie z powrotem na
+  // właściwe danie robi wywołujący przez needItems[index].gi — odporne, gdy model odda przesunięte indeksy
+  // (rzadkie gi przy re-skanie z częściowym cache potrafiły wpisać treść pod złe danie i zatruć cache).
+  const sectsTxt = sects.length ? "SEKCJE (index → nazwa) do przetłumaczenia:\n" + sects.map((s, i) => `[${i}] ${s.name}`).join("\n") + "\n\n" : "";
+  const itemsTxt = items.length ? "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n" + items.map((it, i) => `[${i}] ${it.original}${it.menu_description ? ` | ${it.menu_description}` : ""}`).join("\n") : "";
+  const notesTxt = notes.length ? "\n\nADNOTACJE (index → tekst) do przetłumaczenia:\n" + notes.map((n, i) => `[${i}] ${n.text}`).join("\n") : "";
+  const userText = ctx + sectsTxt + itemsTxt + notesTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji, pozycji i adnotacji), używając DOKŁADNIE tych samych numerów index z list powyżej.";
 
   if (usesOpenAiApi(model)) {
     const openai = getClientForModel(model);
@@ -750,22 +776,27 @@ export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions,
   if (needItems.length || needSects.length || needNotes.length) {
     const r = await enrichCall(model, opts, cuisine, country, needSects, needItems, needNotes);
     usage = r.usage;
+    // it.index/s.index/n.index = pozycja na liście WYSŁANEJ do modelu (need*), NIE numer globalny. Mapuj
+    // przez need*[index] na właściwe danie/sekcję/adnotację — niedopasowany indeks (poza zakresem) pomiń.
     for (const s of r.sections) {
-      if (s.index >= 0 && s.index < sectTrans.length) {
-        sectTrans[s.index] = s.name_translated;
-        if (!opts.noCache) void cacheSet("item-enrich", sectKey(structure.sections[s.index]!.name), s.name_translated, { lang: targetLang });
+      const tgt = needSects[s.index];
+      if (tgt) {
+        sectTrans[tgt.idx] = s.name_translated;
+        if (!opts.noCache) void cacheSet("item-enrich", sectKey(structure.sections[tgt.idx]!.name), s.name_translated, { lang: targetLang });
       }
     }
     for (const it of r.items) {
-      if (it.index >= 0 && it.index < flat.length) {
-        enrichByGi[it.index] = it;
-        if (!opts.noCache) void cacheSet("item-enrich", itemKey(flat[it.index]!.original, flat[it.index]!.menu_description), it, { lang: targetLang });
+      const tgt = needItems[it.index];
+      if (tgt) {
+        enrichByGi[tgt.gi] = it;
+        if (!opts.noCache) void cacheSet("item-enrich", itemKey(flat[tgt.gi]!.original, flat[tgt.gi]!.menu_description), it, { lang: targetLang });
       }
     }
     for (const n of r.notes) {
-      if (n.index >= 0 && n.index < noteTrans.length) {
-        noteTrans[n.index] = n.text_translated;
-        if (!opts.noCache) void cacheSet("item-enrich", noteKey(notes[n.index]!.text), n.text_translated, { lang: targetLang });
+      const tgt = needNotes[n.index];
+      if (tgt) {
+        noteTrans[tgt.idx] = n.text_translated;
+        if (!opts.noCache) void cacheSet("item-enrich", noteKey(notes[tgt.idx]!.text), n.text_translated, { lang: targetLang });
       }
     }
   }
