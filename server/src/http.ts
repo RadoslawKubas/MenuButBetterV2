@@ -7,7 +7,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { stream } from "hono/streaming";
 import { extractMenu, enrichMenu, menuToStructure, isModelId, MODELS, type InputImage, type MediaType } from "./menu.ts";
-import type { Menu } from "./schema.ts";
+import type { Menu, MenuSection } from "./schema.ts";
 import { describeDish } from "./dishInfo.ts";
 import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantInfo } from "./places.ts";
 import { findTripAdvisor } from "./tripadvisor.ts";
@@ -18,9 +18,9 @@ import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLo
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd } from "./db.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
-import { DEFAULT_MODEL, apiTag } from "./models.ts";
+import { DEFAULT_MODEL, apiTag, type ModelId } from "./models.ts";
 
 const app = new Hono();
 
@@ -271,6 +271,148 @@ app.post("/scan", async (c) => {
       console.error("scan error:", e);
       const msg = `Odczyt menu nie powiódł się: ${(e as Error).message}`;
       await s.write(wantSteps ? JSON.stringify({ error: msg }) + "\n" : JSON.stringify({ error: msg }));
+    } finally {
+      clearInterval(keepalive);
+    }
+  });
+});
+
+// ─── ARCHITEKTURA B: streaming upload. Apka wysyła zdjęcia POJEDYNCZO (odporne — retry per zdjęcie,
+// naturalny pasek postępu), serwer buforuje per SESJA i dopiero w /scan/run TNIE PO ROZMIARZE na partie
+// modelu, skanuje (równolegle, z ciągłością grup) i streamuje strukturę. Serwer = autorytet wielkości. ───
+interface ScanSession {
+  params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId };
+  photos: Map<number, InputImage>; // index (kolejność stron) → zdjęcie; idempotentne (retry nadpisuje)
+  createdAt: number;
+}
+const scanSessions = new Map<string, ScanSession>();
+const SCAN_SESSION_TTL_MS = 5 * 60_000;
+const MAX_SCAN_SESSIONS = 50; // sanity (chroni pamięć — apka 1-userowa, sesji mało)
+const BATCH_BUDGET_B64 = 28_000_000; // budżet ROZMIARU partii modelu (znaki base64), zapas pod MAX_TOTAL_BASE64
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of scanSessions) if (now - s.createdAt > SCAN_SESSION_TTL_MS) scanSessions.delete(id);
+}, 60_000);
+
+/** Łączy struktury partii w jedno menu: sekcje po NAZWIE (ciągłość grup), pozycje dedup po `original`. */
+function mergeStructureMenus(menus: Menu[]): Menu {
+  const empty: Menu = { restaurant_name: null, restaurant_address: null, restaurant_language: "", cuisine: "nieokreślona", sections: [], notes: [] };
+  if (menus.length === 0) return empty;
+  if (menus.length === 1) return menus[0]!;
+  const byName = new Map<string, MenuSection>();
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const m of menus) for (const s of m.sections) {
+    let sec = byName.get(s.name);
+    if (!sec) { sec = { name: s.name, name_translated: s.name_translated, items: [] }; byName.set(s.name, sec); order.push(s.name); }
+    for (const it of s.items) if (!seen.has(it.original)) { seen.add(it.original); sec.items.push(it); }
+  }
+  return {
+    restaurant_name: menus.find((m) => m.restaurant_name)?.restaurant_name ?? null,
+    restaurant_address: menus.find((m) => m.restaurant_address)?.restaurant_address ?? null,
+    restaurant_language: menus.find((m) => m.restaurant_language)?.restaurant_language ?? "",
+    cuisine: menus.find((m) => m.cuisine && m.cuisine !== "nieokreślona")?.cuisine ?? menus[0]!.cuisine,
+    sections: order.map((n) => byName.get(n)!),
+    notes: menus.flatMap((m) => m.notes ?? []),
+  };
+}
+
+app.post("/scan/start", async (c) => {
+  let body: ScanBody;
+  try { body = await c.req.json<ScanBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  if (scanSessions.size >= MAX_SCAN_SESSIONS) {
+    const oldest = [...scanSessions.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
+    if (oldest) scanSessions.delete(oldest[0]);
+  }
+  const sessionId = randomUUID();
+  scanSessions.set(sessionId, {
+    params: {
+      targetLang: body.targetLang?.trim() || "polski",
+      restaurantHint: body.restaurantHint?.trim() || undefined,
+      locationHint: body.locationHint?.trim() || undefined,
+      cuisineHint: body.cuisineHint?.trim() || undefined,
+      model: isModelId(body.model) ? body.model : undefined,
+      enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
+    },
+    photos: new Map(),
+    createdAt: Date.now(),
+  });
+  return c.json({ sessionId });
+});
+
+interface ScanPhotoBody { sessionId?: string; index?: number; base64?: string; mediaType?: string }
+app.post("/scan/photo", async (c) => {
+  let body: ScanPhotoBody;
+  try { body = await c.req.json<ScanPhotoBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  const s = body.sessionId ? scanSessions.get(body.sessionId) : undefined;
+  if (!s) return c.json({ error: "Sesja nieznana lub wygasła — zacznij skan od nowa." }, 404);
+  if (!body.base64) return c.json({ error: "Brak base64 zdjęcia." }, 400);
+  if (!body.mediaType || !ALLOWED_MEDIA.has(body.mediaType as MediaType)) {
+    return c.json({ error: "mediaType musi być image/jpeg, image/png lub image/webp." }, 400);
+  }
+  const b64 = body.base64.includes(",") ? body.base64.split(",")[1]! : body.base64;
+  if (b64.length > BATCH_BUDGET_B64) return c.json({ error: "Pojedyncze zdjęcie za duże." }, 413);
+  const idx = Number.isFinite(body.index) ? Number(body.index) : s.photos.size;
+  if (s.photos.size >= 40 && !s.photos.has(idx)) return c.json({ error: "Za dużo zdjęć w jednym skanie (max 40)." }, 413);
+  s.photos.set(idx, { base64: b64, mediaType: body.mediaType as MediaType });
+  s.createdAt = Date.now(); // odśwież TTL
+  return c.json({ ok: true, received: s.photos.size });
+});
+
+interface ScanRunBody { sessionId?: string; stream?: boolean }
+app.post("/scan/run", async (c) => {
+  let body: ScanRunBody;
+  try { body = await c.req.json<ScanRunBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  const s = body.sessionId ? scanSessions.get(body.sessionId) : undefined;
+  if (!s) return c.json({ error: "Sesja nieznana lub wygasła — zacznij skan od nowa." }, 404);
+  if (s.photos.size === 0) return c.json({ error: "Brak zdjęć w sesji." }, 400);
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
+
+  // Zdjęcia W KOLEJNOŚCI STRON; tnij PO ROZMIARZE na partie modelu (serwer = autorytet). +sufit 15 (timeout).
+  const ordered = [...s.photos.entries()].sort((a, b) => a[0] - b[0]).map(([, img]) => img);
+  scanSessions.delete(body.sessionId!);
+  const batches: InputImage[][] = [];
+  let cur: InputImage[] = []; let curB = 0;
+  for (const img of ordered) {
+    if (cur.length > 0 && (curB + img.base64.length > BATCH_BUDGET_B64 || cur.length >= 15)) { batches.push(cur); cur = []; curB = 0; }
+    cur.push(img); curB += img.base64.length;
+  }
+  if (cur.length) batches.push(cur);
+
+  const wantSteps = body.stream === true;
+  const t0 = Date.now();
+  const model = s.params.model && isModelId(s.params.model) ? s.params.model : DEFAULT_MODEL;
+  return stream(c, async (st) => {
+    if (wantSteps) await st.write(JSON.stringify({ phase: "received", images: ordered.length }) + "\n");
+    const keepalive = setInterval(() => { st.write(wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ").catch(() => {}); }, wantSteps ? 2000 : 5000);
+    try {
+      const results: Menu[] = [];
+      const tot = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+      let knownSections: string[] = [];
+      const runOne = async (bi: number) => {
+        const { menu, usage } = await extractMenu(batches[bi]!, {
+          targetLang: s.params.targetLang, restaurantHint: s.params.restaurantHint, locationHint: s.params.locationHint,
+          cuisineHint: s.params.cuisineHint, model, enrichModel: s.params.enrichModel, structureOnly: true,
+          knownSections: bi === 0 ? undefined : knownSections,
+          onItem: wantSteps ? (it) => { st.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {}); } : undefined,
+          onMeta: wantSteps ? (m) => { st.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {}); } : undefined,
+        });
+        results[bi] = menu;
+        tot.inputTokens += usage.inputTokens; tot.outputTokens += usage.outputTokens; tot.costUsd += usage.costUsd;
+      };
+      await runOne(0);
+      knownSections = (results[0]?.sections ?? []).map((x) => x.name).filter((n) => n && !/sin t[ií]tulo|untitled|bez tyt|^\(/i.test(n));
+      if (batches.length > 1) {
+        let next = 1;
+        const worker = async () => { while (next < batches.length) { const bi = next++; await runOne(bi).catch(() => { results[bi] = mergeStructureMenus([]); }); } };
+        await Promise.all(Array.from({ length: Math.min(3, batches.length - 1) }, worker));
+      }
+      const merged = mergeStructureMenus(results.filter(Boolean));
+      logEvent({ type: "scan", op: "scan", model, provider: apiTag(model), inputTokens: tot.inputTokens, outputTokens: tot.outputTokens, costUsd: tot.costUsd, data: { images: ordered.length, sections: merged.sections.length, items: merged.sections.reduce((n, sec) => n + sec.items.length, 0), targetLang: s.params.targetLang, restaurant: merged.restaurant_name ?? null, cuisine: merged.cuisine ?? null, mode: "session" } });
+      await st.write(wantSteps ? JSON.stringify({ done: true, menu: merged, usage: tot, enriched: false }) + "\n" : JSON.stringify({ menu: merged, usage: tot, enriched: false }));
+    } catch (e) {
+      console.error("scan/run error:", e);
+      await st.write(JSON.stringify({ error: `Skan nie powiódł się: ${(e as Error).message}` }) + "\n");
     } finally {
       clearInterval(keepalive);
     }
