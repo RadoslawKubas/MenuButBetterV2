@@ -27,8 +27,13 @@ export async function reverseGeocode(geo: GeoPoint): Promise<string | undefined>
     const res = await Location.reverseGeocodeAsync({ latitude: geo.lat, longitude: geo.lng });
     const r = res[0];
     if (!r) return undefined;
-    const city = r.city ?? r.subregion ?? r.region ?? undefined;
-    return [city, r.country].filter(Boolean).join(", ") || undefined;
+    // „Miasto, Region, Kraj" — region (np. Katalonia / województwo / stan) daje DŁUGIM (on-tap) opisom
+    // regionalny wibe (dish-info keyuje po regionie+kraju). Krótki enrich i tak keyuje tylko po kraju
+    // (ostatni człon), więc dodanie regionu mu nie szkodzi.
+    const city = r.city ?? r.subregion ?? undefined;
+    const parts = [city, r.region, r.country].filter((v): v is string => !!v);
+    const uniq = parts.filter((v, i) => parts.indexOf(v) === i); // dedup (miasto == region w miastach-regionach)
+    return uniq.join(", ") || undefined;
   } catch {
     return undefined;
   }

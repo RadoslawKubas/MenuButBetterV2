@@ -40,14 +40,15 @@ export async function describeDish(
 ): Promise<{ text: string; usage: Usage; cached?: boolean }> {
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
-  // ② CACHE opisu — opis jest „jak podaje się to w TEJ kuchni i regionie", więc niezależny od
-  // konkretnego lokalu. Klucz: danie + KRÓTKI OPIS (wariant, np. „tost z awokado") + kuchnia + KRAJ +
-  // język + model. Opis JEST w kluczu, więc cache'ujemy ZAWSZE bezstratnie (różny opis → różny wpis), a
-  // re-skan tego samego menu (ten sam opis) TRAFIA w cache. Wcześniej przy każdym opisie z menu pomijaliśmy
-  // cache → opisy liczyły się od zera co skan (największy powtarzalny koszt).
-  const country = input.location ? input.location.split(",").pop()?.trim() || input.location : undefined;
+  // ② CACHE opisu ROZSZERZONEGO. Klucz: danie + KRÓTKI OPIS (wariant) + kuchnia + REGION+KRAJ + język +
+  // model. Opis JEST w kluczu → cache'ujemy ZAWSZE bezstratnie (różny opis → różny wpis), a re-skan tego
+  // samego menu trafia. REGION (a nie sam kraj) — bo długi opis ma mieć regionalny wibe (Katalonia,
+  // województwo, stan…). Gdy znamy region (3 człony „miasto, region, kraj") → „region, kraj"; inaczej sam
+  // kraj. UWAGA: krótki enrich keyuje po samym kraju — region dostaje tylko TEN długi (on-tap) opis.
+  const locParts = (input.location || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const regionKey = locParts.length >= 3 ? locParts.slice(1).join(", ") : locParts[locParts.length - 1] || "";
   const useCache = !input.noCache;
-  const ck = cacheKey("dish-info", input.name, input.description ?? "", input.cuisine, country, input.targetLang, model);
+  const ck = cacheKey("dish-info", input.name, input.description ?? "", input.cuisine, regionKey, input.targetLang, model);
   if (useCache) {
     const hit = await cacheGet<string>("dish-info", ck, { op: "dish-info" });
     if (hit) return { text: hit, usage: ZERO_USAGE, cached: true };

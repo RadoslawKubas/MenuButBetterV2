@@ -1048,7 +1048,7 @@ function labelCacheParts(kind, parts){
     'item-enrich': parts[0]==='§sect' ? [['marker','§sect (tłum. nazwy SEKCJI)'],['nazwa sekcji',parts[1]],['język',parts[2]],['model',parts[3]]]
                  : parts[0]==='§note' ? [['marker','§note (tłum. ADNOTACJI)'],['tekst',parts[1]],['język',parts[2]],['model',parts[3]]]
                  : [['danie',parts[0]],['opis z menu',parts[1]],['kuchnia',parts[2]],['lokalizacja',parts[3]],['język',parts[4]],['model',parts[5]]],
-    'dish-info': [['danie',parts[0]],['opis',parts[1]],['kuchnia',parts[2]],['kraj',parts[3]],['język',parts[4]],['model',parts[5]]],
+    'dish-info': [['danie',parts[0]],['opis',parts[1]],['kuchnia',parts[2]],['region+kraj',parts[3]],['język',parts[4]],['model',parts[5]]],
     'repr-photos': [['termin (kanoniczna nazwa)',parts[0]],['kuchnia',parts[1]],['weryfikacja',parts[2]],['źródła',parts[3]],['liczba',parts[4]],['zakres',parts[5]]],
     'vision-url': [['termin',parts[0]],['URL zdjęcia',parts.slice(1).join(':')]],
   };
