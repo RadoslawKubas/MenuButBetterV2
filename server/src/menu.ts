@@ -729,9 +729,10 @@ export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions,
   const targetLang = opts.targetLang;
   const cuisine = structure.cuisine;
   const country = countryOf(opts.locationHint);
-  // Klucz cache enrichu: lokalizacja na poziomie MIASTA/REGIONU (pełny locationHint), nie tylko kraju —
-  // dokładniejsze regionalnie (np. inna paella), kosztem węższego reużycia. Fallback: kraj → "".
-  const locKey = opts.locationHint?.trim() || country || "";
+  // Klucz cache enrichu: lokalizacja na poziomie KRAJU (jak dish-info), nie miasta — to samo danie w całym
+  // kraju dzieli wpis → DUŻO więcej trafień. Model nadal dostaje pełny „miasto, kraj" (opts.locationHint)
+  // do jakości; regionalne specjały i tak różni sama NAZWA dania (np. „paella valenciana"). Fallback "".
+  const locKey = country || "";
 
   const flat: { original: string; menu_description: string }[] = [];
   for (const s of structure.sections) for (const it of s.items) flat.push({ original: it.original, menu_description: it.menu_description });
