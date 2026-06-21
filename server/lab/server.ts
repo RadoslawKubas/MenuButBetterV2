@@ -1299,19 +1299,26 @@ app.get("/api/cost-log", async (c) => {
     return (cap?.labScan?.menu?.restaurantName as string) || cap?.result?.restaurantName || ("sample " + (id ?? "").slice(0, 8));
   };
   const groupOf = (e: (typeof entries)[number]): { key: string; label: string; installId?: string } => {
+    // SESJA usera (od „nowy skan" do „nowy skan") = wspólny element WSZYSTKICH ops jednego skanu
+    // (peek, scan, enrich, zdjęcia poglądowe, „więcej zdjęć"). Nazwa lokalu to tylko etykieta.
+    const sid = (e.meta?.data as { sessionId?: string } | undefined)?.sessionId;
+    if (sid) return { key: "s:" + sid, label: (e.meta?.lokal as string) || ("Sesja " + sid.slice(0, 8)), installId: e.meta?.installId as string | undefined };
     const cid = e.meta?.captureId as string | undefined;
     if (cid) return { key: "c:" + cid, label: capName(cid) };
     const lok = e.meta?.lokal as string | undefined;
     if (lok) return { key: "r:" + lok.toLowerCase(), label: lok, installId: e.meta?.installId as string | undefined };
-    const inst = e.meta?.installId as string | undefined; // realne ops bez nazwy lokalu → grupuj per instancja
+    const inst = e.meta?.installId as string | undefined; // realne ops bez sesji/nazwy → grupuj per instancja
     if (inst) return { key: "i:" + inst, label: "📱 " + inst.slice(0, 16), installId: inst };
-    return { key: "—", label: "Inne (niepowiązane z menu)" };
+    return { key: "—", label: "Inne (niepowiązane z sesją)" };
   };
   type Prov = { provider: string; calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number };
   const gmap: Record<string, { key: string; label: string; installId?: string; totalCost: number; tokenCost: number; apiCost: number; dataCost: number; count: number; cacheHits: number; bytesSent: number; bytesRecv: number; ts: number; byProvider: Record<string, Prov>; entries: typeof entries }> = {};
   for (const e of entries) {
     const { key, label, installId } = groupOf(e);
     const g = (gmap[key] = gmap[key] || { key, label, installId, totalCost: 0, tokenCost: 0, apiCost: 0, dataCost: 0, count: 0, cacheHits: 0, bytesSent: 0, bytesRecv: 0, ts: 0, byProvider: {}, entries: [] });
+    // Sesja: gdy etykieta to placeholder „Sesja…", a ten wpis zna nazwę lokalu → podmień na nazwę.
+    const lok = e.meta?.lokal as string | undefined;
+    if (lok && g.label.startsWith("Sesja ")) g.label = lok;
     g.totalCost += e.totalCost;
     g.tokenCost += e.tokenCost;
     g.apiCost += e.apiCost;

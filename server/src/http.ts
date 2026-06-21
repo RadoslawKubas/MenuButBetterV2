@@ -59,7 +59,9 @@ app.use("/*", async (c, next) => {
   const installId = c.req.header("x-install-id") || undefined;
   // Debug apki: x-force-fresh=1 → cache POMIJA ODCZYT (świeże generowanie), ale nadal ZAPISUJE wynik.
   const forceFresh = c.req.header("x-force-fresh") === "1";
-  await reqContext.run({ installId, forceFresh }, () => next());
+  // Sesja usera (x-session-id): od „nowy skan" do „nowy skan" — wspólny tag wszystkich ops jednego skanu.
+  const sessionId = c.req.header("x-session-id") || undefined;
+  await reqContext.run({ installId, forceFresh, sessionId }, () => next());
 });
 
 // Ruch apka ↔ serwer: odebrane = upload od apki (Content-Length żądania, głównie zdjęcia),

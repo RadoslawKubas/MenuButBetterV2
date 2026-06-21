@@ -89,10 +89,16 @@ export async function registerInstall(): Promise<void> {
   } catch { /* ignoruj — rejestracja nie może wywalić apki */ }
 }
 
+// ID SESJI usera: od „nowy skan" do „nowy skan". Wspólny dla WSZYSTKICH ops jednego skanu (peek, scan,
+// enrich, zdjęcia, „więcej zdjęć") → serwer taguje nim zdarzenia, a lab grupuje statystyki per sesja.
+let SESSION_ID: string | undefined;
+export function setScanSession(id: string | undefined): void { SESSION_ID = id; }
+
 function jsonHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (APP_TOKEN) h["x-app-token"] = APP_TOKEN;
   if (INSTALL_ID) h["x-install-id"] = INSTALL_ID;
+  if (SESSION_ID) h["x-session-id"] = SESSION_ID;
   if (FORCE_FRESH) h["x-force-fresh"] = "1"; // debug: omiń odczyt z cache (serwer i tak zapisze świeży wynik)
   return h;
 }

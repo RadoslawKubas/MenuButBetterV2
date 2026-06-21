@@ -10,7 +10,7 @@ let ready = false;
 
 // Kontekst per-request: GUID instalacji apki (x-install-id). Dzięki AsyncLocalStorage KAŻDe
 // logEvent w obrębie requestu samo dostaje installId — bez przekazywania przez wszystkie wywołania.
-export const reqContext = new AsyncLocalStorage<{ installId?: string; forceFresh?: boolean }>();
+export const reqContext = new AsyncLocalStorage<{ installId?: string; forceFresh?: boolean; sessionId?: string }>();
 
 /** Współdzielona pula Postgresa (lub null bez DATABASE_URL). Używa też cache.ts. */
 export function getPool(): Pool | null {
@@ -98,7 +98,12 @@ export interface EventInput {
 export function logEvent(ev: EventInput): void {
   const p = getPool();
   if (!p || !ready) return;
-  const installId = ev.installId ?? reqContext.getStore()?.installId ?? null;
+  const ctx = reqContext.getStore();
+  const installId = ev.installId ?? ctx?.installId ?? null;
+  // sessionId (sesja usera: od „nowy skan" do „nowy skan") wmergowany w data — bez migracji schematu.
+  // To WSPÓLNY element wszystkich ops jednego skanu (peek, scan, enrich, zdjęcia) → grupowanie statystyk.
+  const sid = ctx?.sessionId;
+  const data = sid ? { ...(ev.data ?? {}), sessionId: sid } : ev.data;
   p.query(
     `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -110,7 +115,7 @@ export function logEvent(ev: EventInput): void {
       ev.inputTokens ?? null,
       ev.outputTokens ?? null,
       ev.costUsd ?? null,
-      ev.data ? JSON.stringify(ev.data) : null,
+      data ? JSON.stringify(data) : null,
       installId,
     ],
   ).catch((e) => console.error("[db] logEvent:", (e as Error).message));

@@ -19,6 +19,7 @@ import {
   scanStart,
   scanUploadPhoto,
   scanRun,
+  setScanSession,
   type ScanPhase,
   type ScanItemStub,
   fetchDishInfo,
@@ -274,6 +275,7 @@ export default function App() {
   const [structureReady, setStructureReady] = useState(false);
 
   useEffect(() => {
+    setScanSession(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`); // sesja od startu apki
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
     void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
     listScans().then(setScans).catch(() => {});
@@ -961,6 +963,8 @@ export default function App() {
   }
 
   function resetScan() {
+    // Nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops (peek/scan/enrich/zdjęcia).
+    setScanSession(`${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
     setImages([]);
     setReplayLocation(null);
     setHint("");
