@@ -1558,7 +1558,13 @@ export default function App() {
           targetLang: opts.targetLang,
           model: eff.describe,
         });
-        opts.applyMenu((prev) => (prev ? patchItem(prev, si, ii, { extraInfo: info }) : prev));
+        // Strażnik nazwy (jak w fillDescriptions): przyklej opis tylko gdy slot wciąż trzyma TO danie.
+        opts.applyMenu((prev) => {
+          if (!prev) return prev;
+          const cur = prev.sections[si]?.items[ii];
+          if (!cur || cur.original !== item.original) return prev;
+          return patchItem(prev, si, ii, { extraInfo: info });
+        });
         if (scanId) {
           await updateScanItem(scanId, si, ii, { extraInfo: info });
           await addScanUsage(scanId, usage);
@@ -1863,7 +1869,11 @@ export default function App() {
         applyMenu((prev) => {
           if (!prev) return prev;
           const cur = prev.sections[job.si]?.items[job.ii];
-          if (cur?.extraInfo) return prev; // user już dostał z dotknięcia
+          // STRAŻNIK NAZWY: opis dostajemy po NAZWIE dania, więc przyklejamy go tylko gdy slot (si,ii)
+          // wciąż trzyma TO danie. Gdy menu się przesunęło (inny `original`) — NIE przyklejaj cudzego
+          // opisu (to powodowało np. opis wody na hamburgerze). Brak nazwy danych = nie ruszaj.
+          if (!cur || cur.original !== job.name) return prev;
+          if (cur.extraInfo) return prev; // user już dostał z dotknięcia
           return patchItem(prev, job.si, job.ii, { extraInfo: info });
         });
       }
