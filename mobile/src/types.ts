@@ -89,6 +89,10 @@ export interface DishPhotoLite {
   fromVenueReason?: string;
   /** Źródłowy URL zdalny (gdy `url` to lokalny plik) — na wszelki wypadek. */
   remoteUrl?: string;
+  /** Ocena vision 0..1 (dopasowanie do dania) — pokazywana na podglądzie. */
+  score?: number;
+  /** Odrzucone (poniżej progu jakości) — pokazywane tylko przy „bierz wszystko", oznaczone. */
+  rejected?: boolean;
 }
 
 export interface MenuSection {

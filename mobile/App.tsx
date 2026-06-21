@@ -594,7 +594,7 @@ export default function App() {
           void (async () => {
             try {
               const { photos } = await fetchDishPhotos(job.original, undefined, {
-                representativeOnly: true, num: 1, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify,
+                representativeOnly: true, num: 1, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, takeAll: costPrefs.takeAllPhotos,
               });
               if (photos.length > 0) {
                 const cached = await cachePhotos(photos);
@@ -1464,6 +1464,7 @@ export default function App() {
                   photoQuery: item.photo_query,
                   photoQueryLocal: item.photo_query_local,
                   verifyModel: eff.verify,
+                  takeAll: costPrefs.takeAllPhotos,
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
         const real = realRes.photos;
@@ -1532,6 +1533,7 @@ export default function App() {
           photoQuery: job.photoQuery,
           num: 1,
           verifyModel: eff.verify,
+          takeAll: costPrefs.takeAllPhotos,
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));
         totalUsage = addUsage(totalUsage, usage);
         if (photos.length === 0) {

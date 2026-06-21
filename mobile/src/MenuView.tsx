@@ -23,6 +23,8 @@ function toLightbox(photos: MenuItem["photos"]): LightboxPhoto[] {
     fromVenue: p.fromVenue,
     fromVenueReason: p.fromVenueReason,
     attribution: p.attribution,
+    score: p.score,
+    rejected: p.rejected,
   }));
 }
 
@@ -146,7 +148,7 @@ function InfoFooter({
                   onPress={() => onPhotoOpen({ photos: toLightbox(photos), index: i })}
                   style={styles.dishPhotoWrap}
                 >
-                  <CachedImage uri={p.url} remoteUrl={p.remoteUrl} style={styles.dishPhoto} />
+                  <CachedImage uri={p.url} remoteUrl={p.remoteUrl} style={[styles.dishPhoto, p.rejected && styles.dishPhotoRejected]} />
                   {p.verified ? (
                     <View style={styles.verifiedBadge}>
                       <Text style={styles.verifiedText}>✓</Text>
@@ -155,6 +157,11 @@ function InfoFooter({
                   {p.fromVenue ? (
                     <View style={styles.venueBadge}>
                       <Text style={styles.venueBadgeText}>★</Text>
+                    </View>
+                  ) : null}
+                  {p.rejected ? (
+                    <View style={styles.rejectedBadge}>
+                      <Text style={styles.rejectedBadgeText}>❌ odrzuc.{p.score != null ? ` ${Math.round(p.score * 100)}%` : ""}</Text>
                     </View>
                   ) : null}
                   <View style={[styles.sourceBar, { backgroundColor: sourceMeta(p.source).color }]}>
@@ -571,6 +578,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   venueBadgeText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  dishPhotoRejected: { opacity: 0.45 },
+  rejectedBadge: { position: "absolute", bottom: 22, left: 6, backgroundColor: "rgba(179,38,30,0.92)", borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2 },
+  rejectedBadgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
   photoNote: { fontSize: 12, color: colors.muted, marginBottom: 10 },
   // Pasek źródła na zdjęciu w pasku rozwiniętym (z etykietą).
   sourceBar: {

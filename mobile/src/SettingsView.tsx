@@ -221,6 +221,15 @@ export function SettingsView({
             );
           })}
         </View>
+        <CostSwitch
+          label="Bierz wszystkie zdjęcia (też odrzucone)"
+          value={costPrefs.takeAllPhotos}
+          onChange={(v) => onChangeCostPrefs({ ...costPrefs, takeAllPhotos: v })}
+        />
+        <Text style={styles.sub}>
+          Domyślnie pokazujemy tylko najlepsze. Włącz, by widzieć też zdjęcia odrzucone przez weryfikację
+          (oznaczone, na końcu) wraz z oceną każdego — do wglądu, co realnie wpada.
+        </Text>
       </View>
 
       <Text style={styles.section}>Narzędzia</Text>

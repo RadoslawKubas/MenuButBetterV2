@@ -24,6 +24,10 @@ export interface LightboxPhoto {
   attribution?: string;
   /** Dodatkowa notka pod zdjęciem (np. szybki podgląd „quick peek": kuchnia/lokal/jakość). */
   note?: string;
+  /** Ocena vision 0..1 (dopasowanie do dania) — pokazywana jako %. */
+  score?: number;
+  /** Odrzucone przez weryfikację (słaba jakość) — oznaczone w podglądzie. */
+  rejected?: boolean;
 }
 
 export interface LightboxState {
@@ -145,6 +149,12 @@ export function Lightbox({
             <View style={[styles.sourceDot, { backgroundColor: meta.color }]} />
             <Text style={styles.sourceLabel}>{meta.label}</Text>
           </View>
+          {cur.rejected || cur.score != null ? (
+            <Text style={cur.rejected ? styles.rejectedTag : styles.scoreTag}>
+              {cur.rejected ? "❌ odrzucone (słaba jakość)" : "✓ trafność"}
+              {cur.score != null ? ` ${Math.round(cur.score * 100)}%` : ""}
+            </Text>
+          ) : null}
           {cur.fromVenueReason ? (
             <Text style={styles.venueReason} numberOfLines={2}>
               {cur.fromVenue ? "✓" : "✗"} {cur.fromVenueReason}
@@ -173,6 +183,8 @@ const styles = StyleSheet.create({
   closeText: { color: "#fff", fontSize: 26, fontWeight: "700" },
   infoBar: { position: "absolute", bottom: 36, alignSelf: "center", alignItems: "center", paddingHorizontal: 24 },
   peekNote: { color: "#fff", fontSize: 13, fontWeight: "700", marginBottom: 8, maxWidth: 320, textAlign: "center" },
+  scoreTag: { color: "#7fd6a0", fontSize: 12.5, fontWeight: "700", marginTop: 5 },
+  rejectedTag: { color: "#ff8a80", fontSize: 12.5, fontWeight: "800", marginTop: 5 },
   venueTag: { color: "#f1c40f", fontSize: 13, fontWeight: "800", marginBottom: 6 },
   sourceRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   sourceDot: { width: 9, height: 9, borderRadius: 5 },

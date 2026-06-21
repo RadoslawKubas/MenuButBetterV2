@@ -122,6 +122,9 @@ export interface CostPrefs {
   autoVenuePhotos: boolean;
   /** Limit dań objętych auto-dociąganiem (0 = wszystkie). Reszta tylko na dotknięcie. */
   autoLimit: number;
+  /** „Bierz wszystko": pokazuj też zdjęcia ODRZUCONE (słaba jakość), oznaczone, posortowane.
+   *  Domyślnie OFF (apka bierze tylko najlepsze). Włącz, by zobaczyć, co realnie wpada. */
+  takeAllPhotos: boolean;
 }
 
 export const DEFAULT_COST_PREFS: CostPrefs = {
@@ -129,6 +132,7 @@ export const DEFAULT_COST_PREFS: CostPrefs = {
   autoPhotos: true,
   autoVenuePhotos: true,
   autoLimit: 0,
+  takeAllPhotos: false, // domyślnie tylko najlepsze; włącz, by widzieć też odrzucone
 };
 
 export async function loadCostPrefs(): Promise<CostPrefs> {
