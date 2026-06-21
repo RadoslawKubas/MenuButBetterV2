@@ -708,7 +708,16 @@ app.post("/dish-photos", async (c) => {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       costUsd: usage.costUsd,
-      data: { dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly, restaurant: body.restaurantName?.trim() || body.restaurantHint?.trim() || null },
+      // Zapamiętujemy KANDYDATÓW (url + ocena + werdykt + cache) — żeby w labie/statystykach móc zobaczyć,
+      // co realnie wyszukano, jak ocenione i co trafiło do cache (+ podgląd fotek do oceny „czy słusznie").
+      data: {
+        dish: body.dish.trim(), resultCount: photos.length, representativeOnly: !!body.representativeOnly,
+        restaurant: body.restaurantName?.trim() || body.restaurantHint?.trim() || null,
+        cached: !!debug?.fromCache,
+        cands: (debug?.steps ?? []).flatMap((st) =>
+          (st.candidates ?? []).map((c) => ({ u: c.url, s: c.score != null ? +c.score.toFixed(2) : null, p: !!c.passed, fv: !!c.fromVenue, tier: st.tier })),
+        ).slice(0, 30),
+      },
     });
     return c.json({ photos, usage, debug });
   } catch (e) {
