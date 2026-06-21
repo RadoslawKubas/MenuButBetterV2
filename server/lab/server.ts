@@ -23,7 +23,7 @@ import { quickPeek, SYSTEM as PEEK_SYSTEM, INSTRUCTION as PEEK_INSTRUCTION } fro
 import { describeDish, SYSTEM as DESCRIBE_SYSTEM } from "../src/dishInfo.ts";
 import { scoreDishPhotos, VERIFY_SYSTEM, verifyInstruction } from "../src/verifyPhotos.ts";
 import { matchVenuePhotos, VENUE_SYSTEM, venueInstruction } from "../src/venuePhotos.ts";
-import { genericWebImages } from "../src/dishPhotos.ts";
+import { genericWebImages, restaurantImageQuery } from "../src/dishPhotos.ts";
 import { runDishPhotos } from "../src/dishPhotosPipeline.ts";
 import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
@@ -745,6 +745,18 @@ app.get("/api/prompts", (c) => {
     venuePhotos: {
       system: VENUE_SYSTEM,
       user: venueInstruction(["{danie 1}", "{danie 2}", "…"], "{kuchnia}") + "\n\n[+ zdjęcia Google Places i TripAdvisor, każde z etykietą i źródłem]",
+    },
+    photoSearch: {
+      system: "To NIE prompt do modelu — to ZAPYTANIA do wyszukiwarek obrazów. Termin szukania = photo_query z ENRICHU (kanoniczna nazwa po angielsku + typ/kuchnia, np. chicken curry indian). Potem każdy kandydat przechodzi weryfikację wizją (patrz: verify).",
+      user:
+        "— POGLĄDOWE (typ dania) —\n" +
+        "Serper (Google Images):  " + restaurantImageQuery("{photo_query}") + "\n" +
+        "Wikimedia Commons:       gsrsearch = {photo_query}\n" +
+        "Openverse:               q = {photo_query}\n\n" +
+        "— Z LOKALU (★) —\n" +
+        "Strona lokalu:           {nazwa z menu} site:{domena lokalu}\n" +
+        "Portale recenzenckie:    {nazwa z menu} {nazwa lokalu} {miasto} (site:tripadvisor.com OR site:yelp.com OR …)",
+      note: "termin (photo_query) generuje ENRICH; domeny generyczne z DISH_PHOTO_DOMAINS",
     },
   });
 });
