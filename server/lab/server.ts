@@ -1298,16 +1298,37 @@ app.get("/api/cost-log", async (c) => {
     const cap = meta.find((x) => x.id === id);
     return (cap?.labScan?.menu?.restaurantName as string) || cap?.result?.restaurantName || ("sample " + (id ?? "").slice(0, 8));
   };
+  // REKONSTRUKCJA SESJI dla STARYCH zdarzeń (bez data.sessionId i bez captureId): klastrujemy
+  // chronologicznie. Nowa sesja = pojawia się SKAN (z 3-min buforem, by wielopartiowy skan się nie
+  // rozpadł) ALBO duża przerwa (>8 min). Fałszywe, stabilne id per klaster — żeby historia miała sensowne
+  // sesje (po skanie), a nie zlepek wszystkiego po nazwie lokalu.
+  const realSid = (e: (typeof entries)[number]) => (e.meta?.data as { sessionId?: string } | undefined)?.sessionId;
+  const synth = new Map<(typeof entries)[number], string>();
+  {
+    const GAP = 8 * 60_000, SCAN_COALESCE = 3 * 60_000;
+    const chrono = entries.filter((e) => !realSid(e) && !(e.meta?.captureId)).sort((a, b) => a.ts - b.ts);
+    let cur = "", lastTs = 0, lastScanTs = 0, hasScan = false, n = 0;
+    for (const e of chrono) {
+      const gap = lastTs && e.ts - lastTs > GAP;
+      const newScan = e.op === "scan" && hasScan && e.ts - lastScanTs > SCAN_COALESCE;
+      if (!cur || gap || newScan) { cur = "h" + (++n).toString(36) + Math.round(e.ts / 1000).toString(36); hasScan = false; }
+      if (e.op === "scan") { hasScan = true; lastScanTs = e.ts; }
+      synth.set(e, cur);
+      lastTs = e.ts;
+    }
+  }
   const groupOf = (e: (typeof entries)[number]): { key: string; label: string; installId?: string } => {
-    // SESJA usera (od „nowy skan" do „nowy skan") = wspólny element WSZYSTKICH ops jednego skanu
-    // (peek, scan, enrich, zdjęcia poglądowe, „więcej zdjęć"). Nazwa lokalu to tylko etykieta.
-    const sid = (e.meta?.data as { sessionId?: string } | undefined)?.sessionId;
-    if (sid) return { key: "s:" + sid, label: (e.meta?.lokal as string) || ("Sesja " + sid.slice(0, 8)), installId: e.meta?.installId as string | undefined };
+    // SESJA usera = wspólny element WSZYSTKICH ops jednego skanu. Realne sessionId (nowe buildy) → bezpośrednio;
+    // sample labu → captureId; stare zdarzenia prod → zrekonstruowana sesja (synth). Nazwa lokalu = etykieta.
+    const inst = e.meta?.installId as string | undefined;
+    const sid = realSid(e);
+    if (sid) return { key: "s:" + sid, label: (e.meta?.lokal as string) || ("Sesja " + sid.slice(0, 8)), installId: inst };
     const cid = e.meta?.captureId as string | undefined;
     if (cid) return { key: "c:" + cid, label: capName(cid) };
+    const ssid = synth.get(e);
+    if (ssid) return { key: "s:" + ssid, label: (e.meta?.lokal as string) || ("Sesja " + ssid), installId: inst };
     const lok = e.meta?.lokal as string | undefined;
-    if (lok) return { key: "r:" + lok.toLowerCase(), label: lok, installId: e.meta?.installId as string | undefined };
-    const inst = e.meta?.installId as string | undefined; // realne ops bez sesji/nazwy → grupuj per instancja
+    if (lok) return { key: "r:" + lok.toLowerCase(), label: lok, installId: inst };
     if (inst) return { key: "i:" + inst, label: "📱 " + inst.slice(0, 16), installId: inst };
     return { key: "—", label: "Inne (niepowiązane z sesją)" };
   };
