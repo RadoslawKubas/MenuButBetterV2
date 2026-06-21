@@ -362,7 +362,7 @@ function scanCacheKey(images: InputImage[], opts: ExtractOptions, model: ModelId
 
 // Kontekst dla PRZEBIEGU 1 (struktura) — bez instrukcji tłumaczenia; lokalizacja/kuchnia pomagają
 // poprawnie odczytać lokalne nazwy dań.
-function contextTextStructure(opts: ExtractOptions, n: number): string {
+export function contextTextStructure(opts: ExtractOptions, n: number): string {
   return (
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +

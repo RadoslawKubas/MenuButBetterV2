@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
-import { extractMenu, contextText, SYSTEM as MENU_SYSTEM, type InputImage } from "../src/menu.ts";
+import { extractMenu, STRUCTURE_SYSTEM, contextTextStructure, ENRICH_SYSTEM, type InputImage } from "../src/menu.ts";
 import { quickPeek, SYSTEM as PEEK_SYSTEM, INSTRUCTION as PEEK_INSTRUCTION } from "../src/quickPeek.ts";
 import { describeDish, SYSTEM as DESCRIBE_SYSTEM } from "../src/dishInfo.ts";
 import { scoreDishPhotos, VERIFY_SYSTEM, verifyInstruction } from "../src/verifyPhotos.ts";
@@ -712,18 +712,32 @@ app.get("/api/state", (c) => {
 
 // Podgląd PRAWDZIWYCH promptów (system + szablon treści użytkownika) per operacja.
 app.get("/api/prompts", (c) => {
+  // PRZEBIEG 1 (struktura) — realny kontekst z contextTextStructure + lista lokali „w pobliżu" (venue_match).
   const scanUser =
-    contextText(
-      { targetLang: "polski", restaurantHint: "{lokal? — opcjonalnie}", locationHint: "{Miasto, Kraj z GPS}", cuisineHint: "{kuchnia z peek? — opcjonalnie}" },
+    contextTextStructure(
+      {
+        targetLang: "polski",
+        restaurantHint: "{lokal? — opcjonalnie}",
+        locationHint: "{Miasto, Region, Kraj z GPS}",
+        cuisineHint: "{kuchnia z peek? — opcjonalnie}",
+        nearbyVenues: [{ name: "{lokal w pobliżu 1}", cuisine: "{kuchnia}" }, { name: "{lokal w pobliżu 2}", cuisine: "{kuchnia}" }],
+      },
       3,
     ) + "\n\n[+ N zdjęć menu, każde z etykietą porządkową]";
+  // PRZEBIEG 2 (enrich) — szablon treści (1:1 z enrichCall): kontekst + SEKCJE + POZYCJE, partiami ~8 dań.
+  const enrichUser =
+    "Kuchnia: {kuchnia}.\nKraj/region lokalu: {kraj}.\nLokalizacja: {Miasto, Region, Kraj}.\nLokal: {nazwa? — opcjonalnie}.\nJęzyk docelowy: polski.\n\n" +
+    "SEKCJE (index → nazwa) do przetłumaczenia:\n[0] {nazwa sekcji}\n[1] …\n\n" +
+    "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n[0] {danie}\n[1] {danie} | {opis z karty?}\n[2] …\n\n" +
+    "Zwróć enrich dla KAŻDEGO podanego indeksu (sekcji, pozycji i adnotacji), używając DOKŁADNIE tych samych numerów index z list powyżej.";
   const describeUser =
-    "Danie: {nazwa}\nKrótki opis z menu: {opis}\nRodzaj kuchni: {kuchnia}\nLokalizacja lokalu: {Miasto, Kraj}\n" +
+    "Danie: {nazwa}\nKrótki opis z menu: {opis}\nRodzaj kuchni: {kuchnia}\nLokalizacja lokalu: {Miasto, Region, Kraj}\n" +
     "Restauracja: {nazwa lokalu}\nJęzyk odpowiedzi: polski\n\nRozwiń informacje o tym daniu, trzymając się powyższego kontekstu.";
   return c.json({
     peek: { system: PEEK_SYSTEM, user: PEEK_INSTRUCTION + "\n\n[+ 1 zdjęcie menu]" },
-    scan: { system: MENU_SYSTEM, user: scanUser },
-    describe: { system: DESCRIBE_SYSTEM, user: describeUser, note: "bez obrazu (tekstowo)" },
+    scan: { system: STRUCTURE_SYSTEM, user: scanUser, note: "Przebieg 1 — STRUKTURA (vision, ze zdjęciami): nazwy/ceny/sekcje + kuchnia + venue_match" },
+    enrich: { system: ENRICH_SYSTEM, user: enrichUser, note: "Przebieg 2 — WZBOGACANIE (tekstowo, bez obrazu): tłumaczenia + photo_query + krótki opis, partiami ~8 dań" },
+    describe: { system: DESCRIBE_SYSTEM, user: describeUser, note: "Długi opis (więcej info, on-tap, tekstowo, bez obrazu)" },
     verify: {
       system: VERIFY_SYSTEM,
       user: verifyInstruction("{nazwa dania}", "{kuchnia}") + "\n\n[+ N zdjęć kandydatów, każde z etykietą porządkową]",
