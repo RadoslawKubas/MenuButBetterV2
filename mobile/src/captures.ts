@@ -56,6 +56,8 @@ export interface ScanCapture {
   runs?: { scanId: string; at: number }[];
   /** Sygnatura WEJŚCIA (zdjęcia + podpowiedzi + lokalizacja) — do dedupu identycznych migawek. */
   sig?: string;
+  /** Pochodzenie: "app" = powstała w apce (własny skan), "server" = zaciągnięta z serwera (z labu). */
+  origin?: "app" | "server";
 }
 
 /** Zwraca przebiegi migawki (z fallbackiem do starego pojedynczego scanId). */
@@ -193,6 +195,7 @@ export async function saveCapture(input: {
     useDeviceLocation: input.useDeviceLocation,
     images,
     sig,
+    origin: "app", // własny skan w aplikacji
   };
   all.unshift(capture); // najnowsze na górze
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
@@ -485,6 +488,7 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
       useDeviceLocation: entry.useDeviceLocation ?? true,
       images,
       sig,
+      origin: "server", // zaciągnięta z serwera (z labu)
       scanId: scanId ?? undefined,
       runs: scanId ? [{ scanId, at: Date.now() }] : undefined,
     });

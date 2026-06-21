@@ -252,6 +252,7 @@ export default function App() {
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
   const scanGenRef = useRef(0); // generacja skanu — rośnie z każdym runScan; odsiewa spóźnione callbacki starych skanów
+  const replayCaptureIdRef = useRef<string | null>(null); // replay z migawki → REUŻYJ tej migawki (nie twórz nowej)
   const venueFinalizedRef = useRef(false); // czy lokal zapisany do skanu (raz na skan)
   const previewStartedRef = useRef(false); // czy ruszyło dociąganie TANICH poglądowych (★ z lokalu czeka na to)
   const venueUpgradedRef = useRef(false); // czy ★ z lokalu już podmieniane (raz na skan)
@@ -545,15 +546,23 @@ export default function App() {
       // eksport dołączył też WYNIK. Nie blokuje skanu krytycznie (przy błędzie → null).
       let capture: ScanCapture | null = null;
       if (opts.recordCapture !== false) {
-        capture = await saveCapture({
-          images: opts.images,
-          restaurantHint: opts.hint.trim() || undefined,
-          locationHint,
-          location,
-          locationSource,
-          useExifLocation: opts.useExifLocation,
-          useDeviceLocation: opts.useDeviceLocation,
-        }).catch(() => null);
+        // REPLAY z istniejącej migawki → REUŻYJ jej (nowy scanId podepniemy niżej przez addCaptureRun),
+        // żeby ponowne wyszukiwanie z tej samej próbki NIE tworzyło nowej migawki (mylące).
+        if (replayCaptureIdRef.current) {
+          const caps = await listCaptures().catch(() => [] as ScanCapture[]);
+          capture = caps.find((c) => c.id === replayCaptureIdRef.current) ?? null;
+        }
+        if (!capture) {
+          capture = await saveCapture({
+            images: opts.images,
+            restaurantHint: opts.hint.trim() || undefined,
+            locationHint,
+            location,
+            locationSource,
+            useExifLocation: opts.useExifLocation,
+            useDeviceLocation: opts.useDeviceLocation,
+          }).catch(() => null);
+        }
         listCaptures().then(setCaptures).catch(() => {});
       }
 
@@ -975,6 +984,7 @@ export default function App() {
     setOpenScan(null);
     setTab("scan");
     resetScan();
+    replayCaptureIdRef.current = c.id; // to REPLAY tej migawki → kolejny skan podepnie się do niej (bez duplikatu)
     // Wstaw dane migawki do formularza skanu (bez startu — czekamy na klik użytkownika).
     setImages(imgs);
     setHint(c.restaurantHint ?? "");
@@ -986,6 +996,7 @@ export default function App() {
   }
 
   function resetScan() {
+    replayCaptureIdRef.current = null; // ręczny „nowy skan" → to nie replay (świeża migawka)
     newSession(); // nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops
     setImages([]);
     setReplayLocation(null);

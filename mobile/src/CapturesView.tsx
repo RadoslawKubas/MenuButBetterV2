@@ -292,7 +292,10 @@ export function CapturesView({
                       {c.name || fmtWhen(c.createdAt)}
                     </Text>
                     <Text style={styles.titleSub}>
-                      🕘 {fmtAgo(c.createdAt)}
+                      <Text style={c.origin === "server" ? styles.originServer : c.origin === "app" ? styles.originApp : styles.titleSub}>
+                        {c.origin === "server" ? "☁ z serwera" : c.origin === "app" ? "📱 własny" : "• pochodzenie ?"}
+                      </Text>
+                      {" · "}🕘 {fmtAgo(c.createdAt)}
                       {c.name ? ` · ${fmtWhen(c.createdAt)}` : ""}
                     </Text>
                   </View>
@@ -452,6 +455,8 @@ const styles = StyleSheet.create({
   titleMain: { flex: 1 },
   title: { fontSize: 15, fontWeight: "800", color: colors.text },
   titleSub: { fontSize: 11, color: colors.muted, marginTop: 1 },
+  originServer: { fontSize: 11, color: "#5aa9e6", fontWeight: "700" }, // ☁ z serwera
+  originApp: { fontSize: 11, color: "#7fd6a0", fontWeight: "700" }, // 📱 własny
   rename: { fontSize: 16, paddingLeft: 10 },
   sampleRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" },
   sampleBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: "hidden" },
