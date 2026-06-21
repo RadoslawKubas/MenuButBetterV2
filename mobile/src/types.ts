@@ -37,6 +37,8 @@ export interface MenuItem {
   spice_level: 0 | 1 | 2 | 3;
   price: string | null;
   currency: string | null;
+  /** Warianty cenowe (rozmiary/opcje), gdy pozycja ma >1 cenę (wtedy price=null). */
+  variants?: { label: string; price: string }[];
   /** Czy pozycja przeszła już ENRICH (tłumaczenie/opis). false/undefined = surowa struktura — apka
    *  pokazuje wtedy spinner „tłumaczę…" gdy enrich leci w tle. */
   enriched?: boolean;
@@ -99,6 +101,8 @@ export interface MenuSection {
   name: string;
   name_translated: string;
   items: MenuItem[];
+  /** Ograniczenie czasowe sekcji (menu dnia/lunch/weekend/sezon), np. „pn-pt 13-16". */
+  availability?: string | null;
 }
 
 export const NOTE_KINDS = ["set", "included", "wait", "fee", "tax", "tip", "hours", "info"] as const;

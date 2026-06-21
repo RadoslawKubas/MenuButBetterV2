@@ -349,6 +349,11 @@ export function MenuView({
                 <Text style={styles.sectionCount}>  ({section.items.length})</Text>
               </Text>
               <Text style={styles.sectionOriginal}>{section.name}</Text>
+              {section.availability ? (
+                <View style={styles.availBadge}>
+                  <Text style={styles.availText}>⏰ {section.availability}</Text>
+                </View>
+              ) : null}
             </View>
           </Pressable>
           {!isCollapsed ? <NotesBlock notes={secNotes} /> : null}
@@ -360,7 +365,7 @@ export function MenuView({
                   <View style={styles.cardMain}>
                     <View style={styles.cardHeader}>
                       <Text style={styles.itemName}>{item.translated}</Text>
-                      {item.price ? (
+                      {item.price && !(item.variants && item.variants.length > 0) ? (
                         <Text style={styles.price} numberOfLines={2}>
                           {item.price}
                           {item.currency ? ` ${item.currency}` : ""}
@@ -368,6 +373,16 @@ export function MenuView({
                       ) : null}
                     </View>
                     <Text style={styles.original}>{item.original}</Text>
+                    {item.variants && item.variants.length > 0 ? (
+                      <View style={styles.variantsRow}>
+                        {item.variants.map((v, k) => (
+                          <View key={k} style={styles.variantPill}>
+                            <Text style={styles.variantLabel}>{v.label}</Text>
+                            <Text style={styles.variantPrice}>{v.price}{item.currency ? ` ${item.currency}` : ""}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
                     {enriching && !item.enriched ? (
                       <View style={styles.pendingRow}>
                         <ActivityIndicator size="small" color={colors.muted} />
@@ -523,6 +538,14 @@ const styles = StyleSheet.create({
   // zawijają się do 2 linii zamiast spychać nazwę w wąską kolumnę). textAlign do prawej.
   price: { fontSize: 16, fontWeight: "700", color: colors.text, flexShrink: 0, maxWidth: 120, textAlign: "right" },
   original: { fontSize: 13, color: colors.muted, marginTop: 2, fontStyle: "italic" },
+  // Warianty cenowe (rozmiary) — pigułki pod nazwą; etykieta + cena.
+  variantsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
+  variantPill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.badgeBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  variantLabel: { fontSize: 12, color: colors.muted },
+  variantPrice: { fontSize: 12, fontWeight: "800", color: colors.text },
+  // Plakietka ograniczenia czasowego sekcji (menu dnia / weekend / sezon).
+  availBadge: { alignSelf: "flex-start", backgroundColor: "#f6e0c0", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, marginTop: 3 },
+  availText: { fontSize: 12, color: "#8a5a1a", fontWeight: "700" },
   pendingRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
   pendingText: { fontSize: 12, color: colors.muted, fontStyle: "italic" },
   menuDesc: { fontSize: 13, color: colors.text, marginTop: 4, lineHeight: 18, fontStyle: "italic" },

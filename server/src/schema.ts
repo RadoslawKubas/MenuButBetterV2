@@ -73,12 +73,16 @@ export interface MenuItem {
   spice_level: 0 | 1 | 2 | 3;
   price: string | null;
   currency: string | null;
+  /** Warianty cenowe (rozmiary/opcje) — gdy >1 ceny. Inaczej puste/undefined (jedna cena w `price`). */
+  variants?: PriceVariant[];
 }
 
 export interface MenuSection {
   name: string;
   name_translated: string;
   items: MenuItem[];
+  /** Ograniczenie czasowe sekcji (menu dnia/lunch/weekend/sezon), np. „pn-pt 13-16". Brak → undefined. */
+  availability?: string | null;
 }
 
 export interface Menu {
@@ -95,6 +99,8 @@ export interface Menu {
 // Przebieg 1 (VISION, per zdjęcie): TYLKO to, co wymaga zobaczenia kartki — struktura, oryginalne
 // nazwy, ceny i ewentualny opis NADRUKOWANY na menu (transkrypcja, nie generowanie). Mały output
 // = taniej/szybciej/mniej ucięć, świetne recovery i cache per zdjęcie.
+/** Wariant ceny (rozmiar/opcja): np. {label:"duża", price:"28"}. Pusta tablica = jedna cena (w `price`). */
+export interface PriceVariant { label: string; price: string }
 export interface StructItem {
   original: string;
   /** Opis WIDOCZNY na menu (transkrypcja), jeśli jest — inaczej "". Generowany opis robi enrich. */
@@ -103,8 +109,11 @@ export interface StructItem {
   source_text: string;
   price: string | null;
   currency: string | null;
+  /** Warianty cenowe (rozmiary/opcje) — gdy >1 ceny; wtedy `price`=null. Inaczej pusta tablica. */
+  variants: PriceVariant[];
 }
-export interface StructSection { name: string; items: StructItem[] }
+/** Ograniczenie czasowe sekcji (menu dnia/lunch/weekend/sezon): krótki tekst, np. „pn-pt 13-16". null=brak. */
+export interface StructSection { name: string; items: StructItem[]; availability: string | null }
 export interface MenuStructure {
   restaurant_name: string | null;
   restaurant_address: string | null;
@@ -135,6 +144,7 @@ export const STRUCTURE_SCHEMA = {
         additionalProperties: false,
         properties: {
           name: { type: "string", description: "Oryginalna nazwa sekcji (jak na menu)." },
+          availability: { type: ["string", "null"], description: "Ograniczenie czasowe TEJ sekcji/menu (menu dnia tylko w tygodniu, brunch weekendowy, dania sezonowe/świąteczne itp.) — KRÓTKO, np. 'pn-pt 13-16', 'weekend', 'sezonowo'. Brak ograniczenia → null." },
           items: {
             type: "array",
             items: {
@@ -144,14 +154,15 @@ export const STRUCTURE_SCHEMA = {
                 original: { type: "string", description: "Nazwa dania DOKŁADNIE jak na menu (oryginał)." },
                 menu_description: { type: "string", description: "Opis NADRUKOWANY na menu pod/obok dania (transkrypcja). Gdy brak — pusty string." },
                 source_text: { type: "string", description: "Przepisany FRAGMENT karty dla tej pozycji: pełna linijka/blok jak na menu (nazwa + ew. opis + cena), słowo w słowo — do pokazania skąd pochodzi pozycja." },
-                price: { type: ["string", "null"], description: "Cena jako tekst, lub null gdy nie widać." },
+                price: { type: ["string", "null"], description: "Cena jako tekst, lub null gdy nie widać (LUB gdy są warianty — wtedy ceny idą do `variants`, a tu null)." },
                 currency: { type: ["string", "null"], description: "Waluta, np. 'EUR', lub null." },
+                variants: { type: "array", description: "Warianty cenowe, gdy pozycja ma KILKA cen (rozmiary/opcje: mała/duża, kieliszek/butelka, 0,3/0,5 l). Wtedy `price`=null. Inaczej pusta tablica.", items: { type: "object", additionalProperties: false, properties: { label: { type: "string", description: "Etykieta wariantu jak na menu (np. 'mała', 'duża', '0,5 l')." }, price: { type: "string", description: "Cena tego wariantu jako tekst." } }, required: ["label", "price"] } },
               },
-              required: ["original", "menu_description", "source_text", "price", "currency"],
+              required: ["original", "menu_description", "source_text", "price", "currency", "variants"],
             },
           },
         },
-        required: ["name", "items"],
+        required: ["name", "availability", "items"],
       },
     },
     notes: { type: "array", description: NOTES_SCHEMA_DESC, items: NOTE_SCHEMA_ITEM },

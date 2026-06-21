@@ -348,7 +348,8 @@ function mergeStructureMenus(menus: Menu[]): Menu {
   const seen = new Set<string>();
   for (const m of menus) for (const s of m.sections) {
     let sec = byName.get(s.name);
-    if (!sec) { sec = { name: s.name, name_translated: s.name_translated, items: [] }; byName.set(s.name, sec); order.push(s.name); }
+    if (!sec) { sec = { name: s.name, name_translated: s.name_translated, availability: s.availability, items: [] }; byName.set(s.name, sec); order.push(s.name); }
+    else if (!sec.availability && s.availability) sec.availability = s.availability;
     for (const it of s.items) if (!seen.has(it.original)) { seen.add(it.original); sec.items.push(it); }
   }
   return {
