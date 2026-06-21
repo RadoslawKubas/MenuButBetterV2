@@ -37,7 +37,12 @@ export async function getSessions(opts: { since?: number; source?: string }): Pr
   const sc = await p.query(
     `SELECT data->>'sessionId' AS sid,
        (array_remove(array_agg(install_id ORDER BY created_at), NULL))[1] AS install,
-       (array_remove(array_agg(data->>'restaurant'), NULL))[1] AS restaurant,
+       -- Nazwa lokalu: NAJPIERW ze zdarzenia 'scan' (wiarygodna — odczyt vizją z menu), bo zdarzenia dań
+       -- mają w starych danych ZABRUDZONĄ nazwę (przeciek lokalu między skanami w starej apce). Fallback: dowolna.
+       coalesce(
+         (array_remove(array_agg(data->>'restaurant' ORDER BY created_at) FILTER (WHERE op = 'scan'), NULL))[1],
+         (array_remove(array_agg(data->>'restaurant' ORDER BY created_at), NULL))[1]
+       ) AS restaurant,
        extract(epoch FROM min(created_at)) * 1000 AS startms,
        extract(epoch FROM max(created_at)) * 1000 AS endms,
        count(*)::int AS n,
