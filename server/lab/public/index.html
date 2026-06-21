@@ -82,6 +82,7 @@
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
     <button class="tab" id="tabBtn-services" onclick="switchTab('services')">🔌 Serwisy</button>
     <button class="tab" id="tabBtn-deploy" onclick="switchTab('deploy')">🚀 Deploy</button>
+    <button class="tab" id="tabBtn-stats" onclick="switchTab('stats')">📊 Statystyki</button>
   </nav>
   <span class="mut small" id="dir"></span>
   <span style="flex:1"></span>
@@ -291,6 +292,25 @@
     <div id="deployBuilds" class="mut">ładuję…</div>
     <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Historia wgrań (24h liczone z udanych)</div>
     <div id="deployHistory" class="mut"></div>
+  </div>
+</div>
+
+<div id="tab-stats" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>📊 Statystyki kosztów — ile realnie kosztują skany</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      <button onclick="loadStats(this)" style="padding:4px 10px">↻ odśwież</button>
+      <span class="mut small">Wszystko przeliczone wg AKTUALNEGO cennika (zmień w zakładce 💰 Cennik → tu się przeliczy). Realne skany z produkcji + lab.</span>
+    </div>
+    <div id="statsPeriod" class="chips" style="margin-bottom:10px"></div>
+    <div id="statsSummary">ładuję…</div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Wydatki dziennie</div>
+    <div id="statsDaily"></div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Per API (zapytania · tokeny · koszt)</div>
+    <div id="statsByApi"></div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Sesje skanów menu</div>
+    <input id="statsSearch" placeholder="szukaj po nazwie restauracji…" oninput="renderStatsSessions()" style="width:100%; padding:6px 10px; margin-bottom:8px; font-size:13px">
+    <div id="statsSessions"></div>
   </div>
 </div>
 
@@ -889,7 +909,7 @@ async function simDish(i){
 let COST_PERIOD='all', COST_GROUPS=[], EGRESS_RATE=0.1, CURRENT_TAB='lab';
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','instances','prices','services','deploy'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','instances','prices','services','deploy','stats'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
@@ -897,6 +917,7 @@ function switchTab(name){
   else if(name==='prices'){ loadPrices(); }
   else if(name==='services'){ loadServices(); }
   else if(name==='deploy'){ loadDeploy(); }
+  else if(name==='stats'){ renderStatsPeriod(); loadStats(); }
   else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); loadAppSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
@@ -1157,6 +1178,77 @@ async function deleteBuild(ipa){
   if(!confirm('Usunąć lokalny plik '+ipa+'?')) return;
   try{ const r=await api('/api/deploy/delete-build',{ipa}); if(r&&r.error){ alert(r.error); return; } loadDeploy(); }
   catch(e){ alert('Błąd: '+e); }
+}
+
+/* ---- Statystyki (zakładka 📊 Statystyki) — koszty wg AKTUALNEGO cennika ---- */
+let STAT_PERIOD='30d'; let STATS=null;
+const PROV_LABEL={claude:'Anthropic (Claude)',openai:'OpenAI (GPT)',google:'Google Gemini',google_places:'Google Places',serper:'Serper',serpapi:'SerpApi',tripadvisor:'TripAdvisor',wikimedia:'Wikimedia',openverse:'Openverse',google_cse:'Google CSE'};
+function renderStatsPeriod(){
+  const opts=[['today','Dziś'],['7d','7 dni'],['30d','30 dni'],['all','Wszystko']];
+  document.getElementById('statsPeriod').innerHTML=opts.map(([k,l])=>`<div class="chip ${STAT_PERIOD===k?'on':''}" onclick="setStatsPeriod('${k}')">${l}</div>`).join('');
+}
+function setStatsPeriod(k){ STAT_PERIOD=k; renderStatsPeriod(); loadStats(); }
+async function loadStats(btn){
+  if(btn) btn.disabled=true;
+  document.getElementById('statsSummary').innerHTML='ładuję…';
+  try{ STATS=await api('/api/cost-log?period='+STAT_PERIOD); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  renderStatsSummary(); renderStatsDaily(); renderStatsByApi(); renderStatsSessions();
+  if(btn) btn.disabled=false;
+}
+function allEntries(){ return (STATS&&STATS.groups||[]).flatMap(g=>g.entries||[]); }
+function renderStatsSummary(){
+  const a=STATS.agg||{}; const sv=STATS.savings||{};
+  const srcNote = STATS.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(STATS.prodErr)})` : (STATS.prodCount!=null?` · realne z produkcji: ${STATS.prodCount}`:'');
+  document.getElementById('statsSummary').innerHTML=`
+    <div class="step">
+      <div style="font-size:26px; font-weight:800; color:var(--acc)">${fmtUsd(a.totalCost)}</div>
+      <div class="mut small">${a.count||0} operacji · ${(STATS.groups||[]).length} sesji menu · okres: ${STAT_PERIOD}${srcNote}</div>
+      <div class="mut small" style="margin-top:5px">🧠 tokeny: ${fmtUsd(a.tokenCost)} · 🔌 API/zapytania: ${fmtUsd(a.apiCost)} · 📡 transfer: ${fmtUsd(a.dataCost)} · tok ${fmtTokk(a.inTok)} in / ${fmtTokk(a.outTok)} out</div>
+      ${sv.cost?`<div class="small" style="margin-top:5px; color:#7fd6a0">💾 cache zaoszczędził ~${fmtUsd(sv.cost)} (${sv.count||0} trafień)</div>`:''}
+    </div>`;
+}
+function renderStatsDaily(){
+  const byDay={};
+  for(const e of allEntries()){ const day=new Date(e.ts).toISOString().slice(0,10); byDay[day]=(byDay[day]||0)+(e.totalCost||0); }
+  const days=Object.keys(byDay).sort();
+  if(!days.length){ document.getElementById('statsDaily').innerHTML='<span class="mut">Brak danych.</span>'; return; }
+  const max=Math.max(...days.map(d=>byDay[d]));
+  document.getElementById('statsDaily').innerHTML=`<div style="display:flex; align-items:flex-end; gap:3px; height:130px; padding:4px 0 26px; overflow-x:auto">`+
+    days.map(d=>{ const h=max>0?Math.max(2,Math.round(byDay[d]/max*100)):2; return `<div title="${d}: ${fmtUsd(byDay[d])}" style="display:flex; flex-direction:column; align-items:center; min-width:16px"><div style="width:13px; height:${h}px; background:var(--acc); border-radius:2px"></div><div class="mut" style="font-size:8px; transform:rotate(-55deg); white-space:nowrap; margin-top:8px; transform-origin:left">${d.slice(5)}</div></div>`; }).join('')+`</div>`;
+}
+function renderStatsByApi(){
+  const byP={}; const egress=(STATS&&STATS.egressUsdPerGB)||0.1;
+  for(const g of (STATS&&STATS.groups||[])) for(const p of (g.byProvider||[])){ const x=byP[p.provider]=byP[p.provider]||{provider:p.provider,calls:0,inTok:0,outTok:0,costUsd:0,bytesSent:0}; x.calls+=p.calls; x.inTok+=p.inTok; x.outTok+=p.outTok; x.costUsd+=p.costUsd; x.bytesSent+=p.bytesSent||0; }
+  const rows=Object.values(byP).map(r=>({...r, total:r.costUsd + (r.bytesSent/1e9*egress)})).sort((a,b)=>b.total-a.total);
+  document.getElementById('statsByApi').innerHTML = rows.length ? `<table style="width:100%"><thead><tr><th>API</th><th>zapytań</th><th>tokeny in/out</th><th>koszt</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td><b>${esc(PROV_LABEL[r.provider]||r.provider)}</b></td><td>${r.calls}</td><td class="mut">${fmtTokk(r.inTok)} / ${fmtTokk(r.outTok)}</td><td><b>${fmtUsd(r.total)}</b></td></tr>`).join('')+`</tbody></table>` : '<span class="mut">Brak danych.</span>';
+}
+const OP_LABEL={scan:'skan',enrich:'enrich (tłum./opisy)','dish-photos':'zdjęcia dań','dish-photo-refresh':'odśw. zdjęcia',peek:'szybki podgląd','dish-info':'opis dania',restaurant:'lokal (Places)','venue-photos':'zdjęcia z lokalu'};
+function sessionStats(g){
+  let images=0,dishes=0,photosFetched=0,photoOps=0; const ops={};
+  for(const e of (g.entries||[])){ const d=(e.meta&&e.meta.data)||{}; ops[e.op]=(ops[e.op]||0)+1;
+    if(e.op==='scan'){ images=Math.max(images,d.images||0); dishes=Math.max(dishes,d.items||0); }
+    else if(e.op==='enrich'){ if(d.items) dishes=Math.max(dishes,d.items); }
+    else if(e.op==='dish-photos'||e.op==='dish-photo-refresh'){ photoOps++; photosFetched+=(d.resultCount||0); } }
+  return {images,dishes,photosFetched,photoOps,ops};
+}
+function renderStatsSessions(){
+  if(!STATS){ return; }
+  const q=(document.getElementById('statsSearch').value||'').toLowerCase().trim();
+  const egress=(STATS.egressUsdPerGB)||0.1;
+  let gs=(STATS.groups||[]);
+  if(q) gs=gs.filter(g=>(g.label||'').toLowerCase().includes(q));
+  document.getElementById('statsSessions').innerHTML = gs.length ? gs.map(g=>{
+    const s=sessionStats(g);
+    const inTok=(g.byProvider||[]).reduce((n,p)=>n+p.inTok,0), outTok=(g.byProvider||[]).reduce((n,p)=>n+p.outTok,0), calls=(g.byProvider||[]).reduce((n,p)=>n+p.calls,0);
+    const provChips=(g.byProvider||[]).map(p=>`<span class="badge" style="margin:0 4px 4px 0">${esc(PROV_LABEL[p.provider]||p.provider)}: ${fmtUsd(p.costUsd + (p.bytesSent/1e9*egress))}</span>`).join('');
+    return `<div class="step" style="margin-bottom:8px">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px"><b style="font-size:14px">${esc(g.label)}</b><span style="font-weight:800; color:var(--acc); white-space:nowrap">${fmtUsd(g.totalCost)}</span></div>
+      <div class="mut small" style="margin-top:3px">📷 ${s.images} zdjęć w menu · 🍽 ${s.dishes} dań · 🖼 ${s.photosFetched} fotek dociągniętych${s.photoOps?` (${s.photoOps} szukań)`:''} · ${calls} zapytań · tok ${fmtTokk(inTok)}/${fmtTokk(outTok)}${g.cacheHits?` · 💾 ${g.cacheHits} z cache`:''}</div>
+      <div class="mut" style="margin-top:3px; font-size:10px">${Object.entries(s.ops).sort((a,b)=>b[1]-a[1]).map(([op,n])=>`${esc(OP_LABEL[op]||op)} ×${n}`).join(' · ')}</div>
+      <div style="margin-top:6px">${provChips}</div>
+    </div>`;
+  }).join('') : '<span class="mut">Brak sesji w tym okresie/filtrze.</span>';
 }
 
 /* ---- Sample online + archiwum (zakładka 📦 Sample) ---- */

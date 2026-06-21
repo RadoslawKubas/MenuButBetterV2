@@ -1243,7 +1243,7 @@ app.get("/api/cost-log", async (c) => {
           ts: Date.parse(e.created_at) || 0,
           ms: 0,
           op: (e.op as string) || (e.type as string),
-          meta: { lokal: restaurant, installId: (e.install_id as string) || undefined, prod: true, dish: e.data?.dish },
+          meta: { lokal: restaurant, installId: (e.install_id as string) || undefined, prod: true, dish: e.data?.dish, data: e.data },
           delta: [{ provider: prov, calls: 1, inTok, outTok, costUsd: Number(e.cost_usd) || 0, bytesSent: 0, bytesRecv: 0 }],
           models: e.model ? [{ model: e.model as string, inTok, outTok, calls: 1 }] : [],
           cacheHits: e.data?.cached ? 1 : 0,
