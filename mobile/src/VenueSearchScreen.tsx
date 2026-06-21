@@ -31,6 +31,20 @@ interface Props {
 }
 
 const DEFAULT_CENTER: GeoPoint = { lat: 40.4168, lng: -3.7038 }; // Madryt — zanim padnie GPS/lokal skanu
+
+// Odległość lokalu od „miejsca gdzie jesteśmy" (pozycja skanu / GPS) — haversine w metrach.
+function distanceM(a: GeoPoint, b: GeoPoint): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+// Format dystansu: <1 km zaokrąglone do 5 m (bez fałszywej precyzji), wyżej w km.
+function fmtDist(m: number): string {
+  return m < 1000 ? `${Math.round(m / 5) * 5} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+}
 const NEARBY_RADIUS = 1500;
 
 /** Mapa: dziś OSM/Leaflet w WebView (wszędzie działa). Pin rysujemy w RN na środku — środek = punkt szukania. */
@@ -91,6 +105,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
   const insets = useSafeAreaInsets(); // ekran jest full-screen overlay (absoluteFill) → bez tego header wchodzi pod notch
   const webRef = useRef<WebView>(null);
   const [center, setCenter] = useState<GeoPoint>(initialLocation ?? DEFAULT_CENTER);
+  const [me, setMe] = useState<GeoPoint | null>(initialLocation); // „gdzie jesteśmy" — do dystansu w wynikach
   const [name, setName] = useState("");
   const [city, setCity] = useState("");
   const [cuisineQ, setCuisineQ] = useState(cuisine ?? ""); // kuchnia z menu — edytowalna, zawęża „w pobliżu"
@@ -156,6 +171,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       setCenter(loc);
+      setMe(loc); // świeży GPS = aktualne „gdzie jesteśmy" (dystans liczymy od niego)
       webRef.current?.injectJavaScript(`window.recenter && window.recenter(${loc.lat},${loc.lng}); true;`);
       await searchAt(loc);
     } catch {
@@ -248,6 +264,8 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
               <Text style={styles.cardName} numberOfLines={1}>{selected?.placeId === r.placeId ? "📍 " : ""}{r.name}</Text>
               {r.address ? <Text style={styles.cardAddr} numberOfLines={1}>{r.address}</Text> : null}
               <Text style={styles.cardMeta}>
+                {me && r.location ? <Text style={styles.cardDist}>📍 {fmtDist(distanceM(me, r.location))}</Text> : null}
+                {me && r.location ? " · " : ""}
                 {r.cuisine ? `🍽 ${r.cuisine} · ` : ""}
                 {r.rating != null ? `★ ${r.rating.toFixed(1)}${r.ratingCount != null ? ` (${r.ratingCount})` : ""}` : "bez ocen"}
                 {r.openNow != null ? ` · ${r.openNow ? "otwarte" : "zamknięte"}` : ""}
@@ -298,6 +316,7 @@ const styles = StyleSheet.create({
   card: { flexDirection: "row", alignItems: "center", backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: colors.badgeBg },
   cardSelected: { borderColor: colors.accent, backgroundColor: colors.accent + "14" }, // klik → zaznaczony na mapie
   cardName: { fontSize: 15, fontWeight: "800", color: colors.text },
+  cardDist: { color: colors.accent, fontWeight: "800" }, // dystans „od nas" — wyróżniony
   cardAddr: { fontSize: 12.5, color: colors.muted, marginTop: 2 },
   cardMeta: { fontSize: 12, color: colors.muted, marginTop: 3 },
   cardActions: { alignItems: "flex-end", gap: 6, marginLeft: 8 },
