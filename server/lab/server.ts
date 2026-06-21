@@ -139,6 +139,23 @@ function saveDeploy(s: DeployState) { try { writeFileSync(DEPLOY_FILE, JSON.stri
 function noteOf(ipa: string): string {
   try { return readFileSync(join(MOBILE_DIR, ipa + ".note"), "utf8").trim(); } catch { return ""; }
 }
+// Wyciąga REALNĄ przyczynę odrzucenia z logu eas submit / altool / App Store Connect (co odpowiedział Apple).
+function submitErrorReason(log: string): string {
+  const pats = [
+    /Validation failed[^\n]*?Upload limit reached[^\n]*/i, // limit — pełna odpowiedź
+    /Upload limit reached[^\n]*/i,
+    /Validation failed[^\n]*/i,
+    /Asset validation failed[^\n]*/i,
+    /Error uploading ipa file:[^\n]*/i,
+    /This bundle is invalid[^\n]*/i,
+    /The provided entity[^\n]*/i,
+    /already been used[^\n]*/i, // numer builda już użyty
+    /\[!\]\s*[^\n]+/, // ogólny błąd fastlane/eas
+  ];
+  for (const re of pats) { const m = log.match(re); if (m) return m[0].replace(/\s+/g, " ").trim().slice(0, 320); }
+  const lines = log.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (lines.length ? lines[lines.length - 1]! : "nieznany błąd").slice(0, 320);
+}
 // Realny numer builda (CFBundleVersion) z .ipa — nazwa pliku go NIE niesie. Wyciągamy z Info.plist
 // (unzip + plutil) RAZ i cache'ujemy (plik .ipa jest niezmienny). Potrzebny, by kasować starsze buildy.
 function buildNumberOf(ipa: string): string | null {
@@ -1523,7 +1540,9 @@ app.post("/api/deploy/upload", async (c) => {
       }
       if (cleaned.length) uploadJob.log += `\n🧹 Usunięto zużyte/starsze buildy: ${cleaned.join(", ")}`;
     }
-    s.uploads.unshift({ ts: Date.now(), ipa, ok, buildNumber: upBuildNum, note: noteForRecord, error: ok ? (cleaned.length ? `🧹 posprzątano ${cleaned.length} starszych/zużytych` : null) : (limit ? "Apple: limit wgrań osiągnięty — poczekaj ~24h" : "Wysyłka nie powiodła się (szczegóły w logu)") });
+    // Przy niepowodzeniu zapisz REALNĄ odpowiedź Apple/altool z logu (nie generyczny tekst).
+    const reason = ok ? (cleaned.length ? `🧹 posprzątano ${cleaned.length} starszych/zużytych` : null) : submitErrorReason(log);
+    s.uploads.unshift({ ts: Date.now(), ipa, ok, buildNumber: upBuildNum, note: noteForRecord, error: reason });
     s.uploads = s.uploads.slice(0, 100);
     saveDeploy(s);
   });

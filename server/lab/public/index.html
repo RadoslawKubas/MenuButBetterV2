@@ -1130,8 +1130,10 @@ async function loadDeploy(btn){
       </div>
     </div>`).join('') : '<span class="mut">Brak gotowych .ipa. Zbuduj: <code>cd mobile &amp;&amp; ./build-only.sh</code></span>';
   document.getElementById('deployHistory').innerHTML = (r.uploads||[]).length ? r.uploads.map(u=>`
-    <div class="small" style="padding:5px 8px; margin-bottom:3px; border-radius:6px; ${u.ok?'opacity:0.85':'background:rgba(122,31,31,0.18); border-left:3px solid #7a1f1f'}">
-      ${u.ok?'✅':'❌ ODRZUCONE —'} ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span>${u.note?` · <span class="mut">${esc(u.note)}</span>`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
+    <div class="small" style="padding:6px 8px; margin-bottom:3px; border-radius:6px; ${u.ok?'opacity:0.9':'background:rgba(122,31,31,0.18); border-left:3px solid #7a1f1f'}">
+      <div>${u.ok?'✅':'❌ ODRZUCONE'} · ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span></div>
+      ${u.note?`<div class="mut" style="margin-top:2px; font-size:11px">${esc(u.note)}</div>`:''}
+      ${u.error?`<div style="margin-top:2px; ${u.ok?'opacity:0.7':'color:#ff8a80'}">${u.ok?'':'↳ Apple: '}${esc(u.error)}</div>`:''}
     </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
   if(busy && !DEPLOY_POLL && CURRENT_TAB==='deploy'){ DEPLOY_POLL=setInterval(()=>{ if(CURRENT_TAB==='deploy') loadDeploy(); else { clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; } },2500); }
   if(!busy && DEPLOY_POLL){ clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; }
