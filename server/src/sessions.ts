@@ -10,7 +10,8 @@ export interface SessionSummary {
   sessionId: string; installId: string | null; restaurant: string | null;
   start: number; end: number; count: number;
   images: number; dishes: number; photosFetched: number; photoOps: number; cacheHits: number;
-  inTok: number; outTok: number; calls: number; totalCost: number;
+  inTok: number; outTok: number; calls: number;
+  totalCost: number; tokenCost: number; apiCost: number; dataCost: number;
   byOp: Record<string, { count: number; cost: number }>;
   byProvider: ProviderAgg[];
 }
@@ -65,7 +66,7 @@ export async function getSessions(opts: { since?: number; source?: string }): Pr
       sessionId: r.sid, installId: r.install ?? null, restaurant: r.restaurant ?? null,
       start: Number(r.startms), end: Number(r.endms), count: r.n,
       images: r.images, dishes: r.dishes, photosFetched: r.photos, photoOps: r.photo_ops, cacheHits: r.cache_hits,
-      inTok: 0, outTok: 0, calls: 0, totalCost: 0, byOp: {}, byProvider: [],
+      inTok: 0, outTok: 0, calls: 0, totalCost: 0, tokenCost: 0, apiCost: 0, dataCost: 0, byOp: {}, byProvider: [],
     });
   }
   const provMap = new Map<string, Map<string, ProviderAgg>>();
@@ -73,9 +74,9 @@ export async function getSessions(opts: { since?: number; source?: string }): Pr
     const s = map.get(r.sid); if (!s) continue;
     const i = Number(r.i), o = Number(r.o), calls = r.calls, bytes = Number(r.bytes);
     let cost = 0; let provider: string | null = r.provider ?? null;
-    if (r.model) { cost = aiTokenCost(r.model, i, o, ov); provider = apiTag(r.model); s.inTok += i; s.outTok += o; }
-    else if (r.type === "api" && provider) { cost = apiCallCost(provider, calls, ov); s.calls += calls; }
-    cost += (bytes / 1e9) * egress;
+    if (r.model) { const tc = aiTokenCost(r.model, i, o, ov); cost = tc; s.tokenCost += tc; provider = apiTag(r.model); s.inTok += i; s.outTok += o; }
+    else if (r.type === "api" && provider) { const ac = apiCallCost(provider, calls, ov); cost = ac; s.apiCost += ac; s.calls += calls; }
+    const dc = (bytes / 1e9) * egress; s.dataCost += dc; cost += dc;
     const op = (r.op as string) || (r.type as string) || "?";
     const bo = (s.byOp[op] = s.byOp[op] || { count: 0, cost: 0 }); bo.count += r.cnt; bo.cost += cost;
     if (provider) {
@@ -88,6 +89,22 @@ export async function getSessions(opts: { since?: number; source?: string }): Pr
   }
   for (const [sid, pm] of provMap) { const s = map.get(sid); if (s) s.byProvider = [...pm.values()].sort((a, b) => b.costUsd - a.costUsd); }
   return [...map.values()].sort((a, b) => b.end - a.end);
+}
+
+/** Liczba operacji app vs eksperyment w okresie (do nagłówka statystyk) — czysty count w SQL. */
+export async function getSourceCounts(since?: number): Promise<{ appCount: number; expCount: number }> {
+  const p = getReadyPool();
+  if (!p) return { appCount: 0, expCount: 0 };
+  const params: unknown[] = [];
+  let w = "(data->>'sessionId') IS NOT NULL";
+  if (since) { params.push(new Date(since).toISOString()); w += ` AND created_at >= $${params.length}`; }
+  const r = await p.query(
+    `SELECT count(*) FILTER (WHERE (data->>'source') = 'app')::int AS app,
+            count(*) FILTER (WHERE (data->>'source') IS DISTINCT FROM 'app')::int AS exp
+     FROM events WHERE ${w}`,
+    params,
+  );
+  return { appCount: r.rows[0]?.app ?? 0, expCount: r.rows[0]?.exp ?? 0 };
 }
 
 /** Zdarzenia JEDNEJ sesji (flow) — czytane dopiero na klik. */

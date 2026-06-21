@@ -19,8 +19,8 @@ import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
 // ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
-import { getSessions, getSessionEvents } from "./sessions.ts";
-import { apiCallCost, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
+import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
+import { apiCallCost, getPriceOverrides, otherRate, type PriceOverrides } from "./pricing.ts";
 import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheGet, cacheSet, cacheKey } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
@@ -1077,7 +1077,8 @@ app.get("/sessions", async (c) => {
   const now = Date.now();
   const since = period === "today" ? now - 24 * 3600e3 : period === "7d" ? now - 7 * 24 * 3600e3 : period === "30d" ? now - 30 * 24 * 3600e3 : 0;
   const source = c.req.query("source") || "all";
-  return c.json({ sessions: await getSessions({ since: since || undefined, source }) });
+  const [sessions, counts] = await Promise.all([getSessions({ since: since || undefined, source }), getSourceCounts(since || undefined)]);
+  return c.json({ sessions, ...counts, egressUsdPerGB: otherRate("egress", getPriceOverrides()) });
 });
 // Zdarzenia JEDNEJ sesji (flow) — dopiero gdy user kliknie sesję.
 app.get("/session-events", async (c) => {

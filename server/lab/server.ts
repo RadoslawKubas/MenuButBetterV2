@@ -1464,6 +1464,56 @@ app.get("/api/cost-log", async (c) => {
   return c.json({ period, egressUsdPerGB: egress, agg, savings, groups, prodCount: prodEntries.length, prodFetched, evLimit, prodErr, prodUrl: PROD_URL, source: srcParam, appCount, expCount });
 });
 
+// STATYSTYKI v2: lista sesji liczona w BAZIE (prod /sessions, GROUP BY sessionId). Lab tylko mapuje na
+// kształt UI i wyprowadza globalne agregaty z MAŁEJ listy podsumowań — NIE ładuje już wszystkich zdarzeń.
+app.get("/api/sessions", async (c) => {
+  const period = c.req.query("period") || "all";
+  const source = c.req.query("source") || "app";
+  try {
+    const r = await prodFetch(`/sessions?period=${encodeURIComponent(period)}&source=${encodeURIComponent(source)}`);
+    const j = (await r.json()) as { sessions?: any[]; appCount?: number; expCount?: number; egressUsdPerGB?: number; error?: string };
+    if (j.error) return c.json({ error: j.error }, 502);
+    const sessions = j.sessions ?? [];
+    const egress = j.egressUsdPerGB ?? otherRate("egress");
+    const groups = sessions.map((s) => ({
+      key: s.sessionId, label: s.restaurant || ("Sesja " + String(s.sessionId).slice(0, 10)), installId: s.installId,
+      totalCost: s.totalCost, ts: s.end, cacheHits: s.cacheHits, byProvider: s.byProvider || [],
+      summary: { images: s.images, dishes: s.dishes, photosFetched: s.photosFetched, photoOps: s.photoOps, byOp: s.byOp || {}, start: s.start, end: s.end },
+    }));
+    const agg = { totalCost: 0, count: 0, inTok: 0, outTok: 0, calls: 0, tokenCost: 0, apiCost: 0, dataCost: 0, bytesSent: 0, bytesRecv: 0 };
+    const byOp: Record<string, { count: number; cost: number }> = {}; const daily: Record<string, number> = {}; let cacheHits = 0;
+    for (const s of sessions) {
+      agg.totalCost += s.totalCost; agg.count += s.count; agg.inTok += s.inTok; agg.outTok += s.outTok; agg.calls += s.calls;
+      agg.tokenCost += s.tokenCost; agg.apiCost += s.apiCost; agg.dataCost += s.dataCost; cacheHits += s.cacheHits || 0;
+      const day = new Date(s.start).toISOString().slice(0, 10); daily[day] = (daily[day] || 0) + s.totalCost;
+      for (const [op, o] of Object.entries(s.byOp || {})) { const b = (byOp[op] = byOp[op] || { count: 0, cost: 0 }); b.count += (o as any).count; b.cost += (o as any).cost; }
+    }
+    return c.json({ period, egressUsdPerGB: egress, agg, savings: { count: cacheHits, cost: 0 }, groups, daily, byOp, prodCount: agg.count, source, appCount: j.appCount || 0, expCount: j.expCount || 0 });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+// Zdarzenia JEDNEJ sesji (flow) — czytane z BAZY dopiero na klik; mapowane na kształt entries z cost-logu.
+app.get("/api/session-detail", async (c) => {
+  const sid = c.req.query("sessionId");
+  if (!sid) return c.json({ error: "brak sessionId" }, 400);
+  try {
+    const r = await prodFetch(`/session-events?sessionId=${encodeURIComponent(sid)}`);
+    const j = (await r.json()) as { events?: any[] };
+    const ov = loadPriceOverrides(); const egress = otherRate("egress");
+    const entries = (j.events ?? []).map((e) => {
+      const d = e.data || {}; let cost = 0;
+      if (e.model) { const pr = aiPrice(e.model, ov); cost = (Number(e.input_tokens) || 0) / 1e6 * pr.in + (Number(e.output_tokens) || 0) / 1e6 * pr.out; }
+      else if (e.type === "api" && e.provider) { cost = apiCallCost(e.provider, Number(d.calls) || 0, ov); }
+      cost += (Number(d.bytesSent) || 0) / 1e9 * egress;
+      return { ts: Date.parse(e.created_at) || 0, op: e.op || e.type, totalCost: cost, meta: { data: d, dish: d.dish } };
+    });
+    return c.json({ sessionId: sid, entries });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
 app.post("/api/cost-log-clear", (c) => {
   try {
     if (existsSync(COSTLOG_FILE)) unlinkSync(COSTLOG_FILE);

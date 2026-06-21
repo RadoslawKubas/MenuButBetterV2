@@ -301,8 +301,7 @@
     <h3>📊 Statystyki kosztów — ile realnie kosztują skany</h3>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
       <button onclick="loadStats(this)" style="padding:4px 10px">↻ odśwież</button>
-      <label class="mut small">zdarzeń: <select id="statLimit" onchange="setStatLimit(this.value)"><option>1000</option><option>3000</option><option selected>10000</option><option>30000</option><option value="50000">50000</option></select></label>
-      <span class="mut small">Wszystko przeliczone wg AKTUALNEGO cennika (zmień w zakładce 💰 Cennik → tu się przeliczy). Realne skany z produkcji + lab.</span>
+      <span class="mut small">Sesje liczone w bazie (cały okres) wg AKTUALNEGO cennika (zmień w 💰 Cennik → tu się przeliczy). Klik sesję → zdarzenia z bazy.</span>
     </div>
     <div id="statsPeriod" class="chips" style="margin-bottom:10px"></div>
     <div id="statsSummary">ładuję…</div>
@@ -1210,7 +1209,9 @@ async function loadStats(btn){
   if(btn) btn.disabled=true;
   document.getElementById('statsSummary').innerHTML='ładuję…';
   SESSION_DETAIL={}; // nowy zaciąg → wyczyść lazy-cache detali sesji
-  try{ STATS=await api('/api/cost-log?summary=1&period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  // Sesje liczone w BAZIE (GROUP BY sessionId) — lekka lista podsumowań, bez ładowania wszystkich zdarzeń.
+  try{ STATS=await api('/api/sessions?period='+STAT_PERIOD+'&source='+STAT_SOURCE); }catch(e){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(String(e)); if(btn)btn.disabled=false; return; }
+  if(STATS&&STATS.error){ document.getElementById('statsSummary').innerHTML='✗ błąd: '+esc(STATS.error); if(btn)btn.disabled=false; return; }
   renderStatsSummary(); renderStatsDaily(); renderStatsByApi(); renderStatsSessions();
   if(btn) btn.disabled=false;
 }
@@ -1223,7 +1224,7 @@ function byOpLegend(byOp,withCount){ const segs=Object.entries(byOp).sort((a,b)=
 function renderStatsSummary(){
   const a=STATS.agg||{}; const sv=STATS.savings||{};
   const srcNote = STATS.prodErr ? ` · ⚠️ produkcja niedostępna (${esc(STATS.prodErr)})` : (STATS.prodCount!=null?` · realne z produkcji: ${STATS.prodCount}`:'');
-  const capHit = (STATS.prodFetched!=null && STATS.evLimit!=null && STATS.prodFetched>=STATS.evLimit) ? ` · <span style="color:#e0a030">pobrano max ${STATS.evLimit} zdarzeń — zwiększ „zdarzeń", by sięgnąć głębiej</span>` : (STATS.prodFetched!=null?` · pobrano ${STATS.prodFetched} zdarzeń`:'');
+  const capHit = ` · <span class="mut">🗄 z bazy (cały okres)</span>`;
   document.getElementById('statsSummary').innerHTML=`
     <div class="step">
       <div style="font-size:26px; font-weight:800; color:var(--acc)">${fmtUsd(a.totalCost)}</div>
@@ -1264,8 +1265,8 @@ function sessionStats(g){
 }
 let STATS_OPEN={}; let STATS_KEYS=[]; let SESSION_DETAIL={}; // detal (zdarzenia) sesji — dociągany DOPIERO po kliknięciu
 async function toggleSession(i){ const k=STATS_KEYS[i]; if(!k) return; STATS_OPEN[k]=!STATS_OPEN[k];
-  if(STATS_OPEN[k] && !SESSION_DETAIL[k]){ // klik → wyłuskaj zdarzenia tej sesji (lazy, z cache server-side)
-    try{ const r=await api('/api/cost-log?detail='+encodeURIComponent(k)+'&period='+STAT_PERIOD+'&source='+STAT_SOURCE+'&limit='+STAT_LIMIT); SESSION_DETAIL[k]=r.entries||[]; }catch(e){ SESSION_DETAIL[k]=[]; }
+  if(STATS_OPEN[k] && !SESSION_DETAIL[k]){ // klik → wyłuskaj zdarzenia tej sesji z BAZY (lazy)
+    try{ const r=await api('/api/session-detail?sessionId='+encodeURIComponent(k)); SESSION_DETAIL[k]=r.entries||[]; }catch(e){ SESSION_DETAIL[k]=[]; }
   }
   renderStatsSessions();
 }
