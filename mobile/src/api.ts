@@ -426,6 +426,89 @@ export function enrichMenuOnServer(
   });
 }
 
+// ─── ARCHITEKTURA B: streaming upload. Apka wysyła zdjęcia POJEDYNCZO (odporne — retry per zdjęcie,
+// pasek postępu), serwer buforuje per sesja i sam tnie na partie modelu w /scan/run. ───
+
+/** Zaczyna sesję skanu (parametry bez zdjęć) → zwraca sessionId. */
+export async function scanStart(params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
+  const res = await fetch(`${API_BASE}/scan/start`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(params) });
+  if (!res.ok) throw new Error(`Nie udało się rozpocząć skanu (HTTP ${res.status}).`);
+  const json = (await res.json()) as { sessionId?: string };
+  if (!json.sessionId) throw new Error("Serwer nie zwrócił sesji skanu.");
+  return json.sessionId;
+}
+
+/** Wysyła JEDNO zdjęcie do sesji. Idempotentne (po `index`), z auto-ponawianiem (3 próby). */
+export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string }, attempt = 0): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/scan/photo`);
+    Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
+    xhr.timeout = 90000;
+    const retryOr = (msg: string) => {
+      if (attempt < 2) scanUploadPhoto(sessionId, index, image, attempt + 1).then(resolve, reject);
+      else reject(new Error(msg));
+    };
+    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else retryOr(`Zdjęcie ${index + 1}: HTTP ${xhr.status}`); };
+    xhr.onerror = () => retryOr(`Zdjęcie ${index + 1}: błąd sieci`);
+    xhr.ontimeout = () => retryOr(`Zdjęcie ${index + 1}: timeout`);
+    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType }));
+  });
+}
+
+/** Uruchamia skan sesji — serwer tnie po rozmiarze, streamuje STRUKTURĘ (item/meta) i zwraca menu. */
+export function scanRun(
+  sessionId: string,
+  onProgress?: (p: ScanPhase) => void,
+  onItem?: (item: ScanItemStub) => void,
+  onMeta?: (m: { restaurantName?: string; cuisine?: string }) => void,
+): Promise<{ menu: Menu; usage: Usage }> {
+  const t0 = Date.now();
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/scan/run`);
+    Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
+    xhr.timeout = 240000;
+    let scanned = 0;
+    const parseLines = (text: string) => {
+      const nl = text.lastIndexOf("\n");
+      if (nl < scanned) return;
+      const chunk = text.slice(scanned, nl);
+      scanned = nl + 1;
+      for (const line of chunk.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
+          else if (ev.phase === "received") onProgress?.({ phase: "received" });
+          else if (ev.phase === "item") onItem?.({ original: ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null });
+          else if (ev.phase === "meta") onMeta?.({ restaurantName: ev.restaurantName, cuisine: ev.cuisine });
+        } catch { /* niepełna linia */ }
+      }
+    };
+    xhr.onprogress = () => parseLines(xhr.responseText);
+    const fail = (msg: string) => { appLog.logCall({ ts: Date.now(), label: "scan", ok: false, ms: Date.now() - t0, detail: msg }); reject(new Error(msg)); };
+    xhr.onerror = () => fail("Błąd sieci podczas skanu.");
+    xhr.ontimeout = () => fail("Skan trwał za długo (timeout).");
+    xhr.onload = () => {
+      appLog.logCall({ ts: Date.now(), label: "scan", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
+      const text = xhr.responseText || "";
+      let result: { menu?: Menu; usage?: Usage; error?: string } | null = null;
+      for (const line of text.split("\n")) {
+        const tt = line.trim();
+        if (!tt) continue;
+        try { const ev = JSON.parse(tt); if (ev.menu || ev.error || ev.done) result = ev; } catch { /* keepalive */ }
+      }
+      if (!result) return fail("Połączenie przerwane w trakcie skanu — spróbuj ponownie.");
+      if (xhr.status < 200 || xhr.status >= 300 || result.error) return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
+      if (!result.menu) return fail("Pusta odpowiedź serwera.");
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE });
+    };
+    xhr.send(JSON.stringify({ sessionId, stream: true }));
+  });
+}
+
 export interface DishInfoParams {
   name: string;
   description?: string;

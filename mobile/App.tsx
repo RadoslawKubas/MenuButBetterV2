@@ -16,6 +16,9 @@ import { StatusBar } from "expo-status-bar";
 import {
   scanMenu,
   enrichMenuOnServer,
+  scanStart,
+  scanUploadPhoto,
+  scanRun,
   type ScanPhase,
   type ScanItemStub,
   fetchDishInfo,
@@ -514,39 +517,11 @@ export default function App() {
         .map((im, i) => ({ im, i }))
         .sort((a, b) => (a.im.takenAt ?? Infinity) - (b.im.takenAt ?? Infinity) || a.i - b.i)
         .map((x) => x.im);
-      // Partie skanu struktury. batchSize: liczba ≥1 = sztywno tyle zdjęć/partię; 0 = „maks" DYNAMICZNIE
-      // — pakuj ILE SIĘ ZMIEŚCI pod budżet ROZMIARU żądania (sterownik), a nie sztywną liczbę. Większy
-      // batch = model widzi kartki RAZEM → grupy ciągnące się przez strony nie pękają.
-      const SIZE_BUDGET = 28_000_000; // ~28M znaków base64/partię (zapas pod serwerowe MAX_TOTAL_BASE64=36M)
-      const MAX_PER_BATCH = 15; // NIE „produktowy" limit — tylko bezpiecznik TIMEOUTU (≈15 gęstych stron ≈ 240s)
-      const fixed = Math.max(0, Math.round(costPrefs.batchSize || 0));
-      const batches: PreparedImage[][] = [];
-      if (fixed >= 1) {
-        for (let i = 0; i < ordered.length; i += fixed) batches.push(ordered.slice(i, i + fixed));
-      } else {
-        let cur: PreparedImage[] = [];
-        let curBytes = 0;
-        for (const im of ordered) {
-          const b = im.base64.length;
-          if (cur.length > 0 && (curBytes + b > SIZE_BUDGET || cur.length >= MAX_PER_BATCH)) {
-            batches.push(cur);
-            cur = [];
-            curBytes = 0;
-          }
-          cur.push(im);
-          curBytes += b;
-        }
-        if (cur.length > 0) batches.push(cur);
-      }
+      // (Architektura B: podziałem na partie modelu zajmuje się SERWER w /scan/run — po rozmiarze.
+      // Apka tylko wysyła zdjęcia pojedynczo w kolejności `ordered`.)
 
       let merged: Menu | null = null;
       let scanId: string | null = null;
-      // Odporność: partie, które padły (zapamiętujemy ich zdjęcia + indeks, by dokończyć w tle —
-      // tylko te, nie od początku). Plus znacznik, czy coś wróciło z cache (oszczędność).
-      const failedBatches: { idx: number; images: PreparedImage[] }[] = [];
-      let anyCached = false;
-      let lowQualityCount = 0; // ile fotek model odrzucił jako za słabej jakości (do ostrzeżenia)
-      let partialCount = 0; // ile fotek odczytano, ale słaba jakość → wynik może być niepełny
       setScanIncomplete(null);
       setScanFromCache(false);
 
@@ -571,23 +546,6 @@ export default function App() {
           ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description }
           : x)));
       };
-      if (batches.length > 1) setScanProgress({ done: 0, total: opts.images.length });
-
-      // RÓWNOLEGŁOŚĆ: kolejne zdjęcie NIE czeka na enrich/fotki poprzedniego (jedyna zależność to
-      // miękki kontekst nazwa/kuchnia). Same wywołania skanu lecą równolegle; SCALANIE musi iść po
-      // kolei (mutuje merged/scanId + zapis), więc serializujemy tylko ten fragment.
-      let mergeLock: Promise<unknown> = Promise.resolve();
-      const serialize = <T,>(fn: () => Promise<T>): Promise<T> => {
-        const run = mergeLock.then(fn, fn);
-        mergeLock = run.then(() => {}, () => {});
-        return run;
-      };
-      let doneImages = 0;
-      const bumpProgress = (n: number) => {
-        doneImages += n;
-        if (opts.images.length > 1) setScanProgress({ done: Math.min(doneImages, opts.images.length), total: opts.images.length });
-      };
-
       // ENRICH STRUMIENIOWY (rolling po ~8 dań): dania spływają ze STRUKTURY (onScanItem) → kolejka →
       // flush paczkami do /enrich. Startuje WCZEŚNIE (po ustaleniu kuchni z onMeta/peeku) i nakłada się
       // na trwającą strukturę, ale robi ~N/8 wywołań zamiast jednego na danie. Patch W MIEJSCU po nazwie.
@@ -686,130 +644,72 @@ export default function App() {
         })());
       };
 
-      const runBatch = async (bi: number, batchHint: string | undefined, knownSections?: string[]) => {
-        const batch = batches[bi]!;
-        setScanCurrentImage(batch[0]?.uri ?? null); // pokaż którąś z aktualnie analizowanych fotek
-        let incoming: Menu, usage: Usage, cached: boolean, lowQuality: boolean, partialQuality: boolean;
-        try {
-          ({ menu: incoming, usage, cached, lowQuality, partialQuality } = await scanMenu(
-            {
-              images: batch.map((i) => ({ base64: i.base64, mediaType: i.mediaType })),
-              targetLang: opts.targetLang,
-              restaurantHint: batchHint,
-              locationHint,
-              cuisineHint: pickPeekCuisine(), // kontekst kuchni z „szybkiego podglądu"
-              model: opts.models.scan,
-              enrichModel: opts.models.enrich,
-              structureOnly: true, // FAZA A: tylko struktura (szybko); enrich osobno w Fazie B (/enrich)
-              knownSections, // #1: ciągłość grup — sekcje z wcześniejszych partii
-            },
-            (p) => setScanPhase(scanPhaseLabel(p)),
-            onScanItem,
-            onEnrichItem,
-            (m) => { // nazwa lokalu + KUCHNIA na żywo (kuchnia ze struktury → spójny klucz enrichu) + #2a
-              if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
-              if (!m.restaurantName) return;
-              setScanFoundName(m.restaurantName);
-              if (!earlyVenueRef.current) {
-                earlyVenueRef.current = true;
-                const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
-                void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
-              }
-            },
-          ));
-        } catch {
-          // Partia padła (sieć/serwer) — NIE wywalamy całego skanu: zapamiętaj do dokończenia w tle
-          // (tylko tę partię). Cache skanu sprawi, że jeśli serwer policzył a odpowiedź zginęła —
-          // ponowienie tej partii jest darmowe.
-          failedBatches.push({ idx: bi, images: batch });
-          bumpProgress(batch.length);
-          return;
-        }
-        if (lowQuality) {
-          // Model nie odczytał tej fotki (za słaba jakość) — serwer zapamiętał ją jako złą.
-          for (const img of batch) {
-            setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "" }), readable: false, bad: true } }));
+      // === ARCHITEKTURA B: sesja — zdjęcia wysyłamy POJEDYNCZO (odporne, retry per zdjęcie, pasek postępu),
+      // serwer buforuje, tnie PO ROZMIARZE na partie modelu i streamuje strukturę (onScanItem → rolling). ===
+      setScanPhase({ label: "Wysyłam zdjęcia…" });
+      const sessionId = await scanStart({
+        targetLang: opts.targetLang,
+        restaurantHint: opts.hint.trim() || undefined,
+        locationHint,
+        cuisineHint: pickPeekCuisine(),
+        model: opts.models.scan,
+        enrichModel: opts.models.enrich,
+      });
+      // Upload RÓWNOLEGLE (limit 4) z auto-retry (w scanUploadPhoto). Pasek = wysłane/total.
+      setScanProgress({ done: 0, total: ordered.length });
+      {
+        let uploaded = 0;
+        let nextUp = 0;
+        const upWorker = async () => {
+          while (nextUp < ordered.length) {
+            const i = nextUp++;
+            await scanUploadPhoto(sessionId, i, { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType });
+            uploaded++;
+            setScanProgress({ done: uploaded, total: ordered.length });
           }
-          lowQualityCount += batch.length;
-          bumpProgress(batch.length);
-          return;
-        }
-        if (partialQuality) {
-          // Odczytano, ale SŁABA jakość → wynik może być niepełny. Zostawiamy treść, oznaczamy miękko.
-          for (const img of batch) {
-            setPeekByUri((prev) => ({ ...prev, [img.uri]: { ...(prev[img.uri] ?? { isMenu: false, cuisine: "", restaurantName: "", readable: true, bad: false }), partial: true } }));
-          }
-          partialCount += batch.length;
-        }
-        if (cached) anyCached = true;
-
-        // Scalanie + zapis po kolei (pierwszy, który dobiegnie, tworzy bazę; reszta dokłada).
-        await serialize(async () => {
-          if (!merged) {
-            merged = incoming;
-            if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
-            const saved = await saveScan({
-              menu: merged,
-              targetLang: opts.targetLang,
-              model: opts.models.scan,
-              models: opts.models,
-              location,
-              locationSource,
-              useExifLocation: opts.useExifLocation,
-              useDeviceLocation: opts.useDeviceLocation,
-              usage,
-            });
-            scanId = saved.id;
-            scanIdRef.current = saved.id; // udostępnij wczesnym callbackom (#2a)
-            setFreshScanId(saved.id);
-          } else {
-            merged = mergeMenus(merged, incoming).menu;
-            await updateScanMenu(scanId!, merged);
-            await addScanUsage(scanId!, usage);
-          }
-          setMenu(merged);
-          setScans(await listScans());
-        });
-        bumpProgress(batch.length);
-        // (enrich leci rolling z onScanItem — patrz flushEnrich; tu już nie wołamy per-partia)
-      };
-
-      // Partia 0 OSOBNO — ustala bazowe menu + nazwę/kuchnię (kontekst dla pozostałych). Potem
-      // reszta RÓWNOLEGLE (limit 3) z tym kontekstem — bez czekania na enrich/fotki poprzedniej.
-      await runBatch(0, opts.hint.trim() || undefined);
-      if (batches.length > 1) {
-        const restHint = merged
-          ? [(merged as Menu).restaurant_name, (merged as Menu).cuisine].filter(Boolean).join(" ") || undefined
-          : opts.hint.trim() || undefined;
-        // #1: sekcje z partii 0 → kontekst ciągłości grup dla kolejnych partii (strona bez nagłówka
-        // kontynuuje znaną sekcję, nie tworzy „(bez tytułu)"). Trafia też do klucza cache struktury.
-        const knownSections = merged
-          ? (merged as Menu).sections.map((s) => s.name).filter((nm) => nm && nm.trim() && !/sin t[ií]tulo|untitled|bez tyt|^\(/i.test(nm))
-          : [];
-        let next = 1;
-        const worker = async () => { while (next < batches.length) { const bi = next++; await runBatch(bi, restHint, knownSections); } };
-        await Promise.all(Array.from({ length: Math.min(3, batches.length - 1) }, worker));
+        };
+        await Promise.all(Array.from({ length: Math.min(4, ordered.length) }, upWorker));
       }
-      if (anyCached) setScanFromCache(true);
-
-      // Żadna partia nie przeszła → realny błąd (nie ma czego pokazać).
-      if (!merged || !scanId) {
-        if (lowQualityCount > 0 && failedBatches.length === 0) {
-          throw new Error("Zdjęcia są za słabej jakości — model nie odczytał z nich menu. Zrób ostrzejsze/jaśniejsze zdjęcia.");
-        }
-        throw new Error("Odczyt menu nie powiódł się (żadna partia nie przeszła) — spróbuj ponownie.");
+      // Skan: serwer streamuje strukturę; onScanItem napędza rolling enrich, onMeta daje nazwę/kuchnię (+#2a).
+      setScanCurrentImage(null);
+      setScanPhase({ label: "Czytam menu…" });
+      const ran = await scanRun(
+        sessionId,
+        (p) => setScanPhase(scanPhaseLabel(p)),
+        onScanItem,
+        (m) => {
+          if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
+          if (!m.restaurantName) return;
+          setScanFoundName(m.restaurantName);
+          if (!earlyVenueRef.current) {
+            earlyVenueRef.current = true;
+            const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
+            void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
+          }
+        },
+      );
+      merged = ran.menu;
+      if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
+      {
+        const saved = await saveScan({
+          menu: merged,
+          targetLang: opts.targetLang,
+          model: opts.models.scan,
+          models: opts.models,
+          location,
+          locationSource,
+          useExifLocation: opts.useExifLocation,
+          useDeviceLocation: opts.useDeviceLocation,
+          usage: ran.usage,
+        });
+        scanId = saved.id;
+        scanIdRef.current = saved.id;
+        setFreshScanId(saved.id);
+        setScans(await listScans());
       }
 
       // === FAZA A GOTOWA: struktura wszystkich stron złożona i ZAMROŻONA (kolejność/grupy się nie zmienią) ===
       setScanProgress(null);
-      setScanCurrentImage(null);
-      if (lowQualityCount > 0) {
-        Alert.alert("Pominięto słabe zdjęcia", `${lowQualityCount} zdjęć było za słabej jakości — model nie odczytał z nich menu, więc je pominąłem (są oznaczone).`);
-      } else if (partialCount > 0) {
-        Alert.alert("Słaba jakość zdjęcia", `${partialCount > 1 ? `${partialCount} zdjęć było` : "Zdjęcie było"} słabej jakości — odczytałem co się dało, ale część pozycji mogła się nie zmieścić. Dla pełnego menu zrób ostrzejsze/bliższe zdjęcie.`);
-      }
-      // merged jest przypisywane w domknięciach (równoległe partie) — CFA tego nie śledzi, więc
-      // po guardzie traktuje je jako never. Runtime jest poprawny (guard realnie sprawdza); asercja.
       const structureMenu = merged as Menu;
       // Dołącz poglądowe dociągnięte JUŻ w trakcie struktury (rolling dał photo_query, pompa pobrała,
       // ale apply był no-op bo pozycji nie było w menu) — teraz pozycje są, więc je wstaw.
@@ -923,12 +823,8 @@ export default function App() {
         setScanItems([]);
         setStatus("done");
       })();
-
-      // ODPORNOŚĆ: część partii (struktury) padła → doliczamy w TLE (tylko one — nie od początku).
-      if (failedBatches.length > 0) {
-        setScanIncomplete({ pending: failedBatches.length, working: true });
-        void completeFailedBatches(scanId, opts, locationHint, pickPeekCuisine(), failedBatches, structureMenu);
-      }
+      // (Architektura B: padłe partie nie istnieją po stronie apki — serwer scala wewnętrznie; odporność
+      // jest na poziomie POJEDYNCZEGO uploadu zdjęcia, retry w scanUploadPhoto.)
     } catch (e) {
       reportError(e instanceof Error ? e.message : String(e), { stack: e instanceof Error ? e.stack : undefined, label: "scan", context: { images: opts.images.length, model: opts.models.scan } });
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
