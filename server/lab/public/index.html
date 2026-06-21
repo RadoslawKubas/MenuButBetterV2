@@ -1114,14 +1114,15 @@ async function loadDeploy(btn){
   const col={ok:'#1e6b3a',warn:'#8a5a00',danger:'#7a1f1f',blocked:'#7a1f1f'}[r.level];
   const icon={ok:'✅',warn:'⚠️',danger:'🛑',blocked:'❌'}[r.level];
   const msg={ok:'Bezpiecznie',warn:'Ostrożnie — blisko limitu',danger:'STOP — blisko twardego limitu',blocked:'Apple ODRZUCIŁ ostatnią wysyłkę (limit) — poczekaj ~24h'}[r.level];
-  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}; ${r.level==='blocked'||r.level==='danger'?'background:rgba(122,31,31,0.16)':''}"><b>${icon} Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span><div class="mut small" style="margin-top:3px">Realny limit Apple ~15–16/24h. Konto: ${esc(r.appleId||'')}.</div></div>`;
+  const rejLine = r.lastRejectAt ? `<div class="small" style="margin-top:3px; color:#ff8a80">❌ Ostatnia odmowa Apple: ${fmtAgo(r.lastRejectAt)} (${new Date(r.lastRejectAt).toLocaleString()})${r.rejected24h?` · odrzuconych w 24h: ${r.rejected24h}`:''}</div>` : '';
+  document.getElementById('deployWarn').innerHTML=`<div class="step" style="border-left:4px solid ${col}; ${r.level==='blocked'||r.level==='danger'?'background:rgba(122,31,31,0.16)':''}"><b>${icon} Wgrania (udane) w ost. 24h: ${r.used24h}</b> <span class="mut">— ${esc(msg)} (⚠️ od ${r.warn} · 🛑 od ${r.danger})</span>${rejLine}<div class="mut small" style="margin-top:3px">Realny limit Apple ~15–16/24h. Suma liczy tylko udane; odrzucone widać w historii niżej. Konto: ${esc(r.appleId||'')}.</div></div>`;
   renderDeployJob(r.job);
   const busy=!!(r.job&&r.job.running);
   document.getElementById('deployBuilds').innerHTML = (r.builds||[]).length ? r.builds.map(b=>`
     <div class="step" style="display:flex; gap:10px; align-items:flex-start">
       <div style="flex:1; min-width:0">
         <div><b>build #${b.buildNumber||'?'}</b> <span class="mut small">${esc(b.ipa)} · ${b.sizeMB} MB · ${fmtAgo(b.mtime)}</span></div>
-        <input value="${esc(b.note)}" placeholder="notka: co jest w tym buildzie…" onchange="saveBuildNote('${esc(b.ipa)}',this.value)" style="width:100%; margin-top:6px; padding:5px 8px; font-size:12px">
+        ${b.note?`<div class="small" style="margin-top:5px; white-space:pre-wrap; line-height:1.4">${esc(b.note)}</div>`:'<div class="mut small" style="margin-top:5px; opacity:0.6">(bez notki — build-only.sh zapisuje podsumowanie do &lt;ipa&gt;.note)</div>'}
       </div>
       <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0">
         <button onclick="uploadBuild('${esc(b.ipa)}')" ${busy?'disabled':''} style="padding:5px 12px; background:${busy?'#555':'#1e6b3a'}; color:#fff; font-weight:700">⬆️ Wgraj</button>
@@ -1129,8 +1130,8 @@ async function loadDeploy(btn){
       </div>
     </div>`).join('') : '<span class="mut">Brak gotowych .ipa. Zbuduj: <code>cd mobile &amp;&amp; ./build-only.sh</code></span>';
   document.getElementById('deployHistory').innerHTML = (r.uploads||[]).length ? r.uploads.map(u=>`
-    <div class="mut small" style="padding:4px 0; border-bottom:1px solid rgba(255,255,255,0.06)">
-      ${u.ok?'✅':'❌'} ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span>${u.note?` · ${esc(u.note)}`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
+    <div class="small" style="padding:5px 8px; margin-bottom:3px; border-radius:6px; ${u.ok?'opacity:0.85':'background:rgba(122,31,31,0.18); border-left:3px solid #7a1f1f'}">
+      ${u.ok?'✅':'❌ ODRZUCONE —'} ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span>${u.note?` · <span class="mut">${esc(u.note)}</span>`:''}${u.error?` · <span style="color:#ff8a80">${esc(u.error)}</span>`:''}
     </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
   if(busy && !DEPLOY_POLL && CURRENT_TAB==='deploy'){ DEPLOY_POLL=setInterval(()=>{ if(CURRENT_TAB==='deploy') loadDeploy(); else { clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; } },2500); }
   if(!busy && DEPLOY_POLL){ clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; }
@@ -1145,7 +1146,6 @@ function renderDeployJob(job){
     <pre style="margin:6px 0 0; white-space:pre-wrap; font-size:10px; max-height:170px; overflow:auto; opacity:0.85">${esc((job.log||'').slice(-1400))}</pre>
   </div>`;
 }
-async function saveBuildNote(ipa,note){ try{ await api('/api/deploy/note',{ipa,note}); }catch(e){} }
 async function uploadBuild(ipa){
   if(!confirm('Wgrać '+ipa+' na TestFlight?\nTo zużyje JEDNO wgranie z dziennego limitu Apple.')) return;
   try{ const r=await api('/api/deploy/upload',{ipa}); if(r&&r.error){ alert(r.error); return; } loadDeploy(); }

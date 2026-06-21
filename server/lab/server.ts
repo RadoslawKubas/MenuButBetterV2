@@ -129,12 +129,16 @@ const DEPLOY_FILE = join(HERE, "deploy-state.json"); // notki per .ipa + histori
 const APPLE_ID = "rk@appwithkiss.com"; // sam e-mail nie jest sekretem (jak w build-submit.sh)
 const UPLOAD_WARN = 10; // ⚠️ od tylu wgrań w 24h ostrzegamy (z obserwacji realny limit ~15–16)
 const UPLOAD_DANGER = 16; // 🛑 od tylu — wstrzymaj się (blisko twardego limitu)
-interface DeployState { notes: Record<string, string>; uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null; buildNumber?: string | null }[]; buildNums?: Record<string, string> }
+interface DeployState { uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null; buildNumber?: string | null }[]; buildNums?: Record<string, string> }
 function loadDeploy(): DeployState {
-  try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { notes: j.notes ?? {}, uploads: j.uploads ?? [], buildNums: j.buildNums ?? {} }; }
-  catch { return { notes: {}, uploads: [], buildNums: {} }; }
+  try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { uploads: j.uploads ?? [], buildNums: j.buildNums ?? {} }; }
+  catch { return { uploads: [], buildNums: {} }; }
 }
 function saveDeploy(s: DeployState) { try { writeFileSync(DEPLOY_FILE, JSON.stringify(s, null, 2)); } catch { /* ignore */ } }
+// Notka „co w buildzie" = sidecar <ipa>.note pisany przez build-only.sh (MOJE podsumowanie). Read-only.
+function noteOf(ipa: string): string {
+  try { return readFileSync(join(MOBILE_DIR, ipa + ".note"), "utf8").trim(); } catch { return ""; }
+}
 // Realny numer builda (CFBundleVersion) z .ipa — nazwa pliku go NIE niesie. Wyciągamy z Info.plist
 // (unzip + plutil) RAZ i cache'ujemy (plik .ipa jest niezmienny). Potrzebny, by kasować starsze buildy.
 function buildNumberOf(ipa: string): string | null {
@@ -1441,12 +1445,11 @@ const IPA_RE = /^build-[0-9]+\.ipa$/; // sztywny wzorzec nazwy → zero path-tra
 function listBuilds(): { ipa: string; sizeMB: number; mtime: number; note: string; buildNumber: string | null }[] {
   let names: string[] = [];
   try { names = readdirSync(MOBILE_DIR).filter((f) => IPA_RE.test(f)); } catch { /* brak katalogu */ }
-  const st = loadDeploy();
   return names
     .map((ipa) => {
       let sizeMB = 0, mtime = 0;
       try { const s = statSync(join(MOBILE_DIR, ipa)); sizeMB = +(s.size / 1048576).toFixed(1); mtime = s.mtimeMs; } catch { /* ignore */ }
-      return { ipa, sizeMB, mtime, note: st.notes[ipa] ?? "", buildNumber: buildNumberOf(ipa) };
+      return { ipa, sizeMB, mtime, note: noteOf(ipa), buildNumber: buildNumberOf(ipa) };
     })
     .sort((a, b) => Number(b.buildNumber ?? 0) - Number(a.buildNumber ?? 0) || b.mtime - a.mtime);
 }
@@ -1460,30 +1463,26 @@ app.get("/api/deploy/state", (c) => {
   const cut = Date.now() - 24 * 3600_000;
   // Apple REALNIE odrzucił ostatnio (limit) → twardy „X", ważniejszy niż sam licznik.
   const appleBlocked = s.uploads.some((u) => !u.ok && u.ts >= cut && /limit/i.test(u.error || ""));
+  const rejected24h = s.uploads.filter((u) => !u.ok && u.ts >= cut).length;
+  const lastReject = s.uploads.find((u) => !u.ok); // najnowsza odmowa/błąd (lista jest od najnowszych)
   const level = appleBlocked ? "blocked" : used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok";
   return c.json({
     builds: listBuilds(),
     uploads: s.uploads.slice(0, 20),
-    used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER, appleBlocked,
+    used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER, appleBlocked, rejected24h,
+    lastRejectAt: lastReject ? lastReject.ts : null,
     level,
     job: uploadJob,
     appleId: APPLE_ID,
   });
-});
-app.post("/api/deploy/note", async (c) => {
-  const b = await c.req.json<{ ipa?: string; note?: string }>().catch(() => ({}) as { ipa?: string; note?: string });
-  if (!b.ipa) return c.json({ error: "brak ipa" }, 400);
-  const s = loadDeploy();
-  s.notes[b.ipa] = (b.note ?? "").slice(0, 500);
-  saveDeploy(s);
-  return c.json({ ok: true });
 });
 app.post("/api/deploy/delete-build", async (c) => {
   const b = await c.req.json<{ ipa?: string }>().catch(() => ({}) as { ipa?: string });
   if (!b.ipa || !IPA_RE.test(b.ipa)) return c.json({ error: "zła nazwa .ipa" }, 400);
   if (uploadJob?.running && uploadJob.ipa === b.ipa) return c.json({ error: "Ten build jest właśnie wysyłany." }, 409);
   try { unlinkSync(join(MOBILE_DIR, b.ipa)); } catch { /* już nie ma */ }
-  const s = loadDeploy(); delete s.notes[b.ipa]; saveDeploy(s);
+  try { unlinkSync(join(MOBILE_DIR, b.ipa + ".note")); } catch { /* brak sidecara */ }
+  const s = loadDeploy(); if (s.buildNums) delete s.buildNums[b.ipa]; saveDeploy(s);
   return c.json({ ok: true });
 });
 app.post("/api/deploy/upload", async (c) => {
@@ -1507,18 +1506,19 @@ app.post("/api/deploy/upload", async (c) => {
     const ok = /Submitted your app to Apple/i.test(log) && !limit && !/Error uploading ipa/i.test(log);
     uploadJob.running = false; uploadJob.done = true; uploadJob.ok = ok;
     const s = loadDeploy();
-    const noteForRecord = s.notes[ipa] || null; // zapamiętaj PRZED czyszczeniem (skasuje notkę wgranego)
+    const noteForRecord = noteOf(ipa) || null; // z sidecara, PRZED czyszczeniem (skasuje plik .note)
     const upBuildNum = buildNumberOf(ipa); // też przed czyszczeniem (skasuje plik + cache)
     // Po UDANEJ wysyłce: skasuj wszystkie .ipa z numerem ≤ wgrany (łącznie z wgranym) — TestFlight i tak
-    // odrzuci niższy/równy numer, więc to bezużyteczne pliki. Czyści też zużyty build.
+    // odrzuci niższy/równy numer, więc to bezużyteczne pliki. Czyści też zużyty build + jego sidecar .note.
     const cleaned: string[] = [];
     if (ok) {
-      const upNum = Number(buildNumberOf(ipa) ?? 0);
+      const upNum = Number(upBuildNum ?? 0);
       if (upNum > 0) for (const b of listBuilds()) {
         const n = Number(b.buildNumber ?? 0);
         if (n > 0 && n <= upNum) {
-          try { unlinkSync(join(MOBILE_DIR, b.ipa)); cleaned.push(`${b.ipa} (#${n})`); } catch { /* już nie ma */ }
-          delete s.notes[b.ipa]; if (s.buildNums) delete s.buildNums[b.ipa];
+          try { unlinkSync(join(MOBILE_DIR, b.ipa)); cleaned.push(`#${n}`); } catch { /* już nie ma */ }
+          try { unlinkSync(join(MOBILE_DIR, b.ipa + ".note")); } catch { /* brak */ }
+          if (s.buildNums) delete s.buildNums[b.ipa];
         }
       }
       if (cleaned.length) uploadJob.log += `\n🧹 Usunięto zużyte/starsze buildy: ${cleaned.join(", ")}`;
