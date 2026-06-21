@@ -1263,7 +1263,6 @@ export default function App() {
         <RestaurantCard
           restaurant={r}
           loading={restaurantLoading}
-          onSearchByName={name ? searchByName : undefined}
           onRemove={removeRestaurant}
         />
       );

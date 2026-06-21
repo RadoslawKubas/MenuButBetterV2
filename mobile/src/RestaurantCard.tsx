@@ -26,12 +26,10 @@ const PRICE: Record<string, string> = {
 export function RestaurantCard({
   restaurant,
   loading,
-  onSearchByName,
   onRemove,
 }: {
   restaurant: RestaurantInfo | null;
   loading: boolean;
-  onSearchByName?: () => void;
   onRemove?: () => void;
 }) {
   const [preview, setPreview] = useState<LightboxState | null>(null);
@@ -154,19 +152,13 @@ export function RestaurantCard({
           ) : null}
         </View>
 
-        {/* Pozostałe korekty: szukaj po nazwie / usuń. „Inny w pobliżu" jest wyżej, przy liście wyboru. */}
-        {onSearchByName || onRemove ? (
+        {/* Korekta lokalu: tylko „Usuń". Zmiana lokalu idzie przez „Zły lokal? Znajdź inny" (pełny ekran
+            z nazwą/miastem/mapą) — osobny „Szukaj po nazwie" był duplikatem, usunięty. */}
+        {onRemove ? (
           <View style={styles.fixRow}>
-            {onSearchByName ? (
-              <Pressable style={styles.fixBtn} onPress={onSearchByName}>
-                <Text style={styles.fixText}>🔎 Szukaj po nazwie</Text>
-              </Pressable>
-            ) : null}
-            {onRemove ? (
-              <Pressable style={styles.fixBtn} onPress={onRemove}>
-                <Text style={styles.fixText}>✕ Usuń lokal</Text>
-              </Pressable>
-            ) : null}
+            <Pressable style={styles.fixBtn} onPress={onRemove}>
+              <Text style={styles.fixText}>✕ Usuń lokal</Text>
+            </Pressable>
           </View>
         ) : null}
       </View>
