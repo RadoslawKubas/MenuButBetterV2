@@ -56,6 +56,7 @@ import {
   setScanSessionId,
   updateScanRestaurant,
   addScanUsage,
+  setScanCost,
   renameScan,
   clearScanRestaurant,
   loadModelPrefs,
@@ -247,6 +248,10 @@ export default function App() {
   // na zamrożoną strukturę. Refy łączą wczesny lookup (bez scanId) z finalizacją po Fazie A.
   const earlyVenueRef = useRef(false); // czy wczesny lookup już ruszył (raz na skan)
   const scanIdRef = useRef<string | null>(null); // scanId dostępny dla wczesnych callbacków
+  // Do którego skanu utrwalać LIVE koszt sesji z serwera (świeży skan lub otwarty z historii — sesja
+  // serwera przełącza się z nim). + timer debounce, by nie pisać do storage przy każdym nagłówku.
+  const activeCostScanRef = useRef<string | null>(null);
+  const costPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // ID SESJI usera (od „nowy skan" do „nowy skan"). Zapisywany w skanie; po otwarciu z historii wracamy
   // do niej, by dorabiane ops trafiły do tej samej sesji w statystykach.
   const sessionIdRef = useRef<string>("");
@@ -287,7 +292,17 @@ export default function App() {
   const [structureReady, setStructureReady] = useState(false);
 
   useEffect(() => {
-    setSessionCostHandler((n) => setSessionCost((prev) => Math.max(prev, n))); // koszt sesji rośnie monotonicznie
+    setSessionCostHandler((n) => {
+      setSessionCost((prev) => Math.max(prev, n)); // koszt sesji rośnie monotonicznie
+      // Utrwal AUTORYTATYWNY koszt sesji do aktywnego skanu (debounce 1.5s) → historia pokaże realny koszt
+      // (z doszukiwaniem zdjęć/opisów/lokalu), nie tylko początkową strukturę. Odśwież listę po zapisie.
+      const sid = activeCostScanRef.current;
+      if (!sid) return;
+      if (costPersistTimer.current) clearTimeout(costPersistTimer.current);
+      costPersistTimer.current = setTimeout(() => {
+        void setScanCost(sid, n).then((changed) => { if (changed) void listScans().then(setScans); });
+      }, 1500);
+    });
     newSession(); // sesja od startu apki
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
     void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
@@ -491,6 +506,7 @@ export default function App() {
     setStructureReady(false);
     earlyVenueRef.current = false; // #2a: reset cyklu życia lokalu
     scanIdRef.current = null;
+    activeCostScanRef.current = null; // dopóki nie ma scanId, nie utrwalaj kosztu do POPRZEDNIEGO skanu
     structureFrozenRef.current = false;
     structureMenuRef.current = null;
     freshVenueRef.current = null;
@@ -817,6 +833,7 @@ export default function App() {
         });
         scanId = saved.id;
         scanIdRef.current = saved.id;
+        activeCostScanRef.current = saved.id; // od teraz live koszt sesji utrwalaj do TEGO skanu
         setFreshScanId(saved.id);
         setScans(await listScans());
       }
@@ -1337,6 +1354,7 @@ export default function App() {
     // zamiast rodzić „widmowe" puste sesje.
     if (scan.sessionId) { sessionIdRef.current = scan.sessionId; setScanSession(scan.sessionId); }
     else { const sid = newSession(); void setScanSessionId(scan.id, sid); }
+    activeCostScanRef.current = scan.id; // dorabiane ops w historii też utrwalą koszt do TEGO skanu
     setSessionCost(scan.usage?.costUsd ?? 0); // pokaż zapisany koszt sesji od razu; nowe ops dorzuci serwer
     const apply = (r: RestaurantInfo | null) =>
       setOpenScan((prev) => (prev && prev.id === scan.id ? { ...prev, restaurant: r } : prev));

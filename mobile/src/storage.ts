@@ -275,6 +275,20 @@ export async function addScanUsage(id: string, delta: Usage): Promise<Usage | nu
   return scan.usage;
 }
 
+/** Ustawia koszt skanu na AUTORYTATYWNY total sesji z serwera (nagłówek x-session-cost) — monotonicznie
+ *  (koszt sesji tylko rośnie). Łapie WSZYSTKO (też nie-AI: Serper/Places/proxy zdjęć), czego częściowa
+ *  suma addScanUsage po stronie apki nie obejmowała → historia pokazuje realny koszt. Tokeny zostają. */
+export async function setScanCost(id: string, costUsd: number): Promise<boolean> {
+  const all = await listScans();
+  const scan = all.find((s) => s.id === id);
+  if (!scan) return false;
+  const cur = scan.usage ?? ZERO_USAGE;
+  if (costUsd <= (cur.costUsd ?? 0)) return false; // monotoniczne — nie cofaj
+  scan.usage = { ...cur, costUsd };
+  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  return true;
+}
+
 /** Zapisuje dane lokalu (Google Places) w zapisanym skanie. */
 export async function updateScanRestaurant(id: string, restaurant: RestaurantInfo): Promise<void> {
   const all = await listScans();
