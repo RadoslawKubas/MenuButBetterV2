@@ -57,11 +57,13 @@ if (APP_TOKEN) {
 // Kontekst instalacji: z nagłówka x-install-id (GUID apki) — wszystkie logEvent w tym requeście
 // (skan, ai, błąd, sample) zostaną otagowane tym GUID-em → grupowanie per instancja w labie.
 app.use("/*", async (c, next) => {
-  const installId = c.req.header("x-install-id") || undefined;
+  // Nagłówek X lub fallback z QUERY (?iid=/?sid=) — bo ładowanie zdjęć przez <Image> (np. /place-photo) NIE
+  // wysyła nagłówków, więc bez tego ich google_places lądowałyby OSIEROCONE (bez instancji/sesji).
+  const installId = c.req.header("x-install-id") || c.req.query("iid") || undefined;
   // Debug apki: x-force-fresh=1 → cache POMIJA ODCZYT (świeże generowanie), ale nadal ZAPISUJE wynik.
   const forceFresh = c.req.header("x-force-fresh") === "1";
   // Sesja usera (x-session-id): od „nowy skan" do „nowy skan" — wspólny tag wszystkich ops jednego skanu.
-  const sessionId = c.req.header("x-session-id") || undefined;
+  const sessionId = c.req.header("x-session-id") || c.req.query("sid") || undefined;
   // „app" tylko gdy nagłówek x-client:app (ustawia go DETERMINISTYCZNIE prawdziwa apka). Brak → eksperyment.
   const source = c.req.header("x-client") === "app" ? "app" : undefined;
   const apiUsage = new Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>();

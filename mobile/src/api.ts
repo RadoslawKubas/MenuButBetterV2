@@ -629,9 +629,11 @@ export async function fetchRestaurant(
 
 /** URL do proxy zdjęcia lokalu (klucz Google zostaje na serwerze). */
 export function placePhotoUrl(photoName: string, width = 800): string {
-  // Token w query (?t=), bo zdjęcie ładuje <Image>/pobieranie pliku — bez nagłówków.
+  // Token + install_id w query (?t=/?iid=), bo zdjęcie ładuje <Image>/pobieranie pliku — BEZ nagłówków.
+  // iid → wywołanie google_places trafia do właściwej instancji (inaczej osierocone w statystykach).
   const tok = APP_TOKEN ? `&t=${encodeURIComponent(APP_TOKEN)}` : "";
-  return `${API_BASE}/place-photo?name=${encodeURIComponent(photoName)}&w=${width}${tok}`;
+  const iid = INSTALL_ID ? `&iid=${encodeURIComponent(INSTALL_ID)}` : "";
+  return `${API_BASE}/place-photo?name=${encodeURIComponent(photoName)}&w=${width}${tok}${iid}`;
 }
 
 export interface VenueMatch {
