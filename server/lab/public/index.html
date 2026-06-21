@@ -1223,7 +1223,8 @@ function renderStatsByApi(){
   document.getElementById('statsByApi').innerHTML = rows.length ? `<table style="width:100%"><thead><tr><th>API</th><th>zapytań</th><th>tokeny in/out</th><th>koszt</th></tr></thead><tbody>`+
     rows.map(r=>`<tr><td><b>${esc(PROV_LABEL[r.provider]||r.provider)}</b></td><td>${r.calls}</td><td class="mut">${fmtTokk(r.inTok)} / ${fmtTokk(r.outTok)}</td><td><b>${fmtUsd(r.total)}</b></td></tr>`).join('')+`</tbody></table>` : '<span class="mut">Brak danych.</span>';
 }
-const OP_LABEL={scan:'skan',enrich:'enrich (tłum./opisy)','dish-photos':'zdjęcia dań','dish-photo-refresh':'odśw. zdjęcia',peek:'szybki podgląd','dish-info':'opis dania',restaurant:'lokal (Places)','venue-photos':'zdjęcia z lokalu'};
+const OP_LABEL={scan:'skan',enrich:'enrich (tłum./opisy)','dish-photos':'zdjęcia dań — weryfikacja (AI)','dish-photo-refresh':'odśw. zdjęcia',peek:'szybki podgląd','dish-info':'opis dania',restaurant:'lokal (Places)','venue-photos':'zdjęcia z lokalu — weryfikacja (AI)',
+  serper:'wyszukiwanie zdjęć (Serper)',wikimedia:'wyszukiwanie zdjęć (Wikimedia)',openverse:'wyszukiwanie zdjęć (Openverse)',google_places:'wyszukiwanie lokalu (Places)',google_cse:'wyszukiwanie (Google CSE)',serpapi:'wyszukiwanie (SerpApi)',tripadvisor:'TripAdvisor (lokal/zdjęcia)'};
 function sessionStats(g){
   let images=0,dishes=0,photosFetched=0,photoOps=0; const byOp={};
   for(const e of (g.entries||[])){ const d=(e.meta&&e.meta.data)||{};

@@ -1,5 +1,16 @@
 // Diagnostyka: lekki, w pamięci log wywołań ZEWNĘTRZNYCH API (per provider, ring buffer).
-import { logEvent } from "./db.ts";
+import { logEvent, reqContext } from "./db.ts";
+
+// Akumulator zużycia API PER-REQUEST (ALS) — żeby na końcu requestu zalogować nie-AI providerów
+// (Serper/Places/Wiki/Openverse…) jako osobne zdarzenia (inaczej ich koszt umyka ze statystyk prod).
+function bumpReq(provider: Provider, d: { calls?: number; bytesSent?: number; bytesRecv?: number; inTok?: number; outTok?: number; costUsd?: number }): void {
+  const acc = reqContext.getStore()?.apiUsage;
+  if (!acc) return;
+  const u = acc.get(provider) ?? { calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 };
+  u.calls += d.calls ?? 0; u.bytesSent += d.bytesSent ?? 0; u.bytesRecv += d.bytesRecv ?? 0;
+  u.inTok += d.inTok ?? 0; u.outTok += d.outTok ?? 0; u.costUsd += d.costUsd ?? 0;
+  acc.set(provider, u);
+}
 
 // Cel — wgląd w to, których serwerów używamy, ile było zapytań i czy ostatnie odpowiedzi
 // były OK/error (do wychwytywania problemów przy testach). Resetuje się po restarcie serwera.
@@ -53,6 +64,7 @@ export function recordBytes(provider: Provider, sent: number, recv: number): voi
   const s = getState(provider);
   s.bytesSent += Math.max(0, Math.round(sent));
   s.bytesRecv += Math.max(0, Math.round(recv));
+  bumpReq(provider, { bytesSent: Math.max(0, Math.round(sent)), bytesRecv: Math.max(0, Math.round(recv)) });
 }
 
 /** Rozmiar w bajtach ciała żądania (string/Buffer/typed array) — do liczenia egressu. */
@@ -84,6 +96,7 @@ export function cacheHitsSnapshot(): { total: number; byOp: Record<string, numbe
 export function record(provider: Provider, op: string, ok: boolean, ms: number, detail?: string): void {
   const s = getState(provider);
   s.total++;
+  bumpReq(provider, { calls: 1 }); // per-request: policz wywołanie (też nieudane — Serper i tak liczy)
   if (!ok) s.errors++;
   s.entries.unshift({ ts: Date.now(), op, ok, ms: Math.round(ms), detail: detail?.slice(0, 300) });
   if (s.entries.length > MAX) s.entries.length = MAX;

@@ -61,7 +61,17 @@ app.use("/*", async (c, next) => {
   const forceFresh = c.req.header("x-force-fresh") === "1";
   // Sesja usera (x-session-id): od „nowy skan" do „nowy skan" — wspólny tag wszystkich ops jednego skanu.
   const sessionId = c.req.header("x-session-id") || undefined;
-  await reqContext.run({ installId, forceFresh, sessionId }, () => next());
+  const apiUsage = new Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>();
+  await reqContext.run({ installId, forceFresh, sessionId, apiUsage }, async () => {
+    await next();
+    // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
+    // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.
+    const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "tripadvisor", "wikimedia", "openverse"]);
+    for (const [prov, u] of apiUsage) {
+      if (!NON_AI.has(prov) || u.calls <= 0) continue;
+      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd: 0, data: { calls: u.calls, bytesSent: u.bytesSent } });
+    }
+  });
 });
 
 // Ruch apka ↔ serwer: odebrane = upload od apki (Content-Length żądania, głównie zdjęcia),

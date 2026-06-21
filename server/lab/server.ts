@@ -1234,17 +1234,19 @@ app.get("/api/cost-log", async (c) => {
     const r = await prodFetch("/events?limit=3000");
     const evs = ((await r.json()) as { events?: Record<string, any>[] }).events ?? [];
     prodEntries = evs
-      .filter((e) => (e.type === "ai" || e.type === "scan") && (e.model || e.cost_usd != null))
+      // type "api" = nie-AI provider (Serper/Places/Wiki/Openverse…) z liczbą zapytań w data.calls.
+      .filter((e) => (e.type === "ai" || e.type === "scan" || e.type === "api") && (e.model || e.cost_usd != null || e.type === "api"))
       .map((e): CostEntry => {
         const inTok = Number(e.input_tokens) || 0, outTok = Number(e.output_tokens) || 0;
         const prov = (e.provider as string) || (e.model ? apiTag(e.model) : "claude");
         const restaurant = (e.data?.restaurant as string) || undefined;
+        const calls = e.type === "api" ? (Number(e.data?.calls) || 1) : 1; // nie-AI: realna liczba zapytań
         return {
           ts: Date.parse(e.created_at) || 0,
           ms: 0,
           op: (e.op as string) || (e.type as string),
           meta: { lokal: restaurant, installId: (e.install_id as string) || undefined, prod: true, dish: e.data?.dish, data: e.data },
-          delta: [{ provider: prov, calls: 1, inTok, outTok, costUsd: Number(e.cost_usd) || 0, bytesSent: 0, bytesRecv: 0 }],
+          delta: [{ provider: prov, calls, inTok, outTok, costUsd: Number(e.cost_usd) || 0, bytesSent: Number(e.data?.bytesSent) || 0, bytesRecv: 0 }],
           models: e.model ? [{ model: e.model as string, inTok, outTok, calls: 1 }] : [],
           cacheHits: e.data?.cached ? 1 : 0,
         };

@@ -10,7 +10,11 @@ let ready = false;
 
 // Kontekst per-request: GUID instalacji apki (x-install-id). Dzięki AsyncLocalStorage KAŻDe
 // logEvent w obrębie requestu samo dostaje installId — bez przekazywania przez wszystkie wywołania.
-export const reqContext = new AsyncLocalStorage<{ installId?: string; forceFresh?: boolean; sessionId?: string }>();
+export const reqContext = new AsyncLocalStorage<{
+  installId?: string; forceFresh?: boolean; sessionId?: string;
+  // Akumulator zużycia API per-request (apiLog wpisuje; middleware loguje nie-AI providerów na koniec).
+  apiUsage?: Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>;
+}>();
 
 /** Współdzielona pula Postgresa (lub null bez DATABASE_URL). Używa też cache.ts. */
 export function getPool(): Pool | null {
