@@ -89,8 +89,9 @@ export interface DishPhotosDebug {
   resultCount: number;
   /** Czy poglądowe poszły Z CACHE (zero płatnego wyszukania/weryfikacji). */
   fromCache?: boolean;
-  /** SUROWE wyniki per wyszukiwarka — DOKŁADNE pytanie wysłane do API + URL-e zwrócone PRZED weryfikacją. */
-  searched?: { provider: string; query?: string; urls: string[] }[];
+  /** SUROWE wyniki per wyszukiwarka — DOKŁADNE pytanie wysłane do API + URL-e zwrócone PRZED weryfikacją.
+   *  `prov` = kanoniczny id providera (serper/wikimedia/openverse) — do połączenia ze zdarzeniem kosztu. */
+  searched?: { provider: string; prov?: string; query?: string; urls: string[] }[];
 }
 
 export interface DishPhotosResult {
@@ -317,17 +318,17 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     // DOKŁADNE pytanie wysłane do każdej wyszukiwarki: Serper dokleja kuchnię (jak genericWebImages),
     // Wikimedia/Openverse szukają po samym terminie generycznym.
     const serperQ = [genericTerm, cuisine?.trim()].filter(Boolean).join(" ");
-    const sources: { name: string; query: string; run: () => Promise<DishPhoto[]> }[] = [
-      { name: "Serper (web)", query: serperQ, run: () => genericWebImages(genericTerm, perSource, cuisine) },
-      { name: "Wikimedia", query: genericTerm, run: () => new WikimediaProvider(perSource).find(genericTerm) },
-      { name: "Openverse", query: genericTerm, run: () => new OpenverseProvider(perSource).find(genericTerm) },
+    const sources: { name: string; prov: string; query: string; run: () => Promise<DishPhoto[]> }[] = [
+      { name: "Serper (web)", prov: "serper", query: serperQ, run: () => genericWebImages(genericTerm, perSource, cuisine) },
+      { name: "Wikimedia", prov: "wikimedia", query: genericTerm, run: () => new WikimediaProvider(perSource).find(genericTerm) },
+      { name: "Openverse", prov: "openverse", query: genericTerm, run: () => new OpenverseProvider(perSource).find(genericTerm) },
     ];
     const ordered = CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources;
     const lists = await Promise.all(ordered.map((s) => s.run().catch(() => [] as DishPhoto[])));
     const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
     // SUROWE wyniki per wyszukiwarka (pytanie + URL-e ZWRÓCONE przez API, PRZED weryfikacją vizją) — do
     // podglądu „o co pytaliśmy i co dała wyszukiwarka, zanim ocenialiśmy". Same linki (bez bajtów).
-    dbg.searched!.push(...ordered.map((s, i) => ({ provider: s.name, query: s.query, urls: (lists[i] ?? []).map((ph) => ph.url).filter(Boolean).slice(0, 12) })).filter((x) => x.urls.length));
+    dbg.searched!.push(...ordered.map((s, i) => ({ provider: s.name, prov: s.prov, query: s.query, urls: (lists[i] ?? []).map((ph) => ph.url).filter(Boolean).slice(0, 12) })).filter((x) => x.urls.length));
     // Scal RÓWNOMIERNIE (round-robin po źródłach), dedup po url — każde źródło ma reprezentację.
     const merged: DishPhoto[] = [];
     const seen = new Set<string>();
@@ -464,7 +465,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       if (site.length === 0 && nameCanon !== nameMenu) site = await restaurantSiteImages(nameCanon, restaurantDomain, 6).catch(() => []);
       const siteFresh = fresh(site);
       dbg.steps.push({ tier: "Z lokalu — strona www", provider: `site:${restaurantDomain}`, query: nameMenu, returned: site.length, candidates: candListOf(siteFresh) });
-      if (site.length) dbg.searched!.push({ provider: `site:${restaurantDomain}`, query: nameMenu, urls: site.map((ph) => ph.url).filter(Boolean).slice(0, 12) });
+      if (site.length) dbg.searched!.push({ provider: `site:${restaurantDomain}`, prov: "serper", query: nameMenu, urls: site.map((ph) => ph.url).filter(Boolean).slice(0, 12) });
       venueCands.push(...siteFresh);
     }
     const portal = await venuePortalImages([nameMenu, nameCanon, nameLocal], venueName, cityQual, 6).catch(() => []);
@@ -473,7 +474,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     // #1: tylko POTWIERDZONE z lokalu (po URL/domenie/ID — bez vision) trafiają do puli „z lokalu";
     //     reszta z portali/social (cudze zdjęcia dania) jest pomijana — czysty generyk z B jest lepszy.
     const portalVenue = portalFresh.filter((ph) => fromVenue(ph));
-    if (portal.length) dbg.searched!.push({ provider: "Serper portale/social", query: portalQuery, urls: portal.map((ph) => ph.url).filter(Boolean).slice(0, 12) });
+    if (portal.length) dbg.searched!.push({ provider: "Serper portale/social", prov: "serper", query: portalQuery, urls: portal.map((ph) => ph.url).filter(Boolean).slice(0, 12) });
     dbg.steps.push({
       tier: "Z lokalu — portale/social",
       provider: "Serper site:portale+social",

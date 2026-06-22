@@ -18,6 +18,9 @@ export const reqContext = new AsyncLocalStorage<{
   source?: string;
   // Akumulator zużycia API per-request (apiLog wpisuje; middleware loguje nie-AI providerów na koniec).
   apiUsage?: Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>;
+  // Kontekst wyszukiwania zdjęć — ustawia handler /dish-photos. Middleware dokleja DANIE + PYTANIE i zwrócone
+  // URL-e do zdarzeń per wyszukiwarka (serper/wikimedia/openverse), żeby w logu było widać o co i dla czego.
+  photoSearch?: { dish: string; searched: { provider: string; prov?: string; query?: string; urls: string[] }[] };
 }>();
 
 /** Współdzielona pula Postgresa (lub null bez DATABASE_URL). Używa też cache.ts. */

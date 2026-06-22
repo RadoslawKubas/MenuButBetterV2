@@ -76,12 +76,19 @@ app.use("/*", async (c, next) => {
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
     // i był ODDZIELONY od weryfikacji (AI). Serper = wyszukiwanie zdjęć; Places = lokal; itd. sessionId z ctx.
     const NON_AI = new Set(["serper", "serpapi", "google_cse", "google_places", "google_places_photo", "tripadvisor", "wikimedia", "openverse"]);
+    const ps = reqContext.getStore()?.photoSearch; // ustawione przez /dish-photos (danie + zapytania/wyniki)
     for (const [prov, u] of apiUsage) {
       if (!NON_AI.has(prov) || u.calls <= 0) continue;
       // Koszt nie-AI wg WSPÓLNEGO cennika (pricing.ts + override'y z labu) → akumulator sesji liczy KAŻDY
       // koszt. Lab przelicza nie-AI z data.calls tą samą metodą (costUsd zdarzenia api ignoruje) — brak dubla.
       const costUsd = apiCallCost(prov, u.calls, getPriceOverrides());
-      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, data: { calls: u.calls, bytesSent: u.bytesSent } });
+      // Dla wyszukiwań zdjęć: dołącz DANIE + PYTANIE/wyniki tej wyszukiwarki, żeby wiersz logu był czytelny.
+      const searches = ps?.searched.filter((s) => s.prov === prov).map((s) => ({ provider: s.provider, query: s.query, urls: s.urls }));
+      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, data: {
+        calls: u.calls, bytesSent: u.bytesSent,
+        ...(ps?.dish ? { dish: ps.dish } : {}),
+        ...(searches && searches.length ? { searches } : {}),
+      } });
     }
     // Aktualny sumaryczny koszt sesji → nagłówek dla apki (live „ile sesja kosztuje"). Dla zwykłych
     // odpowiedzi JSON działa; dla strumieniowych nagłówek jest już wysłany — tam koszt dojdzie z kolejnym requestem.
@@ -735,6 +742,10 @@ app.post("/dish-photos", async (c) => {
       representativeOnly: body.representativeOnly,
       takeAll: body.takeAll,
     });
+    // Kontekst dla middleware: dołączy DANIE + PYTANIE/wyniki do zdarzeń per wyszukiwarka (serper/wikimedia/
+    // openverse), żeby w logu każdy wiersz wyszukiwania pokazał o co i dla jakiego dania pytaliśmy.
+    const ctx = reqContext.getStore();
+    if (ctx) ctx.photoSearch = { dish: body.dish.trim(), searched: debug?.searched ?? [] };
     logEvent({
       type: "ai",
       op: "dish-photos",
