@@ -9,6 +9,7 @@ import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { openaiVisionJson } from "./openaiClient.ts";
 import { usesOpenAiApi, apiTag } from "./models.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { stepEnabled } from "./runtimeConfig.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 const MODEL = "claude-sonnet-4-6"; // domyślny model weryfikacji (gdy nie podano innego)
@@ -123,6 +124,11 @@ export async function scoreDishPhotos(
   opts: ScoreOptions = {},
 ): Promise<{ scores: number[]; textOverlay: boolean[]; usage: Usage }> {
   if (urls.length === 0) return { scores: [], textOverlay: [], usage: ZERO_USAGE };
+  // KROK WYŁĄCZONY (config z labu) — pomiń płatny vision: każde zdjęcie dostaje 0.9 (przechodzi próg).
+  // Do testów „jak działa bez weryfikacji" i oszczędności. Brak znaku wodnego (textOverlay=false).
+  if (!stepEnabled("verifyPhotos")) {
+    return { scores: new Array<number>(urls.length).fill(0.9), textOverlay: new Array<boolean>(urls.length).fill(false), usage: ZERO_USAGE };
+  }
   const model = opts.model || MODEL;
   const isOpenAI = usesOpenAiApi(model); // OpenAI lub Gemini → ścieżka OpenAI-compatible
   const scores = new Array<number>(urls.length).fill(0);

@@ -46,26 +46,13 @@ export interface SavedScan {
 }
 
 const KEY = "mbb.scans.v1";
-const PREF_MODELS_KEY = "mbb.pref.models.v1";
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Wybór modelu PER miejsce użycia (skan / opisy / weryfikacja / venue) — zapamiętany. */
-export async function loadModelPrefs(): Promise<Partial<Record<ModelRole, ModelId>>> {
-  const raw = await AsyncStorage.getItem(PREF_MODELS_KEY);
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw) as Partial<Record<ModelRole, ModelId>>;
-  } catch {
-    return {};
-  }
-}
-
-export async function saveModelPrefs(models: Record<ModelRole, ModelId>): Promise<void> {
-  await AsyncStorage.setItem(PREF_MODELS_KEY, JSON.stringify(models));
-}
+// (Wybór modeli PER etap przeniesiony na serwer — config runtime edytowany w LAB. Kod ustawień modeli w
+//  apce usunięty; modele nadpisuje serwer.)
 
 const PREF_LANG_KEY = "mbb.pref.lang.v1";
 

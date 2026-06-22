@@ -13,6 +13,7 @@ import {
   type DishPhoto,
 } from "./dishPhotos.ts";
 import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
+import { stepEnabled, type ToggleStep } from "./runtimeConfig.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
 
@@ -318,12 +319,13 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     // DOKŁADNE pytanie wysłane do każdej wyszukiwarki: Serper dokleja kuchnię (jak genericWebImages),
     // Wikimedia/Openverse szukają po samym terminie generycznym.
     const serperQ = [genericTerm, cuisine?.trim()].filter(Boolean).join(" ");
-    const sources: { name: string; prov: string; query: string; run: () => Promise<DishPhoto[]> }[] = [
-      { name: "Serper (web)", prov: "serper", query: serperQ, run: () => genericWebImages(genericTerm, perSource, cuisine) },
-      { name: "Wikimedia", prov: "wikimedia", query: genericTerm, run: () => new WikimediaProvider(perSource).find(genericTerm) },
-      { name: "Openverse", prov: "openverse", query: genericTerm, run: () => new OpenverseProvider(perSource).find(genericTerm) },
+    const sources: { name: string; prov: string; step: ToggleStep; query: string; run: () => Promise<DishPhoto[]> }[] = [
+      { name: "Serper (web)", prov: "serper", step: "photoSerper", query: serperQ, run: () => genericWebImages(genericTerm, perSource, cuisine) },
+      { name: "Wikimedia", prov: "wikimedia", step: "photoWikimedia", query: genericTerm, run: () => new WikimediaProvider(perSource).find(genericTerm) },
+      { name: "Openverse", prov: "openverse", step: "photoOpenverse", query: genericTerm, run: () => new OpenverseProvider(perSource).find(genericTerm) },
     ];
-    const ordered = CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources;
+    // Pomiń źródła WYŁĄCZONE w configu (lab) — zero kosztu/zapytań dla wyłączonych (testy/oszczędność).
+    const ordered = (CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources).filter((s) => stepEnabled(s.step));
     const lists = await Promise.all(ordered.map((s) => s.run().catch(() => [] as DishPhoto[])));
     const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
     // SUROWE wyniki per wyszukiwarka (pytanie + URL-e ZWRÓCONE przez API, PRZED weryfikacją vizją) — do
@@ -460,7 +462,8 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   let weakVenue: Scored[] = [];
 
   // ---- A. ZDJĘCIA Z LOKALU (#1) — tylko POTWIERDZONE (własna domena / d<id> TA / nazwa-w-URL). ----
-  if (!branded) {
+  // Wyszukiwania „z lokalu" idą przez Serper → gdy Serper wyłączony w configu, pomijamy je też (oszczędność).
+  if (!branded && stepEnabled("photoSerper")) {
     const venueCands: DishPhoto[] = [];
     if (restaurantDomain) {
       let site = await restaurantSiteImages(nameMenu, restaurantDomain, 6).catch(() => []);

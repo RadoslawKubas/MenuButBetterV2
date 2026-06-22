@@ -59,8 +59,6 @@ import {
   setScanCost,
   renameScan,
   clearScanRestaurant,
-  loadModelPrefs,
-  saveModelPrefs,
   loadLangPref,
   saveLangPref,
   loadPeekPref,
@@ -243,8 +241,9 @@ export default function App() {
   const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
   const [showVenueSearch, setShowVenueSearch] = useState(false); // osobny ekran „Znajdź lokal" (mapa + szukanie)
   const [sessionCost, setSessionCost] = useState(0); // LIVE koszt sesji (z nagłówka x-session-cost) — rośnie w trakcie
-  // Model AI osobno per miejsce użycia (skan/opisy/weryfikacja/venue) — patrz Ustawienia.
-  const [models, setModels] = useState<Record<ModelRole, ModelId>>(DEFAULT_MODELS);
+  // Modele AI per etap — ustawiane CENTRALNIE na serwerze (config runtime, edytowany w LAB). Apka wysyła
+  // domyślne jako fallback; serwer i tak nadpisuje je swoim configiem. (Ustawienia modeli w apce usunięte.)
+  const models = DEFAULT_MODELS;
 
   const [scans, setScans] = useState<SavedScan[]>([]);
   const [freshScanId, setFreshScanId] = useState<string | null>(null);
@@ -316,10 +315,6 @@ export default function App() {
     void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
-    // Przywróć zapamiętane modele per miejsce (brakujące pola uzupełniamy domyślnymi).
-    loadModelPrefs()
-      .then((saved) => setModels((prev) => ({ ...prev, ...saved })))
-      .catch(() => {});
     loadLangPref()
       .then((l) => {
         if (l) setTargetLang(l);
@@ -404,21 +399,6 @@ export default function App() {
     } catch {
       // pojedyncze zdjęcie nie przeszło — ignoruj, można pstryknąć ponownie
     }
-  }
-
-  // Zmiana modelu dla jednego miejsca + zapamiętanie.
-  function changeModel(role: ModelRole, m: ModelId) {
-    setModels((prev) => {
-      const next = { ...prev, [role]: m };
-      void saveModelPrefs(next).catch(() => {});
-      return next;
-    });
-  }
-
-  // Ustawia WSZYSTKIE role naraz (presety / „ustaw wszędzie" / reset do domyślnych) + zapis.
-  function setModelsAll(next: Record<ModelRole, ModelId>) {
-    setModels(next);
-    void saveModelPrefs(next).catch(() => {});
   }
 
   // Zmiana domyślnego języka tłumaczenia + zapamiętanie.
@@ -2211,9 +2191,6 @@ export default function App() {
           />
         ) : showSettings ? (
           <SettingsView
-            models={models}
-            onChangeModel={changeModel}
-            onSetModels={setModelsAll}
             targetLang={targetLang}
             onChangeLang={changeLang}
             costPrefs={costPrefs}

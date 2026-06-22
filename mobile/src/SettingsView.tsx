@@ -6,29 +6,14 @@ import Constants from "expo-constants";
 import type { CostPrefs } from "./storage";
 import {
   LANGUAGES,
-  MODEL_OPTIONS,
-  MODEL_ROLES,
-  MODEL_PRESETS,
   PROVIDER_LABELS,
   PROVIDER_DIAG_KEY,
-  DEFAULT_MODELS,
-  allRolesToModel,
-  type ModelId,
-  type ModelRole,
   type ModelProvider,
 } from "./types";
 import { fetchDiagnostics, API_BASE, isForceFresh, setForceFresh } from "./api";
 import { colors } from "./theme";
 
 const PROVIDER_ORDER: ModelProvider[] = ["anthropic", "openai", "google"];
-
-function priceOf(id: ModelId): string {
-  const o = MODEL_OPTIONS.find((m) => m.id === id);
-  return o ? `$${o.price.in}/$${o.price.out}` : "";
-}
-
-// Pełna mapa ról ustawiona na jeden model (presety / „ustaw wszędzie") — rozszerzalne (MODEL_ROLES).
-const allRoles = allRolesToModel;
 
 function CostSwitch({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -40,9 +25,6 @@ function CostSwitch({ label, value, onChange }: { label: string; value: boolean;
 }
 
 export function SettingsView({
-  models,
-  onChangeModel,
-  onSetModels,
   targetLang,
   onChangeLang,
   costPrefs,
@@ -52,9 +34,6 @@ export function SettingsView({
   onOpenPricing,
   capturesCount,
 }: {
-  models: Record<ModelRole, ModelId>;
-  onChangeModel: (role: ModelRole, model: ModelId) => void;
-  onSetModels: (models: Record<ModelRole, ModelId>) => void;
   targetLang: string;
   onChangeLang: (lang: string) => void;
   costPrefs: CostPrefs;
@@ -64,7 +43,6 @@ export function SettingsView({
   onOpenPricing: () => void;
   capturesCount: number;
 }) {
-  const [openRole, setOpenRole] = useState<ModelRole | null>(null);
   const [forceFresh, setForceFreshState] = useState(isForceFresh());
   // Status kluczy providerów (z /diagnostics) — by ostrzec przed modelem bez klucza.
   const [configured, setConfigured] = useState<Record<string, boolean> | null>(null);
@@ -90,8 +68,6 @@ export function SettingsView({
     return configured[PROVIDER_DIAG_KEY[prov]] ?? true;
   }
 
-  const allSame = (model: ModelId) => MODEL_ROLES.every(({ role }) => models[role] === model);
-
   const appVersion = Constants.expoConfig?.version ?? "?";
   const buildNo = (Constants.expoConfig?.ios?.buildNumber as string | undefined) ?? null;
   const serverHost = API_BASE.replace(/^https?:\/\//, "");
@@ -113,78 +89,11 @@ export function SettingsView({
         })}
       </View>
 
-      <Text style={styles.section}>Szybkie zestawy</Text>
-      <Text style={styles.sub}>Jeden tap ustawia ten model we wszystkich etapach (skan + opisy + zdjęcia).</Text>
-      <View style={styles.chips}>
-        {MODEL_PRESETS.map((p) => {
-          const active = allSame(p.model);
-          return (
-            <Pressable
-              key={p.id}
-              onPress={() => onSetModels(allRoles(p.model))}
-              style={[styles.preset, active && styles.presetActive]}
-            >
-              <Text style={[styles.presetLabel, active && styles.chipTextActive]}>{p.label}</Text>
-              <Text style={[styles.presetDesc, active && styles.presetDescActive]}>{p.desc}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      <Pressable onPress={() => onSetModels(DEFAULT_MODELS)} style={styles.resetBtn}>
-        <Text style={styles.resetText}>↺ Przywróć domyślne</Text>
-      </Pressable>
-
-      <Text style={styles.section}>Model osobno per etap</Text>
-      <Text style={styles.sub}>Ceny: $ za 1M tokenów (wejście/wyjście). Dotknij etap, by zmienić model.</Text>
-      {MODEL_ROLES.map(({ role, label, hint }) => {
-        const cur = MODEL_OPTIONS.find((o) => o.id === models[role]);
-        const isOpen = openRole === role;
-        return (
-          <View key={role} style={styles.roleCard}>
-            <Pressable style={styles.roleHeader} onPress={() => setOpenRole(isOpen ? null : role)}>
-              <View style={styles.roleHeadMain}>
-                <Text style={styles.roleLabel}>{label}</Text>
-                <Text style={styles.roleHint}>{hint}</Text>
-              </View>
-              <View style={styles.roleCur}>
-                <Text style={styles.roleCurModel} numberOfLines={1}>{cur?.label ?? models[role]}</Text>
-                <Text style={styles.roleCurPrice}>{priceOf(models[role])}</Text>
-              </View>
-              <Text style={styles.chevron}>{isOpen ? "▾" : "›"}</Text>
-            </Pressable>
-
-            {isOpen ? (
-              <View style={styles.picker}>
-                {PROVIDER_ORDER.map((prov) => (
-                  <View key={prov} style={styles.provGroup}>
-                    <Text style={styles.provLabel}>
-                      {PROVIDER_LABELS[prov]}
-                      {providerOk(prov) ? "" : " · ⚠ brak klucza"}
-                    </Text>
-                    <View style={styles.chips}>
-                      {MODEL_OPTIONS.filter((o) => o.provider === prov).map((m) => {
-                        const active = models[role] === m.id;
-                        return (
-                          <Pressable
-                            key={m.id}
-                            onPress={() => onChangeModel(role, m.id)}
-                            style={[styles.modelChip, active && styles.chipActive, !providerOk(prov) && styles.modelChipWarn]}
-                          >
-                            <Text style={[styles.modelChipText, active && styles.chipTextActive]}>{m.label}</Text>
-                            <Text style={[styles.modelChipPrice, active && styles.chipTextActive]}>
-                              ${m.price.in}/${m.price.out}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-        );
-      })}
+      <Text style={styles.section}>Modele AI</Text>
+      <Text style={styles.sub}>
+        Modele dla poszczególnych etapów (skan, opisy, weryfikacja zdjęć…) ustawia się teraz centralnie w
+        panelu LAB (config runtime na serwerze) — apka korzysta z aktualnej konfiguracji serwera.
+      </Text>
 
       <Text style={styles.section}>Koszty / limity</Text>
       <Text style={styles.sub}>

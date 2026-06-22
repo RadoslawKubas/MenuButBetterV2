@@ -1632,6 +1632,27 @@ app.post("/api/prices", async (c) => {
   return c.json({ ok: true });
 });
 
+// CONFIG RUNTIME: modele per-step + włączanie/wyłączanie kroków (proxy do prod /admin/runtime-config).
+app.get("/api/runtime-config", async (c) => {
+  try {
+    const r = await prodFetch("/admin/runtime-config");
+    const j = (await r.json()) as { config?: unknown };
+    const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider }));
+    return c.json({ config: j.config ?? {}, models });
+  } catch (e) {
+    return c.json({ error: (e as Error).message, config: {}, models: [] }, 502);
+  }
+});
+app.post("/api/runtime-config", async (c) => {
+  const body = await c.req.json<{ config?: unknown }>().catch(() => ({}) as { config?: unknown });
+  try {
+    const r = await prodFetch("/admin/runtime-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: body.config ?? {} }) });
+    return c.json((await r.json()) as Record<string, unknown>);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
 // Katalog zewnętrznych serwisów (nazwa/opis/panel/cennik/cena orientacyjna).
 app.get("/api/services", (c) => c.json({ services: SERVICES }));
 

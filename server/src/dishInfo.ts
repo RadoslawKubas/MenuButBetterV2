@@ -6,6 +6,7 @@ import { getClientForModel } from "./openaiClient.ts";
 import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { stepEnabled } from "./runtimeConfig.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
 
@@ -39,6 +40,8 @@ export const SYSTEM = [
 export async function describeDish(
   input: DishInfoInput,
 ): Promise<{ text: string; usage: Usage; cached?: boolean }> {
+  // KROK WYŁĄCZONY (config z labu) — nie wołaj modelu, zwróć atrapę „DISABLED" (testy/oszczędność).
+  if (!stepEnabled("descriptions")) return { text: "DISABLED", usage: ZERO_USAGE };
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
   // ② CACHE opisu ROZSZERZONEGO. Klucz: danie + KRÓTKI OPIS (wariant) + kuchnia + REGION+KRAJ + język +

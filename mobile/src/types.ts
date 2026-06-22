@@ -251,14 +251,6 @@ export const MODEL_OPTIONS: {
   { id: "gemini-2.5-pro", label: "Gemini Pro", hint: "najmocniejszy Google", provider: "google", price: { in: 1.25, out: 10 } },
 ];
 
-// Gotowe zestawy (jeden tap → wszystkie 4 role tym samym modelem) — proste do porównań.
-export const MODEL_PRESETS: { id: string; label: string; desc: string; model: ModelId }[] = [
-  { id: "cheap", label: "Tani", desc: "Gemini Flash-Lite — grosze", model: "gemini-2.5-flash-lite" },
-  { id: "balanced", label: "Zbalansowany", desc: "Sonnet 4.6 wszędzie", model: "claude-sonnet-4-6" },
-  { id: "best", label: "Najlepszy", desc: "Opus 4.8 wszędzie", model: "claude-opus-4-8" },
-  { id: "gemini", label: "Gemini-test", desc: "Gemini Flash wszędzie", model: "gemini-2.5-flash" },
-];
-
 // Języki tłumaczenia menu (wybór w Ustawieniach).
 export const LANGUAGES = ["polski", "English", "Deutsch", "Español"];
 
@@ -284,11 +276,6 @@ export const DEFAULT_MODELS: Record<ModelRole, ModelId> = {
   venue: "claude-sonnet-4-6",
   peek: "gpt-5-nano", // szybki podgląd: grosze, działa na kluczu OpenAI (bez billingu Gemini)
 };
-
-/** Wszystkie role → jeden model (do „ustaw wszędzie ten sam"). Rozszerzalne: czerpie z MODEL_ROLES. */
-export function allRolesToModel(model: ModelId): Record<ModelRole, ModelId> {
-  return Object.fromEntries(MODEL_ROLES.map((r) => [r.role, model])) as Record<ModelRole, ModelId>;
-}
 
 /** Zbiór RÓŻNYCH modeli użytych w danym zestawie ról (do podsumowań). Pomija braki (stare zapisy). */
 export function distinctModels(models: Partial<Record<ModelRole, ModelId>>): ModelId[] {

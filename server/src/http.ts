@@ -16,7 +16,8 @@ import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto, type VenueMatch } from "./venuePhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
-import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides } from "./db.ts";
+import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides, readRuntimeConfig, saveRuntimeConfig } from "./db.ts";
+import { cfgModel, getRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.ts";
 // ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
 import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
@@ -252,7 +253,7 @@ app.post("/scan", async (c) => {
       s.write(beat).catch(() => {});
     }, wantSteps ? 2000 : 5000);
     try {
-      const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
+      const model = cfgModel("scan", isModelId(body.model) ? body.model : DEFAULT_MODEL);
       const { menu, usage, cached, readable, poorQuality, enriched } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
@@ -443,7 +444,7 @@ app.post("/scan/run", async (c) => {
 
   const wantSteps = body.stream === true;
   const t0 = Date.now();
-  const model = s.params.model && isModelId(s.params.model) ? s.params.model : DEFAULT_MODEL;
+  const model = cfgModel("scan", s.params.model && isModelId(s.params.model) ? s.params.model : DEFAULT_MODEL);
   return stream(c, async (st) => {
     if (wantSteps) await st.write(JSON.stringify({ phase: "received", images: ordered.length }) + "\n");
     const keepalive = setInterval(() => { st.write(wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ").catch(() => {}); }, wantSteps ? 2000 : 5000);
@@ -509,7 +510,7 @@ app.post("/enrich", async (c) => {
   }
   if (!body.menu?.sections?.length) return c.json({ error: "Brak struktury menu do wzbogacenia." }, 400);
   const structure = menuToStructure(body.menu);
-  const model = isModelId(body.enrichModel) ? body.enrichModel : isModelId(body.model) ? body.model : DEFAULT_MODEL;
+  const model = cfgModel("enrich", isModelId(body.enrichModel) ? body.enrichModel : isModelId(body.model) ? body.model : DEFAULT_MODEL);
   const wantSteps = body.stream === true;
   const t0 = Date.now();
   return stream(c, async (s) => {
@@ -561,7 +562,7 @@ app.post("/dish-info", async (c) => {
   if (!body.name?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
   try {
-    const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
+    const model = cfgModel("dishInfo", isModelId(body.model) ? body.model : DEFAULT_MODEL);
     const { text: info, usage, cached } = await describeDish({
       name: body.name.trim(),
       description: body.description?.trim() || undefined,
@@ -601,7 +602,7 @@ app.post("/quick-peek", async (c) => {
     const known = await cacheGet<{ reason?: string }>("bad-photo", cacheKey("bad-photo", imageHash), { op: "quick-peek" });
     if (known) return c.json({ isMenu: false, cuisine: "", restaurantName: "", readable: false, bad: true, badReason: known.reason ?? "za słaba jakość", imageHash, usage: ZERO_USAGE });
     if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
-    const model = isModelId(body.model) ? body.model : DEFAULT_MODEL;
+    const model = cfgModel("peek", isModelId(body.model) ? body.model : DEFAULT_MODEL);
     const { result, usage } = await quickPeek(
       { base64: body.image.base64, mediaType: body.image.mediaType || "image/jpeg" },
       model,
@@ -727,7 +728,7 @@ app.post("/dish-photos", async (c) => {
   }
   if (!body.dish?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
-  const verifyModel = body.verifyModel?.trim() || "claude-sonnet-4-6";
+  const verifyModel = cfgModel("verify", (body.verifyModel?.trim() || "claude-sonnet-4-6") as ModelId);
   try {
     const { photos, usage, debug } = await runDishPhotos({
       dish: body.dish.trim(),
@@ -1149,6 +1150,16 @@ app.post("/admin/price-overrides", async (c) => {
   const ov = b.overrides && typeof b.overrides === "object" ? b.overrides : {};
   await savePriceOverrides(ov);
   return c.json({ ok: true, overrides: readPriceOverrides() });
+});
+
+// CONFIG RUNTIME: lab edytuje modele per-step + włączanie/wyłączanie kroków i WGRYWA cały obiekt. Serwer
+// trzyma w DB i stosuje do KAŻDEGO requestu (modele nadpisują te z apki; wyłączone kroki pomijane/atrapowane).
+app.get("/admin/runtime-config", (c) => c.json({ config: readRuntimeConfig() }));
+app.post("/admin/runtime-config", async (c) => {
+  const b = await c.req.json<{ config?: RuntimeConfig }>().catch(() => ({}) as { config?: RuntimeConfig });
+  const cfg = b.config && typeof b.config === "object" ? b.config : {};
+  await saveRuntimeConfig(cfg);
+  return c.json({ ok: true, config: readRuntimeConfig() });
 });
 
 // Lab: nadaj nazwę instalacji.

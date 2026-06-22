@@ -5,6 +5,7 @@
 import { Pool } from "pg";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setPriceOverridesCache, getPriceOverrides, type PriceOverrides } from "./pricing.ts";
+import { setRuntimeConfigCache, getRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.ts";
 
 let pool: Pool | null = null;
 let ready = false;
@@ -88,6 +89,7 @@ export async function initDb(): Promise<void> {
     `);
     ready = true;
     await loadPriceOverridesFromDb(); // wczytaj wspólny cennik (override'y z labu) do cache
+    await loadRuntimeConfigFromDb(); // wczytaj config runtime (modele/kroki sterowane z labu) do cache
     console.log("[db] trwałe logi GOTOWE (Postgres).");
   } catch (e) {
     console.error("[db] init nieudany — trwałe logi wyłączone:", (e as Error).message);
@@ -125,6 +127,39 @@ export async function savePriceOverrides(o: PriceOverrides): Promise<void> {
     );
   } catch (e) {
     console.error("[db] nie udało się zapisać cennika:", (e as Error).message);
+  }
+}
+
+// --- CONFIG RUNTIME: modele per-step + włączanie/wyłączanie kroków (lab edytuje, serwer stosuje). ---
+async function loadRuntimeConfigFromDb(): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  try {
+    const r = await p.query<{ data: RuntimeConfig }>(`SELECT data FROM app_config WHERE key = 'runtime_config'`);
+    setRuntimeConfigCache(r.rows[0]?.data ?? {});
+  } catch (e) {
+    console.error("[db] nie udało się wczytać configu runtime:", (e as Error).message);
+  }
+}
+
+/** Aktualny config runtime (z cache) — do oddania labowi przez GET. */
+export function readRuntimeConfig(): RuntimeConfig {
+  return getRuntimeConfig();
+}
+
+/** Zapisuje config runtime (upload z labu) do DB i odświeża cache → nowe requesty stosują od razu. */
+export async function saveRuntimeConfig(c: RuntimeConfig): Promise<void> {
+  setRuntimeConfigCache(c);
+  const p = getPool();
+  if (!p || !ready) return;
+  try {
+    await p.query(
+      `INSERT INTO app_config (key, data, updated_at) VALUES ('runtime_config', $1, now())
+       ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+      [JSON.stringify(c)],
+    );
+  } catch (e) {
+    console.error("[db] nie udało się zapisać configu runtime:", (e as Error).message);
   }
 }
 

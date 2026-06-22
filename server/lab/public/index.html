@@ -80,6 +80,7 @@
     <button class="tab" id="tabBtn-errors" onclick="switchTab('errors')">🐞 Błędy</button>
     <button class="tab" id="tabBtn-instances" onclick="switchTab('instances')">📱 Instancje</button>
     <button class="tab" id="tabBtn-prices" onclick="switchTab('prices')">💰 Cennik</button>
+    <button class="tab" id="tabBtn-config" onclick="switchTab('config')">⚙️ Config</button>
     <button class="tab" id="tabBtn-services" onclick="switchTab('services')">🔌 Serwisy</button>
     <button class="tab" id="tabBtn-deploy" onclick="switchTab('deploy')">🚀 Deploy</button>
     <button class="tab" id="tabBtn-stats" onclick="switchTab('stats')">📊 Statystyki</button>
@@ -266,6 +267,19 @@
       <span class="mut small">✏️ <b>kliknij liczbę w polu, wpisz nową cenę i kliknij obok</b> — zapis od razu (override). Wartość liczy koszty w zakładce Logi <b>oraz wgrywa się na serwer</b> → nowe zdarzenia (apka) liczą się już po nowej cenie. „reset" cofa do bazowej. „źródło ↗" = oficjalny cennik.</span>
     </div>
     <div id="pricesBox"></div>
+  </div>
+</div>
+
+<div id="tab-config" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>⚙️ Config runtime — modele per krok + włączanie/wyłączanie kroków</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      <button onclick="loadConfig(this)" style="padding:4px 10px">↻ odśwież</button>
+      <button onclick="saveConfig(this)" style="padding:4px 10px; background:var(--acc); color:#000; font-weight:800">💾 Zapisz na serwer</button>
+      <span id="configInfo" class="mut small"></span>
+    </div>
+    <span class="mut small">Modele <b>nadpisują</b> domyślne z apki (apka nie ma już ustawień modeli). Wyłączony krok: wyszukiwanie zdjęć per źródło = pominięte (0 kosztu/zapytań); weryfikacja AI zdjęć = każde zdjęcie dostaje 0.9 (przechodzi); długie opisy dań = zwraca „DISABLED" zamiast pytać model. Do testów „jak działa" i oszczędności.</span>
+    <div id="configBox" class="mut" style="margin-top:8px">ładuję…</div>
   </div>
 </div>
 
@@ -929,12 +943,13 @@ let COST_PERIOD='all', COST_LIMIT=10000, COST_GROUPS=[], EGRESS_RATE=0.1, CURREN
 function setCostLimit(v){ COST_LIMIT=+v||3000; loadCostLog(); }
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','instances','prices','services','deploy','stats'].forEach(t=>{
+  ['lab','logs','cache','samples','errors','instances','prices','config','services','deploy','stats'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
   if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
+  else if(name==='config'){ loadConfig(); }
   else if(name==='services'){ loadServices(); }
   else if(name==='deploy'){ loadDeploy(); }
   else if(name==='stats'){ renderStatsPeriod(); loadStats(); }
@@ -1092,6 +1107,42 @@ function toggleCacheRow(i){
     inner=`<pre class="pre" style="margin-top:6px">${esc(JSON.stringify(row.value).slice(0,500))}</pre>`;
   }
   el.innerHTML=inner;
+}
+// ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
+let CONFIG={}, CONFIG_MODELS=[];
+const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań']];
+const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper (web + z lokalu)'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
+async function loadConfig(btn){
+  if(btn) btn.disabled=true;
+  try{
+    const r=await api('/api/runtime-config');
+    if(r.error) throw new Error(r.error);
+    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; renderConfig();
+  }catch(e){ document.getElementById('configBox').textContent='błąd: '+e.message; }
+  finally{ if(btn) btn.disabled=false; }
+}
+function renderConfig(){
+  const m=CONFIG.models||{}, s=CONFIG.steps||{};
+  const opts=(sel)=>['<option value="">— domyślny (z apki) —</option>'].concat(CONFIG_MODELS.map(md=>`<option value="${esc(md.id)}" ${sel===md.id?'selected':''}>${esc(md.label)} · ${esc(md.provider)}</option>`)).join('');
+  const modelRows=CFG_MODEL_STEPS.map(([k,lab])=>`<div style="display:flex; gap:8px; align-items:center; margin:3px 0"><span style="width:300px">${esc(lab)}</span><select id="cfgM-${k}" style="flex:1; max-width:340px; padding:3px">${opts(m[k]||'')}</select></div>`).join('');
+  const toggleRows=CFG_TOGGLES.map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgS-${k}" ${s[k]!==false?'checked':''}><span>${esc(lab)}</span></label>`).join('');
+  document.getElementById('configBox').innerHTML=`
+    <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny z apki)</span></h4>${modelRows}</div>
+    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>`;
+}
+async function saveConfig(btn){
+  const models={}, steps={};
+  for(const [k] of CFG_MODEL_STEPS){ const v=document.getElementById('cfgM-'+k).value; if(v) models[k]=v; }
+  for(const [k] of CFG_TOGGLES){ steps[k]=document.getElementById('cfgS-'+k).checked; }
+  const config={models,steps}; const info=document.getElementById('configInfo');
+  if(btn) btn.disabled=true; info.textContent='zapisuję…'; info.style.color='';
+  try{
+    const r=await api('/api/runtime-config',{config});
+    if(r.error) throw new Error(r.error);
+    CONFIG=r.config||config; renderConfig();
+    info.textContent='✓ zapisane na serwer (działa od następnego requestu)'; info.style.color='#7fd6a0';
+  }catch(e){ info.textContent='błąd: '+e.message; info.style.color='#ff8a80'; }
+  finally{ if(btn) btn.disabled=false; }
 }
 async function refreshPrices(btn){
   btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
