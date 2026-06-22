@@ -462,8 +462,8 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   let weakVenue: Scored[] = [];
 
   // ---- A. ZDJĘCIA Z LOKALU (#1) — tylko POTWIERDZONE (własna domena / d<id> TA / nazwa-w-URL). ----
-  // Wyszukiwania „z lokalu" idą przez Serper → gdy Serper wyłączony w configu, pomijamy je też (oszczędność).
-  if (!branded && stepEnabled("photoSerper")) {
+  // OSOBNY krok od Serper web (generyk): tu Serper szuka dania na stronie/portalach LOKALU. Własny toggle.
+  if (!branded && stepEnabled("photoSerperVenue")) {
     const venueCands: DishPhoto[] = [];
     if (restaurantDomain) {
       let site = await restaurantSiteImages(nameMenu, restaurantDomain, 6).catch(() => []);

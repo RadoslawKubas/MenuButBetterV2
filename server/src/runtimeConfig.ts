@@ -5,7 +5,7 @@
 import { DEFAULT_MODEL, type ModelId } from "./models.ts";
 
 export type ModelStep = "peek" | "scan" | "enrich" | "verify" | "dishInfo";
-export type ToggleStep = "photoSerper" | "photoWikimedia" | "photoOpenverse" | "photoVenue" | "verifyPhotos" | "descriptions";
+export type ToggleStep = "photoSerper" | "photoSerperVenue" | "photoWikimedia" | "photoOpenverse" | "photoVenue" | "verifyPhotos" | "descriptions";
 
 export interface RuntimeConfig {
   /** Model per krok — nadpisuje model z requestu (apka nie ma już ustawień modeli). */
