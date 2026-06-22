@@ -1,8 +1,9 @@
-// Ekran „Ustawienia": język + modele AI (szybkie zestawy / osobno per etap, z cenami) +
-// wejścia do Narzędzi + informacje techniczne (wersja, serwer, status kluczy, reset).
+// Ekran „Ustawienia": język + wejścia do Narzędzi + informacje techniczne (wersja + numer builda, serwer,
+// status kluczy). Modele i Koszty/Limity sterowane teraz z LABu (config runtime na serwerze).
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Constants from "expo-constants";
+import * as Application from "expo-application";
 import {
   LANGUAGES,
   PROVIDER_LABELS,
@@ -63,8 +64,11 @@ export function SettingsView({
     return configured[PROVIDER_DIAG_KEY[prov]] ?? true;
   }
 
-  const appVersion = Constants.expoConfig?.version ?? "?";
-  const buildNo = (Constants.expoConfig?.ios?.buildNumber as string | undefined) ?? null;
+  // Wersja + NUMER BUILDA z natywnych wartości (expo-application): buildNo = CFBundleVersion, który realnie
+  // rośnie przy każdym buildzie (autoIncrement) — `expoConfig.ios.buildNumber` jest statyczny, stąd dotąd
+  // widać było tylko „1.0.0". Fallback do expoConfig, gdyby natywne były null (np. Expo Go / web).
+  const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? "?";
+  const buildNo = Application.nativeBuildVersion ?? (Constants.expoConfig?.ios?.buildNumber as string | undefined) ?? null;
   const serverHost = API_BASE.replace(/^https?:\/\//, "");
   const isProd = /railway|up\.app|menubutbetter-production/.test(API_BASE);
 
