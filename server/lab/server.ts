@@ -307,8 +307,6 @@ interface MetaImage {
   file: string;
   mediaType?: string;
   exifLocation?: { lat: number; lng: number };
-  /** Stabilny hash oryginału (md5 z telefonu) — niesiony, by replay/round-trip dał ten sam klucz cache struktury. */
-  srcHash?: string;
 }
 interface MetaCapture {
   id: string;
@@ -464,7 +462,7 @@ function imageInput(cap: MetaCapture, idx = 0): InputImage | null {
   const im = cap.images[idx];
   if (!im) return null;
   const buf = readFileSync(join(LIBRARY, im.file));
-  return { base64: buf.toString("base64"), mediaType: (im.mediaType as InputImage["mediaType"]) || "image/jpeg", srcHash: im.srcHash };
+  return { base64: buf.toString("base64"), mediaType: (im.mediaType as InputImage["mediaType"]) || "image/jpeg" };
 }
 function allImageInputs(cap: MetaCapture): InputImage[] {
   return cap.images.map((_, i) => imageInput(cap, i)).filter((x): x is InputImage => !!x);
@@ -1007,12 +1005,12 @@ app.post("/api/server-samples/delete", async (c) => {
 async function buildCaptureZipBase64(cap: MetaCapture): Promise<{ zipBase64: string; meta: Record<string, unknown> } | null> {
   const zip = new JSZip();
   const imagesDir = zip.folder("images")!;
-  const images: { file: string; mediaType: string; exifLocation?: { lat: number; lng: number }; srcHash?: string }[] = [];
+  const images: { file: string; mediaType: string; exifLocation?: { lat: number; lng: number } }[] = [];
   for (const im of cap.images ?? []) {
     const base = im.file.split("/").pop()!;
     try {
       imagesDir.file(base, readFileSync(join(LIB_IMAGES, base)));
-      images.push({ file: `images/${base}`, mediaType: im.mediaType || "image/jpeg", exifLocation: im.exifLocation, srcHash: im.srcHash });
+      images.push({ file: `images/${base}`, mediaType: im.mediaType || "image/jpeg", exifLocation: im.exifLocation });
     } catch { /* brak pliku — pomiń */ }
   }
   if (!images.length) return null;

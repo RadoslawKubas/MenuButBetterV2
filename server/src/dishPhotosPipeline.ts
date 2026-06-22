@@ -379,7 +379,9 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       dbg.steps.push({
         tier: "Poglądowe (typ dania)", provider: "CACHE 🗄", query: genericTerm,
         returned: photos.length, passed: photos.length,
-        candidates: photos.map((ph) => ({ url: ph.url, fromVenue: ph.fromVenue, fromVenueReason: ph.fromVenueReason })),
+        // Z cache też niesiemy OCENĘ (OutPhoto.score) i werdykt → LAB pokazuje % jak przy świeżym skanie
+        // (nie „?"). passed: w cache trzymamy zatwierdzony zbiór (rejected tylko przy takeAll/teście).
+        candidates: photos.map((ph) => ({ url: ph.url, score: ph.score, passed: !ph.rejected, fromVenue: ph.fromVenue, fromVenueReason: ph.fromVenueReason })),
       });
       dbg.fromCache = true;
       return { photos, usage: ZERO_USAGE, cached: true };

@@ -28,9 +28,6 @@ export interface CaptureImage {
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF tego zdjęcia (jeśli były) — kontekst, co dało lokalizację. */
   exifLocation?: GeoPoint;
-  /** STABILNY hash oryginału (md5 z telefonu) — wysyłany przy replayu/eksporcie, by serwer trafił w cache
-   *  struktury tym samym kluczem, co przy pierwszym skanie (mimo że plik sampla jest przekodowany). */
-  srcHash?: string;
 }
 
 /** Migawka jednego skanu — komplet danych potrzebny do ponownego wysłania. */
@@ -127,8 +124,8 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
   if (dest.exists) dest.delete();
   dest.create();
   if (img.hiResUri) {
-    // SAMPEL = wersja HI-RES (do strojenia rozmiarów/jakości w LAB). Model dostaje osobno pomniejszone;
-    // replay pomniejsza ten plik przed wysyłką (captureImageBase64).
+    // SAMPEL = ORYGINAŁ VERBATIM (kopiowany 1:1, bez przekodowania) → md5(pliku)=srcHash, więc replay liczy
+    // ten sam klucz cache. Model dostaje osobno pomniejszone; replay pomniejsza ten plik (captureImageBase64).
     new File(img.hiResUri).copy(dest);
   } else if (img.base64) {
     dest.write(img.base64, { encoding: "base64" });
@@ -136,7 +133,19 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
     // Awaryjnie: gdy brak hi-res i base64, skopiuj plik źródłowy.
     new File(img.uri).copy(dest);
   }
-  return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation, srcHash: img.srcHash };
+  return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
+}
+
+/** Stabilny srcHash zdjęcia migawki = md5 PLIKU sampla. Sampel to verbatim oryginał (image.ts), więc md5
+ *  jest IDENTYCZNE z hashem liczonym przy świeżym skanie → replay trafia w ten sam cache struktury. Nie
+ *  trzymamy hasha w metadanych — liczymy go z pliku (natywnie, File.md5). */
+export function captureSrcHash(im: CaptureImage): string | undefined {
+  try {
+    const f = fileFor(im.path);
+    return f?.exists ? (f.md5 ?? undefined) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Trwale zapisuje zdjęcia ŹRÓDŁOWE skanu (te, z których powstało menu) — do podglądu w historii.
@@ -305,7 +314,7 @@ export async function captureImageBase64(im: CaptureImage): Promise<string | nul
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
   /** GUID instancji apki, z której pochodzi eksport — lab rozpoznaje źródło migawki z pliku. */
   installId?: string;
-  images: { file: string; mediaType: string; exifLocation?: GeoPoint; srcHash?: string }[];
+  images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
   /** WYNIK skanu (z historii): ustawienia użyte do WYNIKU + przetłumaczone menu + lokal + koszt. */
   result?: {
     targetLang?: string;
@@ -348,7 +357,7 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
       if (!base64) continue;
       const fname = `${c.id}-${i}.jpg`;
       imagesDir.file(fname, base64, { base64: true });
-      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation, srcHash: im.srcHash });
+      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation });
     }
     const { images: _drop, ...meta } = c;
     const scan = c.scanId ? scanById.get(c.scanId) : undefined;
@@ -407,7 +416,7 @@ export async function buildCaptureUpload(captureId: string): Promise<{ hash: str
     const base64 = await captureImageBase64(im);
     if (!base64) continue;
     imagesDir.file(`${c.id}-${i}.jpg`, base64, { base64: true });
-    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation, srcHash: im.srcHash });
+    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation });
   }
   const { images: _drop, ...metaCap } = c;
   const result: CaptureExportEntry["result"] = scan
@@ -481,7 +490,7 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
       if (dest.exists) dest.delete();
       dest.create();
       dest.write(b64, { encoding: "base64" });
-      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation, srcHash: im.srcHash });
+      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation });
     }
     if (!images.length) continue;
     all.unshift({

@@ -76,6 +76,7 @@ import {
   saveCapture,
   addCaptureRun,
   captureImageBase64,
+  captureSrcHash,
   resolveCaptureUri,
   persistScanImages,
   deleteScanImages,
@@ -1044,7 +1045,7 @@ export default function App() {
         base64,
         mediaType: "image/jpeg",
         exifLocation: im.exifLocation,
-        srcHash: im.srcHash, // stabilny hash oryginału z migawki → cache struktury trafia jak na świeżym skanie
+        srcHash: captureSrcHash(im), // md5 pliku sampla (verbatim oryginał) = ten sam klucz cache co świeży skan
       });
     }
     if (imgs.length === 0) {

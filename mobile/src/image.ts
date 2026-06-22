@@ -9,11 +9,12 @@ import type { GeoPoint } from "./types";
 export interface PreparedImage {
   uri: string; // skompresowany plik — do podglądu miniatury
   base64: string; // wersja DO MODELU (pomniejszona) — tani payload
-  /** Wersja HI-RES (plik) — zapisywana do SAMPLA, do późniejszego strojenia rozmiarów/jakości. */
+  /** ORYGINAŁ z telefonu VERBATIM (plik) — zapisywany do SAMPLA bez przekodowania (md5 sampla = srcHash). */
   hiResUri?: string;
-  /** STABILNY hash ŹRÓDŁOWEGO (niezmodyfikowanego) zdjęcia — md5 oryginału z aparatu/galerii, liczony
-   *  PRZED resize/JPEG. Wysyłany na serwer jako klucz cache struktury (nie zmienia się przez modyfikację →
-   *  ponowny skan tego samego zdjęcia trafia). Niesiony też w migawce, by replay/lab dał ten sam klucz. */
+  /** STABILNY hash ŹRÓDŁOWEGO (niezmodyfikowanego) zdjęcia — md5 oryginału z aparatu/galerii, liczony PRZED
+   *  resize/JPEG. Wysyłany na serwer jako klucz cache struktury (nie zmienia się przez modyfikację → ponowny
+   *  skan tego samego zdjęcia trafia). W migawce NIE zapisujemy — sampel to verbatim oryginał, więc replay
+   *  liczy ten sam md5 z pliku (patrz captureSrcHash). */
   srcHash?: string;
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF zdjęcia, jeśli były zaszyte. */
@@ -35,11 +36,11 @@ function exifToTime(exif: Record<string, unknown> | undefined | null): number | 
 
 // DWIE wersje zdjęcia:
 //  • DO MODELU — pomniejszone (tani/szybki payload, dobry OCR): 2000px @ 0.72.
-//  • DO SAMPLA — ORYGINAŁ z telefonu (pełna rozdzielczość), tylko przekodowany na JPEG (nie wielka bitmapa) —
-//    żeby lokalnie widzieć dokładnie to, co zrobił aparat, i móc potem stroić rozmiary w LAB.
+//  • DO SAMPLA — ORYGINAŁ z telefonu VERBATIM (plik z aparatu/pickera, już JPEG) — BEZ przekodowania.
+//    Dzięki temu md5 sampla = srcHash (replay liczy hash z pliku, nie trzeba go zapisywać w migawce) i
+//    widzisz dokładnie to, co wyszło z telefonu (jak w galerii).
 const MODEL_WIDTH = 2000;
 const MODEL_QUALITY = 0.72;
-const SAMPLE_QUALITY = 0.92;
 
 /** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU → base64. */
 export async function downscaleForModel(uri: string): Promise<string | null> {
@@ -82,18 +83,12 @@ async function compress(uri: string, exif?: Record<string, unknown> | null): Pro
   const modelRef = await ImageManipulator.manipulate(uri).resize({ width: MODEL_WIDTH }).renderAsync();
   const model = await modelRef.saveAsync({ compress: MODEL_QUALITY, format: SaveFormat.JPEG, base64: true });
   if (!model.base64) throw new Error("Nie udało się przygotować zdjęcia.");
-  // DO SAMPLA — ORYGINAŁ (bez resize), tylko przekodowany na JPEG (nie wielka bitmapa). Tylko plik.
-  let hiResUri: string | undefined;
-  try {
-    const hiRef = await ImageManipulator.manipulate(uri).renderAsync();
-    hiResUri = (await hiRef.saveAsync({ compress: SAMPLE_QUALITY, format: SaveFormat.JPEG })).uri;
-  } catch {
-    /* best-effort — gdy padnie, sampel zapisze wersję modelu (fallback w persistImage) */
-  }
+  // DO SAMPLA — ORYGINAŁ VERBATIM (plik z aparatu/pickera, już JPEG). BEZ przekodowania: md5(sampla)=srcHash,
+  // więc replay liczy ten sam hash z pliku (nie zapisujemy go w migawce). persistImage kopiuje ten plik 1:1.
   return {
     uri: model.uri,
     base64: model.base64,
-    hiResUri,
+    hiResUri: uri,
     srcHash,
     mediaType: "image/jpeg",
     exifLocation: exifToGeo(exif),
