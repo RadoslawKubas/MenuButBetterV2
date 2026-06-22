@@ -278,7 +278,7 @@
       <button onclick="saveConfig(this)" style="padding:4px 10px; background:var(--acc); color:#000; font-weight:800">💾 Zapisz na serwer</button>
       <span id="configInfo" class="mut small"></span>
     </div>
-    <span class="mut small">Modele <b>nadpisują</b> domyślne z apki (apka nie ma już ustawień modeli). Wyłączony krok: wyszukiwanie zdjęć per źródło = pominięte (0 kosztu/zapytań); weryfikacja AI zdjęć = każde zdjęcie dostaje 0.9 (przechodzi); długie opisy dań = zwraca „DISABLED" zamiast pytać model. Do testów „jak działa" i oszczędności.</span>
+    <span class="mut small">Model per krok ustala <b>serwer</b> (apka nic nie wysyła). Puste = domyślny serwera; wybór z listy nadpisuje. Wyłączony krok: wyszukiwanie zdjęć per źródło = pominięte (0 kosztu/zapytań); weryfikacja AI zdjęć = każde zdjęcie dostaje 0.9 (przechodzi); długie opisy dań = zwraca „DISABLED" zamiast pytać model. Do testów „jak działa" i oszczędności.</span>
     <div id="configBox" class="mut" style="margin-top:8px">ładuję…</div>
   </div>
 </div>
@@ -1109,7 +1109,7 @@ function toggleCacheRow(i){
   el.innerHTML=inner;
 }
 // ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
-let CONFIG={}, CONFIG_MODELS=[];
+let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={};
 const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań']];
 const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper (web + z lokalu)'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA)'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
 async function loadConfig(btn){
@@ -1119,17 +1119,21 @@ async function loadConfig(btn){
     if(!res.ok) throw new Error('serwer LAB zwrócił '+res.status+' dla /api/runtime-config — ZRESTARTUJ lab (Ctrl+C → npm run lab); endpoint jest nowy');
     const r=await res.json();
     if(r.error) throw new Error(r.error);
-    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; renderConfig();
+    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; CONFIG_DEFAULTS=r.defaults||{}; renderConfig();
   }catch(e){ document.getElementById('configBox').textContent='błąd: '+e.message; }
   finally{ if(btn) btn.disabled=false; }
 }
 function renderConfig(){
   const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{};
-  const opts=(sel)=>['<option value="">— domyślny (z apki) —</option>'].concat(CONFIG_MODELS.map(md=>`<option value="${esc(md.id)}" ${sel===md.id?'selected':''}>${esc(md.label)} · ${esc(md.provider)}</option>`)).join('');
-  const modelRows=CFG_MODEL_STEPS.map(([k,lab])=>`<div style="display:flex; gap:8px; align-items:center; margin:3px 0"><span style="width:300px">${esc(lab)}</span><select id="cfgM-${k}" style="flex:1; max-width:340px; padding:3px">${opts(m[k]||'')}</select></div>`).join('');
+  const opts=(step,sel)=>{
+    const defId=CONFIG_DEFAULTS[step]; const defMd=CONFIG_MODELS.find(md=>md.id===defId);
+    const defLabel=defMd?defMd.label:(defId||'?');
+    return [`<option value="">— domyślny serwera: ${esc(defLabel)} —</option>`].concat(CONFIG_MODELS.map(md=>`<option value="${esc(md.id)}" ${sel===md.id?'selected':''}>${esc(md.label)} · ${esc(md.provider)}</option>`)).join('');
+  };
+  const modelRows=CFG_MODEL_STEPS.map(([k,lab])=>`<div style="display:flex; gap:8px; align-items:center; margin:3px 0"><span style="width:300px">${esc(lab)}</span><select id="cfgM-${k}" style="flex:1; max-width:340px; padding:3px">${opts(k,m[k]||'')}</select></div>`).join('');
   const toggleRows=CFG_TOGGLES.map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgS-${k}" ${s[k]!==false?'checked':''}><span>${esc(lab)}</span></label>`).join('');
   document.getElementById('configBox').innerHTML=`
-    <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny z apki)</span></h4>${modelRows}</div>
+    <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny serwera)</span></h4>${modelRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Zachowania apki <span class="mut small">(apka czyta na starcie)</span></h4>
       <label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgA-autoDescriptions" ${a.autoDescriptions===true?'checked':''}><span>Długie opisy dań OD RAZU po skanie (odznacz = dopiero na kliknięcie usera)</span></label>

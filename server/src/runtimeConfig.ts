@@ -2,7 +2,7 @@
 // Cel: testowanie „jak działa" i OSZCZĘDNOŚĆ przy testach — można wyłączyć drogie kroki (wyszukiwanie zdjęć
 // per źródło, weryfikacja AI zdjęć, długie opisy). Czysty cache (bez importów z db.ts → bez cyklu); db.ts
 // ładuje z app_config (key='runtime_config') i zapisuje. Bez DATABASE_URL działa na samym cache (pusty=domyślne).
-import type { ModelId } from "./models.ts";
+import { DEFAULT_MODEL, type ModelId } from "./models.ts";
 
 export type ModelStep = "peek" | "scan" | "enrich" | "verify" | "dishInfo";
 export type ToggleStep = "photoSerper" | "photoWikimedia" | "photoOpenverse" | "photoVenue" | "verifyPhotos" | "descriptions";
@@ -23,6 +23,16 @@ export interface RuntimeConfig {
 
 let cache: RuntimeConfig = {};
 
+// DOMYŚLNE SERWERA per krok — to JEDYNE źródło prawdy o modelu, gdy config nic nie ustawia. Apka NIE wysyła
+// już modeli (i tak ignorowane). peek tani (OpenAI nano), reszta Sonnet.
+export const SERVER_DEFAULT_MODELS: Record<ModelStep, ModelId> = {
+  peek: "gpt-5-nano",
+  scan: DEFAULT_MODEL,
+  enrich: DEFAULT_MODEL,
+  verify: DEFAULT_MODEL,
+  dishInfo: DEFAULT_MODEL,
+};
+
 export function getRuntimeConfig(): RuntimeConfig {
   return cache;
 }
@@ -30,9 +40,9 @@ export function setRuntimeConfigCache(c: RuntimeConfig | null | undefined): void
   cache = c && typeof c === "object" ? c : {};
 }
 
-/** Model dla kroku: config > fallback (model z requestu / domyślny). */
-export function cfgModel(step: ModelStep, fallback: ModelId): ModelId {
-  return cache.models?.[step] ?? fallback;
+/** Model dla kroku: config (lab) > DOMYŚLNY SERWERA. Z apki nic nie bierzemy — serwer ustala. */
+export function cfgModel(step: ModelStep): ModelId {
+  return cache.models?.[step] ?? SERVER_DEFAULT_MODELS[step];
 }
 
 /** Czy krok WŁĄCZONY (domyślnie TAK — wyłączamy tylko jawnie `false`). */

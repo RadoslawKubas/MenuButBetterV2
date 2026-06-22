@@ -253,7 +253,7 @@ app.post("/scan", async (c) => {
       s.write(beat).catch(() => {});
     }, wantSteps ? 2000 : 5000);
     try {
-      const model = cfgModel("scan", isModelId(body.model) ? body.model : DEFAULT_MODEL);
+      const model = cfgModel("scan");
       const { menu, usage, cached, readable, poorQuality, enriched } = await extractMenu(images, {
         targetLang: body.targetLang?.trim() || "polski",
         restaurantHint: body.restaurantHint?.trim() || undefined,
@@ -444,7 +444,7 @@ app.post("/scan/run", async (c) => {
 
   const wantSteps = body.stream === true;
   const t0 = Date.now();
-  const model = cfgModel("scan", s.params.model && isModelId(s.params.model) ? s.params.model : DEFAULT_MODEL);
+  const model = cfgModel("scan");
   return stream(c, async (st) => {
     if (wantSteps) await st.write(JSON.stringify({ phase: "received", images: ordered.length }) + "\n");
     const keepalive = setInterval(() => { st.write(wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ").catch(() => {}); }, wantSteps ? 2000 : 5000);
@@ -510,7 +510,7 @@ app.post("/enrich", async (c) => {
   }
   if (!body.menu?.sections?.length) return c.json({ error: "Brak struktury menu do wzbogacenia." }, 400);
   const structure = menuToStructure(body.menu);
-  const model = cfgModel("enrich", isModelId(body.enrichModel) ? body.enrichModel : isModelId(body.model) ? body.model : DEFAULT_MODEL);
+  const model = cfgModel("enrich");
   const wantSteps = body.stream === true;
   const t0 = Date.now();
   return stream(c, async (s) => {
@@ -562,7 +562,7 @@ app.post("/dish-info", async (c) => {
   if (!body.name?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
   try {
-    const model = cfgModel("dishInfo", isModelId(body.model) ? body.model : DEFAULT_MODEL);
+    const model = cfgModel("dishInfo");
     const { text: info, usage, cached } = await describeDish({
       name: body.name.trim(),
       description: body.description?.trim() || undefined,
@@ -602,7 +602,7 @@ app.post("/quick-peek", async (c) => {
     const known = await cacheGet<{ reason?: string }>("bad-photo", cacheKey("bad-photo", imageHash), { op: "quick-peek" });
     if (known) return c.json({ isMenu: false, cuisine: "", restaurantName: "", readable: false, bad: true, badReason: known.reason ?? "za słaba jakość", imageHash, usage: ZERO_USAGE });
     if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
-    const model = cfgModel("peek", isModelId(body.model) ? body.model : DEFAULT_MODEL);
+    const model = cfgModel("peek");
     const { result, usage } = await quickPeek(
       { base64: body.image.base64, mediaType: body.image.mediaType || "image/jpeg" },
       model,
@@ -728,7 +728,7 @@ app.post("/dish-photos", async (c) => {
   }
   if (!body.dish?.trim()) return c.json({ error: "Brak nazwy dania." }, 400);
 
-  const verifyModel = cfgModel("verify", (body.verifyModel?.trim() || "claude-sonnet-4-6") as ModelId);
+  const verifyModel = cfgModel("verify");
   try {
     const { photos, usage, debug } = await runDishPhotos({
       dish: body.dish.trim(),

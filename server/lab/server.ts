@@ -29,6 +29,7 @@ import { findRestaurant } from "../src/places.ts";
 import { findTripAdvisor } from "../src/tripadvisor.ts";
 import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
+import { SERVER_DEFAULT_MODELS } from "../src/runtimeConfig.ts";
 import { OTHER_RATES, aiPrice, otherRate as priceOtherRate, apiCallCost, type PriceOverrides } from "../src/pricing.ts";
 import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
 import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, type CacheKind } from "../src/cache.ts";
@@ -1638,9 +1639,10 @@ app.get("/api/runtime-config", async (c) => {
     const r = await prodFetch("/admin/runtime-config");
     const j = (await r.json()) as { config?: unknown };
     const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider }));
-    return c.json({ config: j.config ?? {}, models });
+    // defaults: domyślne SERWERA per krok (gdy config nie ustawia) — lab pokazuje je zamiast „z apki".
+    return c.json({ config: j.config ?? {}, models, defaults: SERVER_DEFAULT_MODELS });
   } catch (e) {
-    return c.json({ error: (e as Error).message, config: {}, models: [] }, 502);
+    return c.json({ error: (e as Error).message, config: {}, models: [], defaults: {} }, 502);
   }
 });
 app.post("/api/runtime-config", async (c) => {
