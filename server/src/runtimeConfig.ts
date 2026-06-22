@@ -12,6 +12,9 @@ export interface RuntimeConfig {
   models?: Partial<Record<ModelStep, ModelId>>;
   /** Włączenie kroku (brak = włączony). Wyłączony → krok pomijany / zwraca atrapę. */
   steps?: Partial<Record<ToggleStep, boolean>>;
+  /** ODCZYT z cache per rodzaj (klucz = CacheKind). brak/true = czyta normalnie; false = ZAWSZE „miss" →
+   *  regeneruje/szuka od nowa, ALE wynik DALEJ ZAPISUJE (cache się odświeża/dopełnia). */
+  cacheRead?: Record<string, boolean>;
   /** Zachowania APKI (dawne „Koszty/Limity" przeniesione na serwer; apka czyta przez /app-config). */
   app?: {
     /** Długie opisy dań generowane OD RAZU po skanie (true) czy dopiero na kliknięcie usera (false=domyślnie). */
@@ -48,6 +51,11 @@ export function cfgModel(step: ModelStep): ModelId {
 /** Czy krok WŁĄCZONY (domyślnie TAK — wyłączamy tylko jawnie `false`). */
 export function stepEnabled(step: ToggleStep): boolean {
   return cache.steps?.[step] !== false;
+}
+
+/** Czy ODCZYT z danego cache WŁĄCZONY (domyślnie TAK). false → cacheGet udaje „miss"; zapis działa dalej. */
+export function cacheReadEnabled(kind: string): boolean {
+  return cache.cacheRead?.[kind] !== false;
 }
 
 /** Zachowania apki (dla /app-config) z domyślnymi: auto-opisy WYŁ, limit dań = wszystkie (0). */

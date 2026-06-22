@@ -7,6 +7,7 @@
 // stary cache automatycznie omijany, nigdy nie poda starego, gorszego wyniku po ulepszeniu.
 import { getPool, reqContext } from "./db.ts";
 import { recordCacheHit } from "./apiLog.ts";
+import { cacheReadEnabled } from "./runtimeConfig.ts";
 
 let ready = false;
 
@@ -116,6 +117,8 @@ export async function cacheGet<T>(kind: CacheKind, key: string, opts?: CacheGetO
   if (DISABLED || opts?.bypass) return null;
   // Debug „bez cache" (x-force-fresh): omiń ODCZYT (świeże generowanie), zapis nadal działa → cache się odświeży.
   if (reqContext.getStore()?.forceFresh) return null;
+  // Config (lab): ODCZYT tego rodzaju cache wyłączony → udajemy „miss" (regeneruje), ale cacheSet dalej zapisuje.
+  if (!cacheReadEnabled(kind)) return null;
   const l1 = l1Get(key);
   if (l1 !== undefined) { recordCacheHit(opts?.op ?? kind); return l1 as T; }
   const p = getPool();
