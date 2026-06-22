@@ -134,12 +134,26 @@ const DEPLOY_FILE = join(HERE, "deploy-state.json"); // notki per .ipa + histori
 const APPLE_ID = "rk@appwithkiss.com"; // sam e-mail nie jest sekretem (jak w build-submit.sh)
 const UPLOAD_WARN = 10; // ⚠️ od tylu wgrań w 24h ostrzegamy (z obserwacji realny limit ~15–16)
 const UPLOAD_DANGER = 16; // 🛑 od tylu — wstrzymaj się (blisko twardego limitu)
-interface DeployState { uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null; buildNumber?: string | null }[]; buildNums?: Record<string, string> }
+interface DeployState { uploads: { ts: number; ipa: string; ok: boolean; note?: string | null; error?: string | null; buildNumber?: string | null }[]; buildNums?: Record<string, string>; changelogs?: { build: string; note: string; ts: number }[] }
 function loadDeploy(): DeployState {
-  try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { uploads: j.uploads ?? [], buildNums: j.buildNums ?? {} }; }
-  catch { return { uploads: [], buildNums: {} }; }
+  try { const j = JSON.parse(readFileSync(DEPLOY_FILE, "utf8")); return { uploads: j.uploads ?? [], buildNums: j.buildNums ?? {}, changelogs: j.changelogs ?? [] }; }
+  catch { return { uploads: [], buildNums: {}, changelogs: [] }; }
 }
 function saveDeploy(s: DeployState) { try { writeFileSync(DEPLOY_FILE, JSON.stringify(s, null, 2)); } catch { /* ignore */ } }
+// Trwała historia changelogów: zapamiętujemy notkę każdego buildu, GDY lab go widzi (lista) lub kasuje — żeby
+// changelog pośrednich/usuniętych buildów był dalej widoczny w Deploy (sidecar .note ginie z .ipa). Dedup po
+// numerze builda. Zwraca true gdy coś dopisano (do zapisu pliku).
+function rememberChangelogs(s: DeployState, items: { note: string; buildNumber: string | null }[]): boolean {
+  s.changelogs = s.changelogs ?? [];
+  let changed = false;
+  for (const it of items) {
+    if (!it.note || !it.buildNumber || s.changelogs.some((c) => c.build === it.buildNumber)) continue;
+    s.changelogs.push({ build: it.buildNumber, note: it.note, ts: Date.now() });
+    changed = true;
+  }
+  if (s.changelogs.length > 200) s.changelogs = s.changelogs.slice(-200);
+  return changed;
+}
 // Notka „co w buildzie" = sidecar <ipa>.note pisany przez build-only.sh (MOJE podsumowanie). Read-only.
 function noteOf(ipa: string): string {
   try { return readFileSync(join(MOBILE_DIR, ipa + ".note"), "utf8").trim(); } catch { return ""; }
@@ -1713,6 +1727,11 @@ function uploads24h(s: DeployState): number {
 }
 app.get("/api/deploy/state", (c) => {
   const s = loadDeploy();
+  const builds = listBuilds();
+  // Zapamiętaj changelogi: z buildów na dysku ORAZ z historii wgrań (uploads niosą notkę wgranych) — żeby
+  // historia changelogów obejmowała też buildy już usunięte (które były wgrane), nie tylko obecne na dysku.
+  const upItems = (s.uploads ?? []).filter((u) => u.note && u.buildNumber).map((u) => ({ note: u.note as string, buildNumber: u.buildNumber as string }));
+  if (rememberChangelogs(s, [...builds, ...upItems])) saveDeploy(s);
   const used = uploads24h(s);
   const cut = Date.now() - 24 * 3600_000;
   // Lista jest od NAJNOWSZYCH. „Blocked" tylko gdy NAJNOWSZA wysyłka to odmowa limitu — jeśli PO odmowie
@@ -1725,7 +1744,8 @@ app.get("/api/deploy/state", (c) => {
   const lastReject = s.uploads.find((u) => !u.ok); // najnowsza odmowa/błąd
   const level = appleBlocked ? "blocked" : used >= UPLOAD_DANGER ? "danger" : used >= UPLOAD_WARN ? "warn" : "ok";
   return c.json({
-    builds: listBuilds(),
+    builds,
+    changelogs: [...(s.changelogs ?? [])].sort((a, b) => Number(b.build) - Number(a.build)),
     uploads: s.uploads.slice(0, 20),
     used24h: used, warn: UPLOAD_WARN, danger: UPLOAD_DANGER, appleBlocked, rejected24h,
     lastRejectAt: lastReject ? lastReject.ts : null,
@@ -1739,9 +1759,11 @@ app.post("/api/deploy/delete-build", async (c) => {
   const b = await c.req.json<{ ipa?: string }>().catch(() => ({}) as { ipa?: string });
   if (!b.ipa || !IPA_RE.test(b.ipa)) return c.json({ error: "zła nazwa .ipa" }, 400);
   if (uploadJob?.running && uploadJob.ipa === b.ipa) return c.json({ error: "Ten build jest właśnie wysyłany." }, 409);
+  const s = loadDeploy();
+  rememberChangelogs(s, [{ note: noteOf(b.ipa), buildNumber: buildNumberOf(b.ipa) }]); // PRZED kasowaniem .note
   try { unlinkSync(join(MOBILE_DIR, b.ipa)); } catch { /* już nie ma */ }
   try { unlinkSync(join(MOBILE_DIR, b.ipa + ".note")); } catch { /* brak sidecara */ }
-  const s = loadDeploy(); if (s.buildNums) delete s.buildNums[b.ipa]; saveDeploy(s);
+  if (s.buildNums) delete s.buildNums[b.ipa]; saveDeploy(s);
   return c.json({ ok: true });
 });
 app.post("/api/deploy/upload", async (c) => {

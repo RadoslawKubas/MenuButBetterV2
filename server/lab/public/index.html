@@ -307,6 +307,8 @@
     <div id="deployBuilds" class="mut">ładuję…</div>
     <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Historia wgrań (24h liczone z udanych)</div>
     <div id="deployHistory" class="mut"></div>
+    <div class="mut small" style="text-transform:uppercase; letter-spacing:.5px; font-weight:800; margin:16px 0 6px">Historia changelogów (przeżywa usunięcie .ipa)</div>
+    <div id="deployChangelogs" class="mut"></div>
   </div>
 </div>
 
@@ -1272,6 +1274,12 @@ async function loadDeploy(btn){
       ${u.note?`<div class="mut" style="margin-top:2px; font-size:11px">${esc(u.note)}</div>`:''}
       ${u.error?`<div style="margin-top:2px; ${u.ok?'opacity:0.7':'color:#ff8a80'}">${u.ok?'':'↳ Apple: '}${esc(u.error)}</div>`:''}
     </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
+  const chEl=document.getElementById('deployChangelogs');
+  if(chEl) chEl.innerHTML = (r.changelogs||[]).length ? (r.changelogs||[]).map(c=>`
+    <div class="small" style="padding:6px 8px; margin-bottom:3px; border-radius:6px; background:rgba(255,255,255,0.03)">
+      <div><b>build #${esc(c.build)}</b> <span class="mut" style="font-size:10px">${fmtAgo(c.ts)}</span></div>
+      <div class="mut" style="margin-top:2px; font-size:11px; white-space:pre-wrap; line-height:1.4">${esc(c.note)}</div>
+    </div>`).join('') : '<span class="mut">Brak historii changelogów (pojawi się, gdy lab zobaczy buildy).</span>';
   if(busy && !DEPLOY_POLL && CURRENT_TAB==='deploy'){ DEPLOY_POLL=setInterval(()=>{ if(CURRENT_TAB==='deploy') loadDeploy(); else { clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; } },2500); }
   if(!busy && DEPLOY_POLL){ clearInterval(DEPLOY_POLL); DEPLOY_POLL=null; }
   if(btn) btn.disabled=false;
