@@ -1336,7 +1336,7 @@ function renderStatsSessions(){
         const cmap={}; cands.forEach(c=>{ cmap[c.u]=c; });
         const hasMore=cands.length||searched.length||searches.length;
         const main=`<div style="display:flex; justify-content:space-between; gap:8px; padding:2px 0; ${hasMore?'':'border-bottom:1px solid rgba(255,255,255,0.05);'} font-size:11px">
-          <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}${d.cached?' · <span style="color:#7fd6a0">🗄 z cache</span>':''}</span>
+          <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}${d.cached?' · <span style="color:#7fd6a0">🗄 z cache</span>':''}${d.errors?` · <span style="color:#ff8a80">❌ błąd API${d.errDetail?': '+esc(String(d.errDetail).slice(0,70)):''}</span>`:''}</span>
           <span style="white-space:nowrap">+${fmtUsd(e.totalCost)} &nbsp;<b style="color:var(--acc)">Σ ${fmtUsd(cum)}</b></span></div>`;
         let strips='';
         if(searches.length){ strips=`<div style="padding:1px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05)">${searches.map(sp=>{ const us=sp.urls||[]; const gid=regPhotoGroup(us.map(u=>({u}))); return `<div class="mut" style="font-size:9px; margin-top:3px">🔎 ${esc(sp.provider||'')}${sp.query?` · pytanie: <span style="color:#9ad8ff">„${esc(sp.query)}"</span>`:''} — ${us.length} zwróconych (surowe, przed oceną):</div><div style="display:flex; gap:3px; flex-wrap:wrap; margin-top:1px">${us.map((u,idx)=>thumb(u,undefined,gid,idx)).join('')}</div>`; }).join('')}</div>`; }

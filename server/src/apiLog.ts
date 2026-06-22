@@ -3,12 +3,14 @@ import { logEvent, reqContext } from "./db.ts";
 
 // Akumulator zużycia API PER-REQUEST (ALS) — żeby na końcu requestu zalogować nie-AI providerów
 // (Serper/Places/Wiki/Openverse…) jako osobne zdarzenia (inaczej ich koszt umyka ze statystyk prod).
-function bumpReq(provider: Provider, d: { calls?: number; bytesSent?: number; bytesRecv?: number; inTok?: number; outTok?: number; costUsd?: number }): void {
+function bumpReq(provider: Provider, d: { calls?: number; bytesSent?: number; bytesRecv?: number; inTok?: number; outTok?: number; costUsd?: number; errors?: number; errDetail?: string }): void {
   const acc = reqContext.getStore()?.apiUsage;
   if (!acc) return;
   const u = acc.get(provider) ?? { calls: 0, inTok: 0, outTok: 0, costUsd: 0, bytesSent: 0, bytesRecv: 0 };
   u.calls += d.calls ?? 0; u.bytesSent += d.bytesSent ?? 0; u.bytesRecv += d.bytesRecv ?? 0;
   u.inTok += d.inTok ?? 0; u.outTok += d.outTok ?? 0; u.costUsd += d.costUsd ?? 0;
+  if (d.errors) u.errors = (u.errors ?? 0) + d.errors;
+  if (d.errDetail) u.errDetail = d.errDetail; // ostatni błąd (do podglądu w logu)
   acc.set(provider, u);
 }
 
@@ -97,7 +99,7 @@ export function cacheHitsSnapshot(): { total: number; byOp: Record<string, numbe
 export function record(provider: Provider, op: string, ok: boolean, ms: number, detail?: string): void {
   const s = getState(provider);
   s.total++;
-  bumpReq(provider, { calls: 1 }); // per-request: policz wywołanie (też nieudane — Serper i tak liczy)
+  bumpReq(provider, { calls: 1, ...(ok ? {} : { errors: 1, errDetail: detail }) }); // policz wywołanie (też nieudane) + zapamiętaj błąd per-request
   if (!ok) s.errors++;
   s.entries.unshift({ ts: Date.now(), op, ok, ms: Math.round(ms), detail: detail?.slice(0, 300) });
   if (s.entries.length > MAX) s.entries.length = MAX;

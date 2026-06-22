@@ -17,7 +17,7 @@ export const reqContext = new AsyncLocalStorage<{
   // curl Claude itp.). Dzięki temu statystyki domyślnie liczą tylko realne logi z apki.
   source?: string;
   // Akumulator zużycia API per-request (apiLog wpisuje; middleware loguje nie-AI providerów na koniec).
-  apiUsage?: Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>;
+  apiUsage?: Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number; errors?: number; errDetail?: string }>;
   // Kontekst wyszukiwania zdjęć — ustawia handler /dish-photos. Middleware dokleja DANIE + PYTANIE i zwrócone
   // URL-e do zdarzeń per wyszukiwarka (serper/wikimedia/openverse), żeby w logu było widać o co i dla czego.
   photoSearch?: { dish: string; searched: { provider: string; prov?: string; query?: string; urls: string[] }[] };
@@ -148,6 +148,9 @@ export interface EventInput {
   data?: Record<string, unknown>;
   /** GUID instalacji apki — gdy nie podany, brany z kontekstu requestu (x-install-id). */
   installId?: string;
+  /** Znacznik czasu (epoch ms) do nadpisania created_at — np. zdarzenia per wyszukiwarka logujemy PO
+   *  obsłudze requestu, ale chcemy je w kolejności PRZED weryfikacją (czas startu requestu). */
+  at?: number;
 }
 
 // KOSZT SESJI na żywo: sumujemy koszt zdarzeń per sessionId (w pamięci), żeby z KAŻDĄ odpowiedzią
@@ -173,9 +176,11 @@ export function logEvent(ev: EventInput): void {
   if (ctx?.sessionId) extra.sessionId = ctx.sessionId;
   if (ctx?.source) extra.source = ctx.source; // „app" = realna apka; brak → eksperyment/test
   const data = Object.keys(extra).length ? { ...(ev.data ?? {}), ...extra } : ev.data;
+  // created_at: domyślnie now(); gdy podano `at` (epoch ms) — użyj go (kolejność zdarzeń per wyszukiwarka).
+  const createdAt = ev.at && Number.isFinite(ev.at) ? new Date(ev.at) : new Date();
   p.query(
-    `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    `INSERT INTO events (type, op, model, provider, input_tokens, output_tokens, cost_usd, data, install_id, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       ev.type,
       ev.op ?? null,
@@ -186,6 +191,7 @@ export function logEvent(ev: EventInput): void {
       ev.costUsd ?? null,
       data ? JSON.stringify(data) : null,
       installId,
+      createdAt,
     ],
   ).catch((e) => console.error("[db] logEvent:", (e as Error).message));
 }

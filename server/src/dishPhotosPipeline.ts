@@ -328,7 +328,9 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
     // SUROWE wyniki per wyszukiwarka (pytanie + URL-e ZWRÓCONE przez API, PRZED weryfikacją vizją) — do
     // podglądu „o co pytaliśmy i co dała wyszukiwarka, zanim ocenialiśmy". Same linki (bez bajtów).
-    dbg.searched!.push(...ordered.map((s, i) => ({ provider: s.name, prov: s.prov, query: s.query, urls: (lists[i] ?? []).map((ph) => ph.url).filter(Boolean).slice(0, 12) })).filter((x) => x.urls.length));
+    // BEZ filtra pustych — pokaż też „0 zwróconych" (potwierdzenie, że wyszukiwarka odpowiedziała pustką,
+    // a nie że był timeout/błąd; błędy API widać osobno z licznika błędów per provider).
+    dbg.searched!.push(...ordered.map((s, i) => ({ provider: s.name, prov: s.prov, query: s.query, urls: (lists[i] ?? []).map((ph) => ph.url).filter(Boolean).slice(0, 12) })));
     // Scal RÓWNOMIERNIE (round-robin po źródłach), dedup po url — każde źródło ma reprezentację.
     const merged: DishPhoto[] = [];
     const seen = new Set<string>();

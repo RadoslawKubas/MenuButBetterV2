@@ -70,7 +70,8 @@ app.use("/*", async (c, next) => {
   const sessionId = c.req.header("x-session-id") || c.req.query("sid") || undefined;
   // „app" tylko gdy nagłówek x-client:app (ustawia go DETERMINISTYCZNIE prawdziwa apka). Brak → eksperyment.
   const source = c.req.header("x-client") === "app" ? "app" : undefined;
-  const apiUsage = new Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number }>();
+  const apiUsage = new Map<string, { calls: number; inTok: number; outTok: number; costUsd: number; bytesSent: number; bytesRecv: number; errors?: number; errDetail?: string }>();
+  const reqStart = Date.now(); // start requestu → created_at zdarzeń per wyszukiwarka (kolejność PRZED weryfikacją)
   await reqContext.run({ installId, forceFresh, sessionId, source, apiUsage }, async () => {
     await next();
     // Po obsłudze: zdarzenia dla nie-AI providerów (wyszukiwanie zdjęć/lokalu) — żeby ich koszt NIE umykał
@@ -84,10 +85,13 @@ app.use("/*", async (c, next) => {
       const costUsd = apiCallCost(prov, u.calls, getPriceOverrides());
       // Dla wyszukiwań zdjęć: dołącz DANIE + PYTANIE/wyniki tej wyszukiwarki, żeby wiersz logu był czytelny.
       const searches = ps?.searched.filter((s) => s.prov === prov).map((s) => ({ provider: s.provider, query: s.query, urls: s.urls }));
-      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, data: {
+      // at: reqStart → te wiersze sortują się PRZED weryfikacją (logowane PO next(), ale dzieją się wcześniej).
+      // errors/errDetail → potwierdzenie „był błąd API tej wyszukiwarki" (a nie ciche „0 zwróconych").
+      logEvent({ type: "api", op: prov, provider: prov as Provider, costUsd, at: reqStart, data: {
         calls: u.calls, bytesSent: u.bytesSent,
         ...(ps?.dish ? { dish: ps.dish } : {}),
         ...(searches && searches.length ? { searches } : {}),
+        ...(u.errors ? { errors: u.errors, errDetail: u.errDetail ?? null } : {}),
       } });
     }
     // Aktualny sumaryczny koszt sesji → nagłówek dla apki (live „ile sesja kosztuje"). Dla zwykłych
