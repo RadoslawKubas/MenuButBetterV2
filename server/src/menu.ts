@@ -20,6 +20,10 @@ export type MediaType = "image/jpeg" | "image/png" | "image/webp";
 export interface InputImage {
   base64: string;
   mediaType: MediaType;
+  /** STABILNY hash ŹRÓDŁOWEGO (niezmodyfikowanego) zdjęcia — liczony na telefonie z oryginału, PRZED
+   *  resize/JPEG do modelu. Klucz cache struktury: nie zmienia się przez modyfikację → ponowny skan tego
+   *  samego zdjęcia trafia. Brak (stary klient) → struktury nie cache'ujemy dla tej partii. */
+  srcHash?: string;
 }
 
 const MEDIA_TYPES: Record<string, MediaType> = {
@@ -372,12 +376,26 @@ async function structureOpenAI(
   }
 }
 
-/** Główna funkcja: wyciąga jedno menu z dowolnej liczby obrazów (+ zużycie tokenów). */
-/** Hash zestawu plików (kolejność ma znaczenie) — stabilny klucz „ten sam plik/zestaw przyszedł". */
-function imagesHash(images: InputImage[]): string {
-  const h = createHash("sha256");
-  for (const img of images) { h.update(img.mediaType); h.update("|"); h.update(img.base64); h.update("\n"); }
-  return h.digest("hex").slice(0, 32);
+/** Klucz ŹRÓDŁOWY zestawu: STABILNE hashe (md5 oryginału z telefonu), kolejność ma znaczenie. Zwraca null,
+ *  gdy KTÓREKOLWIEK zdjęcie nie ma srcHash → nie cache'ujemy struktury (stary klient/lab bez hasha). */
+function srcKey(images: InputImage[]): string | null {
+  if (!images.length || !images.every((im) => im.srcHash)) return null;
+  return images.map((im) => im.srcHash).join("+");
+}
+
+// Odtwarza licznik pozycji i nazwy z gotowej struktury (cache) — apka pokazuje to samo, co przy realnym
+// odczycie. photoQuery puste → apka NIE prefetchuje (zrobi to po enrich z dobrym hasłem).
+function replayStructureItems(structure: MenuStructure, opts: ExtractOptions): void {
+  // Z cache też zgłoś KUCHNIĘ (jak streaming) — apka potrzebuje DETERMINISTYCZNEJ kuchni ze struktury do
+  // STABILNEGO klucza cache enrichu/zdjęć. Bez tego re-skan szedł z niestabilnym peek → cache nie trafiał.
+  if (structure.cuisine) opts.onMeta?.({ cuisine: structure.cuisine });
+  if (!opts.onProgress && !opts.onItem) return;
+  let n = 0;
+  for (const s of structure.sections) for (const it of s.items) {
+    n++;
+    opts.onItem?.({ original: it.original, translated: it.original, photoQuery: "", photoQueryLocal: "", branded: false, description: it.menu_description || "", price: it.price, currency: it.currency });
+  }
+  opts.onProgress?.({ chars: 0, items: n });
 }
 
 // Kontekst dla PRZEBIEGU 1 (struktura) — bez instrukcji tłumaczenia; lokalizacja/kuchnia pomagają
@@ -417,12 +435,24 @@ export async function extractMenu(
   //  trafia w te dwa pod-cache i tylko składa wynik.)
   let total: Usage = ZERO_USAGE;
   // PRZEBIEG 1 — STRUKTURA (vision). Streaming nazw przez onItem/onProgress (apka pokazuje pozycje na żywo).
-  // Cache struktury USUNIĘTY: klucz był hashem BAJTÓW zdjęcia, więc w realnym życiu (za każdym razem świeże
-  // zdjęcie) nigdy nie trafiał, a po hi-res samplu nie trafia nawet przy replayu. Odczyt liczymy zawsze.
-  const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
-  const structure = s.structure;
-  total = addUsage(total, s.usage);
-  const structureFromCache = false;
+  // Cache struktury per STABILNY hash źródłowy (md5 oryginału z telefonu) + model. Hash liczony z
+  // NIEZMODYFIKOWANEGO zdjęcia (przed resize/JPEG) → nie zmienia się przez modyfikację → ponowny skan TEGO
+  // SAMEGO zdjęcia (testy/replay, lab) trafia → darmowy odczyt vision. Bez srcHash (stary klient) → null
+  // klucz = nie cache'ujemy. knownSections (kolejne strony) → inny kontekst → dołącz do klucza.
+  const sectCtx = opts.knownSections?.length ? opts.knownSections.join("|") : "";
+  const baseKey = srcKey(images);
+  const sck = baseKey && (sectCtx ? cacheKey("menu-structure", baseKey, model, sectCtx) : cacheKey("menu-structure", baseKey, model));
+  const canCache = !opts.noCache && !!sck;
+  let structure = canCache ? await cacheGet<MenuStructure>("menu-structure", sck as string, { op: "scan" }) : null;
+  const structureFromCache = structure !== null; // hit → skan bez kosztu modelu
+  if (structure) {
+    replayStructureItems(structure, opts); // odtwórz licznik/nazwy/kuchnię z cache (apka pokaże pozycje)
+  } else {
+    const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
+    structure = s.structure;
+    total = addUsage(total, s.usage);
+    if (canCache) void cacheSet("menu-structure", sck as string, structure);
+  }
 
   // venue_match: który z „W POBLIŻU" wskazał model. Emituj RAZ po sparsowaniu (to obiekt — nie da się
   // go wyłuskać ze strumienia jak restaurant_name). Tylko gdy lista była podana (inaczej nie ma sensu).

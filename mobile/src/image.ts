@@ -3,6 +3,7 @@
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
+import { File } from "expo-file-system";
 import type { GeoPoint } from "./types";
 
 export interface PreparedImage {
@@ -10,6 +11,10 @@ export interface PreparedImage {
   base64: string; // wersja DO MODELU (pomniejszona) — tani payload
   /** Wersja HI-RES (plik) — zapisywana do SAMPLA, do późniejszego strojenia rozmiarów/jakości. */
   hiResUri?: string;
+  /** STABILNY hash ŹRÓDŁOWEGO (niezmodyfikowanego) zdjęcia — md5 oryginału z aparatu/galerii, liczony
+   *  PRZED resize/JPEG. Wysyłany na serwer jako klucz cache struktury (nie zmienia się przez modyfikację →
+   *  ponowny skan tego samego zdjęcia trafia). Niesiony też w migawce, by replay/lab dał ten sam klucz. */
+  srcHash?: string;
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF zdjęcia, jeśli były zaszyte. */
   exifLocation?: GeoPoint;
@@ -69,6 +74,10 @@ function exifToGeo(exif: Record<string, unknown> | undefined | null): GeoPoint |
 }
 
 async function compress(uri: string, exif?: Record<string, unknown> | null): Promise<PreparedImage> {
+  // STABILNY hash ŹRÓDŁA — md5 ORYGINAŁU (przed jakąkolwiek modyfikacją). Natywnie, synchronicznie.
+  // Best-effort: gdy plik niedostępny → brak hasha → serwer po prostu nie cache'uje struktury tej fotki.
+  let srcHash: string | undefined;
+  try { srcHash = new File(uri).md5 ?? undefined; } catch { /* brak hasha = brak cache struktury */ }
   // DO MODELU — pomniejszone + base64.
   const modelRef = await ImageManipulator.manipulate(uri).resize({ width: MODEL_WIDTH }).renderAsync();
   const model = await modelRef.saveAsync({ compress: MODEL_QUALITY, format: SaveFormat.JPEG, base64: true });
@@ -85,6 +94,7 @@ async function compress(uri: string, exif?: Record<string, unknown> | null): Pro
     uri: model.uri,
     base64: model.base64,
     hiResUri,
+    srcHash,
     mediaType: "image/jpeg",
     exifLocation: exifToGeo(exif),
     takenAt: exifToTime(exif),

@@ -376,7 +376,7 @@ export default function App() {
   async function runPeek(img: PreparedImage) {
     setPeekingUris((p) => [...p, img.uri]);
     try {
-      const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek);
+      const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek, img.srcHash);
       setPeekInfo(r);
       setPeekByUri((prev) => ({ ...prev, [img.uri]: r })); // ocena dla tego konkretnego zdjęcia
       setHint((h) => (h.trim() ? h : r.restaurantName || h)); // nie nadpisuj, gdy user już coś wpisał
@@ -769,7 +769,7 @@ export default function App() {
           );
         });
       for (let i = 0; i < ordered.length; i++) {
-        const img = { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType, takenAt: ordered[i]!.takenAt };
+        const img = { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType, takenAt: ordered[i]!.takenAt, srcHash: ordered[i]!.srcHash };
         let ok = false;
         for (let attempt = 0; attempt < 2 && !ok; attempt++) {
           try { await scanUploadPhoto(sessionId, i, img); ok = true; } catch { /* 1 automatyczny retry */ }
@@ -1044,6 +1044,7 @@ export default function App() {
         base64,
         mediaType: "image/jpeg",
         exifLocation: im.exifLocation,
+        srcHash: im.srcHash, // stabilny hash oryginału z migawki → cache struktury trafia jak na świeżym skanie
       });
     }
     if (imgs.length === 0) {

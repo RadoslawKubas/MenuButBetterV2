@@ -326,7 +326,7 @@ interface ScanSession {
   // index (kolejność dodania) → zdjęcie + takenAt (EXIF). Idempotentne (retry nadpisuje ten sam index).
   // KOLEJNOŚĆ DO AI ustalamy po `takenAt` (data zrobienia), z indeksem jako tie-breakerem — model dostaje
   // strony w kolejności, w jakiej user je fotografował.
-  photos: Map<number, { base64: string; mediaType: MediaType; takenAt: number | null }>;
+  photos: Map<number, { base64: string; mediaType: MediaType; takenAt: number | null; srcHash?: string }>;
   createdAt: number;
 }
 const scanSessions = new Map<string, ScanSession>();
@@ -386,7 +386,7 @@ app.post("/scan/start", async (c) => {
   return c.json({ sessionId });
 });
 
-interface ScanPhotoBody { sessionId?: string; index?: number; base64?: string; mediaType?: string; takenAt?: number }
+interface ScanPhotoBody { sessionId?: string; index?: number; base64?: string; mediaType?: string; takenAt?: number; srcHash?: string }
 app.post("/scan/photo", async (c) => {
   let body: ScanPhotoBody;
   try { body = await c.req.json<ScanPhotoBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
@@ -400,7 +400,7 @@ app.post("/scan/photo", async (c) => {
   if (b64.length > BATCH_BUDGET_B64) return c.json({ error: "Pojedyncze zdjęcie za duże." }, 413);
   const idx = Number.isFinite(body.index) ? Number(body.index) : s.photos.size;
   if (s.photos.size >= 40 && !s.photos.has(idx)) return c.json({ error: "Za dużo zdjęć w jednym skanie (max 40)." }, 413);
-  s.photos.set(idx, { base64: b64, mediaType: body.mediaType as MediaType, takenAt: Number.isFinite(body.takenAt) ? Number(body.takenAt) : null });
+  s.photos.set(idx, { base64: b64, mediaType: body.mediaType as MediaType, takenAt: Number.isFinite(body.takenAt) ? Number(body.takenAt) : null, srcHash: typeof body.srcHash === "string" && body.srcHash.trim() ? body.srcHash.trim() : undefined });
   s.createdAt = Date.now(); // odśwież TTL
   return c.json({ ok: true, received: s.photos.size });
 });
@@ -420,7 +420,7 @@ app.post("/scan/run", async (c) => {
   // user. Potem tnij PO ROZMIARZE na partie modelu (serwer = autorytet). +sufit 15 (bezpiecznik timeoutu).
   const ordered: InputImage[] = [...s.photos.entries()]
     .sort((a, b) => (a[1].takenAt ?? Infinity) - (b[1].takenAt ?? Infinity) || a[0] - b[0])
-    .map(([, img]) => ({ base64: img.base64, mediaType: img.mediaType }));
+    .map(([, img]) => ({ base64: img.base64, mediaType: img.mediaType, srcHash: img.srcHash }));
   scanSessions.delete(body.sessionId!);
   const batches: InputImage[][] = [];
   let cur: InputImage[] = []; let curB = 0;
@@ -580,9 +580,11 @@ app.post("/dish-info", async (c) => {
 // „Szybki podgląd" — lekka ocena 1 zdjęcia na żywo z aparatu (kuchnia / nazwa / czy to menu).
 app.post("/quick-peek", async (c) => {
   try {
-    const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string };
+    const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string; srcHash?: string };
     if (!body.image?.base64) return c.json({ error: "Brak zdjęcia." }, 400);
-    const imageHash = photoHash(body.image.base64);
+    // STABILNY hash źródłowy (md5 oryginału z telefonu) gdy podany — przeżywa modyfikację (resize/JPEG), więc
+    // ten sam zły kadr jest rozpoznany po ponownym wysłaniu. Fallback: hash zmodyfikowanych bajtów.
+    const imageHash = body.srcHash?.trim() || photoHash(body.image.base64);
     // Znany „zły kadr" (za słaba jakość) → werdykt od razu, BEZ wołania modelu (oszczędność);
     // apka i tak zablokuje wysyłkę. To realizuje „nie skanuj/nie wysyłaj ponownie".
     const known = await cacheGet<{ reason?: string }>("bad-photo", cacheKey("bad-photo", imageHash), { op: "quick-peek" });

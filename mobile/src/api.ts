@@ -457,7 +457,7 @@ export async function scanStart(params: { targetLang: string; restaurantHint?: s
 
 /** Wysyła JEDNO zdjęcie do sesji (POJEDYNCZA próba — ponawianiem steruje wywołujący: 1 auto-retry, potem
  *  pyta usera). Idempotentne po `index`. `takenAt` (EXIF) → serwer ułoży strony po dacie zrobienia. */
-export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string; takenAt?: number | null }): Promise<void> {
+export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string; takenAt?: number | null; srcHash?: string }): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/scan/photo`);
@@ -466,7 +466,7 @@ export function scanUploadPhoto(sessionId: string, index: number, image: { base6
     xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(`Zdjęcie ${index + 1}: HTTP ${xhr.status}`)); };
     xhr.onerror = () => reject(new Error(`Zdjęcie ${index + 1}: błąd sieci`));
     xhr.ontimeout = () => reject(new Error(`Zdjęcie ${index + 1}: timeout`));
-    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType, takenAt: image.takenAt ?? undefined }));
+    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType, takenAt: image.takenAt ?? undefined, srcHash: image.srcHash }));
   });
 }
 
@@ -553,11 +553,12 @@ export interface PeekResult {
 export async function quickPeek(
   image: { base64: string; mediaType: string },
   model: string,
+  srcHash?: string,
 ): Promise<PeekResult> {
   const res = await loggedFetch("quick-peek", `${API_BASE}/quick-peek`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ image, model }),
+    body: JSON.stringify({ image, model, srcHash }),
   });
   const json = (await res.json()) as Partial<PeekResult> & { error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
