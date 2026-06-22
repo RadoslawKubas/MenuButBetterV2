@@ -1111,7 +1111,7 @@ function toggleCacheRow(i){
 // ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
 let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={};
 const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań']];
-const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper web (generyk typu dania)'],['photoSerperVenue','Wyszukiwanie zdjęć — Serper z lokalu (strona www + portale)'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA, vision)'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
+const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper web (generyk typu dania)'],['photoSerperSite','Wyszukiwanie zdjęć — Serper z lokalu: strona www (site:domena)'],['photoSerperPortal','Wyszukiwanie zdjęć — Serper z lokalu: portale/social'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA, vision)'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
 async function loadConfig(btn){
   if(btn) btn.disabled=true;
   try{

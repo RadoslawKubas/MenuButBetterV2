@@ -462,10 +462,10 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   let weakVenue: Scored[] = [];
 
   // ---- A. ZDJĘCIA Z LOKALU (#1) — tylko POTWIERDZONE (własna domena / d<id> TA / nazwa-w-URL). ----
-  // OSOBNY krok od Serper web (generyk): tu Serper szuka dania na stronie/portalach LOKALU. Własny toggle.
-  if (!branded && stepEnabled("photoSerperVenue")) {
+  // DWA OSOBNE kroki Serper „z lokalu": strona www (site:domena) i portale/social — każdy własny toggle.
+  if (!branded) {
     const venueCands: DishPhoto[] = [];
-    if (restaurantDomain) {
+    if (restaurantDomain && stepEnabled("photoSerperSite")) {
       let site = await restaurantSiteImages(nameMenu, restaurantDomain, 6).catch(() => []);
       if (site.length === 0 && nameCanon !== nameMenu) site = await restaurantSiteImages(nameCanon, restaurantDomain, 6).catch(() => []);
       const siteFresh = fresh(site);
@@ -473,7 +473,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       if (site.length) dbg.searched!.push({ provider: `site:${restaurantDomain}`, prov: "serper", query: nameMenu, urls: site.map((ph) => ph.url).filter(Boolean).slice(0, 12) });
       venueCands.push(...siteFresh);
     }
-    const portal = await venuePortalImages([nameMenu, nameCanon, nameLocal], venueName, cityQual, 6).catch(() => []);
+    const portal = stepEnabled("photoSerperPortal") ? await venuePortalImages([nameMenu, nameCanon, nameLocal], venueName, cityQual, 6).catch(() => []) : [];
     const portalFresh = fresh(portal);
     const portalQuery = `[${[nameMenu, nameCanon, nameLocal].filter(Boolean).join(" / ")}] ${[venueName, cityQual].filter(Boolean).join(" ")}`.trim();
     // #1: tylko POTWIERDZONE z lokalu (po URL/domenie/ID — bez vision) trafiają do puli „z lokalu";
