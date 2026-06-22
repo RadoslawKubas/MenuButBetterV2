@@ -356,12 +356,13 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     const good = sorted.filter((ph) => ph.score >= MATCH_THRESHOLD);
     const bad = sorted.filter((ph) => ph.score < MATCH_THRESHOLD);
     step.passed = good.length;
-    // „Bierz wszystko" (ustawienie apki) albo TEST (noCache) → zwróć WSZYSTKIE dobre + odrzucone (oznaczone,
-    // posortowane). Domyślnie (apka) → tylko `num` najlepszych — żeby nie ściągać dziesiątek fotek na danie.
+    // WSZYSTKIE które PRZESZŁY próg jakości — już je zweryfikowaliśmy (vision zapłacony), więc nie wyrzucamy
+    // dobrych zdjęć do `num`. `num` steruje tylko PULĄ kandydatów (ile szukamy/oceniamy), nie obcina dobrych
+    // wyników. Odrzucone (poniżej progu) zwracamy oznaczone tylko przy „bierz wszystko"/teście.
     const wantAll = !!p.takeAll || !!p.noCache;
     const mk = (ph: (typeof scored)[number], rejected: boolean) =>
       outPhoto(ph, { verified: false, representative: true, source: srcOf(ph), score: r2(ph.score), rejected: rejected || undefined });
-    const goodOut = (wantAll ? good : good.slice(0, num)).map((ph) => mk(ph, false));
+    const goodOut = good.map((ph) => mk(ph, false));
     const badOut = wantAll ? bad.map((ph) => mk(ph, true)) : [];
     return { photos: [...goodOut, ...badOut], usage };
   }
@@ -430,10 +431,10 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   // Dedup gotowych OutPhoto (np. z cache poglądowych) względem już zebranych zdjęć z lokalu.
   const freshOut = (list: OutPhoto[]) => list.filter((ph) => ph.url && !seen.has(dedupKey({ url: ph.url } as DishPhoto)) && seen.add(dedupKey({ url: ph.url } as DishPhoto)));
 
-  // Akumulator wyniku — zbieramy do `num` przez kolejne źródła (#2), najlepsze (z lokalu) pierwsze.
+  // Akumulator wyniku — WSZYSTKIE zweryfikowane (zapłacone) zdjęcia, najlepsze (z lokalu) pierwsze. NIE
+  // tniemy do `num` — `num` steruje tylko PULĄ kandydatów do oceny, nie wyrzucamy dobrych wyników.
   const result: OutPhoto[] = [];
-  const need = () => num - result.length;
-  const pushPhotos = (ps: OutPhoto[]) => { for (const x of ps) if (result.length < num) result.push(x); };
+  const pushPhotos = (ps: OutPhoto[]) => { for (const x of ps) result.push(x); };
 
   // Ocena do SORTOWANIA z karą za „wpalony tekst" (#3) — pin/przepis z napisem rankuje niżej niż
   // czyste zdjęcie jedzenia (ale nadal może przejść próg — to tylko kolejność, nie odrzucenie).
@@ -498,17 +499,16 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   // Reprezentatywne zdjęcia są niezależne od lokalu → ten sam zestaw obsługuje wszystkie lokale;
   // tu tylko odsiewamy duplikaty względem już zebranych zdjęć z lokalu i bierzemy ile brakuje.
   async function fillRepresentative(): Promise<void> {
-    if (need() <= 0) return;
     const { photos, usage } = await cachedRepresentatives(verify);
     total = addUsage(total, usage);
-    pushPhotos(freshOut(photos).slice(0, need()));
+    pushPhotos(freshOut(photos)); // wszystkie dobre poglądowe (po dedupie względem zdjęć z lokalu)
   }
   await fillRepresentative();
 
-  // #1: na samym końcu — słabe zdjęcia z WŁASNEJ strony lokalu (lepsze niż nic, ale po pewnych i generyku).
-  if (need() > 0 && weakVenue.length) {
+  // #1: słabe zdjęcia z WŁASNEJ strony lokalu (poniżej progu) — TYLKO jako fallback, gdy nie ma nic dobrego.
+  if (result.length === 0 && weakVenue.length) {
     pushPhotos(weakVenue.map((ph) => outPhoto(ph, { verified: true, representative: false })));
   }
 
-  return finish(result.slice(0, num), total);
+  return finish(result, total);
 }

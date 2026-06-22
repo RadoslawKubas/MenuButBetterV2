@@ -15,7 +15,7 @@ let ready = false;
 // warianty/ceny, photo_query „podana potrawa", krótszy opis, verify „pojedyncza porcja", dish-info regionalny.
 // Zmiana promptów = bump wszystkich dotkniętych wersji, by stare wpisy nie zasłaniały nowego zachowania.
 export const CACHE_VERSION = {
-  "repr-photos": 2, // zdjęcia poglądowe „typ dania" (v2: verify „pojedyncza porcja" + nowy photo_query)
+  "repr-photos": 3, // zdjęcia poglądowe „typ dania" (v3: zwracamy WSZYSTKIE które przeszły próg, nie tylko `num`)
   "dish-info": 2, // opis dania (v2: region+kraj w kluczu, bez powtórki nazwy, akcent regionalny)
   "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
   "menu-structure": 8, // przebieg 1: struktura menu (v8: klucz = STABILNY srcHash oryginału z telefonu, nie hash zmodyfikowanych bajtów)
