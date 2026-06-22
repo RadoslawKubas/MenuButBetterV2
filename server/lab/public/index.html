@@ -1111,7 +1111,7 @@ function toggleCacheRow(i){
 // ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
 let CONFIG={}, CONFIG_MODELS=[];
 const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań']];
-const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper (web + z lokalu)'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
+const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper (web + z lokalu)'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA)'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
 async function loadConfig(btn){
   if(btn) btn.disabled=true;
   try{
@@ -1124,19 +1124,24 @@ async function loadConfig(btn){
   finally{ if(btn) btn.disabled=false; }
 }
 function renderConfig(){
-  const m=CONFIG.models||{}, s=CONFIG.steps||{};
+  const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{};
   const opts=(sel)=>['<option value="">— domyślny (z apki) —</option>'].concat(CONFIG_MODELS.map(md=>`<option value="${esc(md.id)}" ${sel===md.id?'selected':''}>${esc(md.label)} · ${esc(md.provider)}</option>`)).join('');
   const modelRows=CFG_MODEL_STEPS.map(([k,lab])=>`<div style="display:flex; gap:8px; align-items:center; margin:3px 0"><span style="width:300px">${esc(lab)}</span><select id="cfgM-${k}" style="flex:1; max-width:340px; padding:3px">${opts(m[k]||'')}</select></div>`).join('');
   const toggleRows=CFG_TOGGLES.map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgS-${k}" ${s[k]!==false?'checked':''}><span>${esc(lab)}</span></label>`).join('');
   document.getElementById('configBox').innerHTML=`
     <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny z apki)</span></h4>${modelRows}</div>
-    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>`;
+    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>
+    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Zachowania apki <span class="mut small">(apka czyta na starcie)</span></h4>
+      <label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgA-autoDescriptions" ${a.autoDescriptions===true?'checked':''}><span>Długie opisy dań OD RAZU po skanie (odznacz = dopiero na kliknięcie usera)</span></label>
+      <div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span>Limit dań do auto-dociągania zdjęć</span><input type="number" id="cfgA-autoLimit" min="0" step="1" value="${Number(a.autoLimit)||0}" style="width:90px; padding:3px"><span class="mut small">0 = wszystkie (domyślnie)</span></div>
+    </div>`;
 }
 async function saveConfig(btn){
   const models={}, steps={};
   for(const [k] of CFG_MODEL_STEPS){ const v=document.getElementById('cfgM-'+k).value; if(v) models[k]=v; }
   for(const [k] of CFG_TOGGLES){ steps[k]=document.getElementById('cfgS-'+k).checked; }
-  const config={models,steps}; const info=document.getElementById('configInfo');
+  const app={ autoDescriptions: document.getElementById('cfgA-autoDescriptions').checked, autoLimit: parseInt(document.getElementById('cfgA-autoLimit').value,10)||0 };
+  const config={models,steps,app}; const info=document.getElementById('configInfo');
   if(btn) btn.disabled=true; info.textContent='zapisuję…'; info.style.color='';
   try{
     const res=await fetch('/api/runtime-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config})});

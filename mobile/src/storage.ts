@@ -101,46 +101,8 @@ export async function savePeekPref(on: boolean): Promise<void> {
   await AsyncStorage.setItem(PREF_PEEK_KEY, on ? "1" : "0");
 }
 
-const PREF_COST_KEY = "mbb.pref.cost.v1";
-
-/** Kontrola AUTOMATYCZNEGO (masowego) kosztu po skanie. „Na dotknięcie" działa zawsze. */
-export interface CostPrefs {
-  /** Auto-generowanie rozszerzonych opisów dla wszystkich dań po skanie. */
-  autoDescriptions: boolean;
-  /** Auto-dociąganie zdjęć poglądowych dla wszystkich dań po skanie. */
-  autoPhotos: boolean;
-  /** Auto-dopasowanie zdjęć z lokalu (Tier 0) po namierzeniu lokalu. */
-  autoVenuePhotos: boolean;
-  /** Limit dań objętych auto-dociąganiem (0 = wszystkie). Reszta tylko na dotknięcie. */
-  autoLimit: number;
-  /** „Bierz wszystko": pokazuj też zdjęcia ODRZUCONE (słaba jakość), oznaczone, posortowane.
-   *  Domyślnie OFF (apka bierze tylko najlepsze). Włącz, by zobaczyć, co realnie wpada. */
-  takeAllPhotos: boolean;
-}
-
-export const DEFAULT_COST_PREFS: CostPrefs = {
-  // Długie opisy „więcej info" domyślnie NA ŻĄDANIE (klik), nie z góry — przy dużym menu to główny,
-  // odraczalny koszt; karta i tak ma krótki opis (enrich) + zdjęcie. Można włączyć w ustawieniach.
-  autoDescriptions: false,
-  autoPhotos: true,
-  autoVenuePhotos: true,
-  autoLimit: 0,
-  takeAllPhotos: false, // domyślnie tylko najlepsze; włącz, by widzieć też odrzucone
-};
-
-export async function loadCostPrefs(): Promise<CostPrefs> {
-  const raw = await AsyncStorage.getItem(PREF_COST_KEY);
-  if (!raw) return DEFAULT_COST_PREFS;
-  try {
-    return { ...DEFAULT_COST_PREFS, ...(JSON.parse(raw) as Partial<CostPrefs>) };
-  } catch {
-    return DEFAULT_COST_PREFS;
-  }
-}
-
-export async function saveCostPrefs(prefs: CostPrefs): Promise<void> {
-  await AsyncStorage.setItem(PREF_COST_KEY, JSON.stringify(prefs));
-}
+// (Kontrola auto-dociągania po skanie — dawne CostPrefs — przeniesiona na serwer: config runtime czytany
+//  przez apkę z /app-config (autoDescriptions, autoLimit) + toggle'e źródeł/weryfikacji w LAB.)
 
 export async function listScans(): Promise<SavedScan[]> {
   const raw = await AsyncStorage.getItem(KEY);

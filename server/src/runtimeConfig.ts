@@ -5,13 +5,20 @@
 import type { ModelId } from "./models.ts";
 
 export type ModelStep = "peek" | "scan" | "enrich" | "verify" | "dishInfo";
-export type ToggleStep = "photoSerper" | "photoWikimedia" | "photoOpenverse" | "verifyPhotos" | "descriptions";
+export type ToggleStep = "photoSerper" | "photoWikimedia" | "photoOpenverse" | "photoVenue" | "verifyPhotos" | "descriptions";
 
 export interface RuntimeConfig {
   /** Model per krok — nadpisuje model z requestu (apka nie ma już ustawień modeli). */
   models?: Partial<Record<ModelStep, ModelId>>;
   /** Włączenie kroku (brak = włączony). Wyłączony → krok pomijany / zwraca atrapę. */
   steps?: Partial<Record<ToggleStep, boolean>>;
+  /** Zachowania APKI (dawne „Koszty/Limity" przeniesione na serwer; apka czyta przez /app-config). */
+  app?: {
+    /** Długie opisy dań generowane OD RAZU po skanie (true) czy dopiero na kliknięcie usera (false=domyślnie). */
+    autoDescriptions?: boolean;
+    /** Limit dań do auto-dociągania zdjęć po skanie. 0/brak = WSZYSTKIE (domyślnie). */
+    autoLimit?: number;
+  };
 }
 
 let cache: RuntimeConfig = {};
@@ -31,4 +38,12 @@ export function cfgModel(step: ModelStep, fallback: ModelId): ModelId {
 /** Czy krok WŁĄCZONY (domyślnie TAK — wyłączamy tylko jawnie `false`). */
 export function stepEnabled(step: ToggleStep): boolean {
   return cache.steps?.[step] !== false;
+}
+
+/** Zachowania apki (dla /app-config) z domyślnymi: auto-opisy WYŁ, limit dań = wszystkie (0). */
+export function getAppConfig(): { autoDescriptions: boolean; autoLimit: number } {
+  return {
+    autoDescriptions: cache.app?.autoDescriptions === true,
+    autoLimit: Number.isFinite(cache.app?.autoLimit) && (cache.app!.autoLimit as number) > 0 ? Math.floor(cache.app!.autoLimit as number) : 0,
+  };
 }

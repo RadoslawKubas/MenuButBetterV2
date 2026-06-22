@@ -739,6 +739,19 @@ export async function fetchDiagnostics(): Promise<{ now: number; providers: Diag
   return { now: json.now ?? Date.now(), providers: json.providers ?? [], totals: json.totals };
 }
 
+/** Zachowania auto-dociągania STEROWANE Z SERWERA (config runtime): czy opisy od razu po skanie + limit dań.
+ *  Dawne „Koszty/Limity" z apki — teraz ustawiane w LAB. Błąd/brak → bezpieczne domyślne (opisy off, limit=wszystkie). */
+export async function fetchAppConfig(): Promise<{ autoDescriptions: boolean; autoLimit: number }> {
+  try {
+    const res = await fetch(`${API_BASE}/app-config`, { headers: jsonHeaders() });
+    if (!res.ok) return { autoDescriptions: false, autoLimit: 0 };
+    const j = (await res.json()) as { autoDescriptions?: boolean; autoLimit?: number };
+    return { autoDescriptions: j.autoDescriptions === true, autoLimit: Number(j.autoLimit) || 0 };
+  } catch {
+    return { autoDescriptions: false, autoLimit: 0 };
+  }
+}
+
 // --- Trwałe statystyki (Postgres) — przeżywają redeploy ---
 export interface DiagStats {
   enabled: boolean;

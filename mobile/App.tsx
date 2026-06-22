@@ -32,6 +32,7 @@ import {
   reportError,
   registerInstall,
   initForceFresh,
+  fetchAppConfig,
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
@@ -63,10 +64,6 @@ import {
   saveLangPref,
   loadPeekPref,
   savePeekPref,
-  loadCostPrefs,
-  saveCostPrefs,
-  DEFAULT_COST_PREFS,
-  type CostPrefs,
   type SavedScan,
 } from "./src/storage";
 import {
@@ -237,7 +234,9 @@ export default function App() {
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
   const [peekByUri, setPeekByUri] = useState<Record<string, PeekResult>>({}); // ocena peek per zdjęcie sesji
   const [peekingUris, setPeekingUris] = useState<string[]>([]); // które zdjęcia są AKTUALNIE analizowane (równolegle)
-  const [costPrefs, setCostPrefs] = useState<CostPrefs>(DEFAULT_COST_PREFS); // kontrola auto-kosztu po skanie
+  // Zachowania auto-dociągania STEROWANE Z SERWERA (config runtime, dawne „Koszty/Limity"). Apka czyta na
+  // starcie (/app-config). autoDescriptions: opisy od razu vs na klik; autoLimit: ile dań (0=wszystkie).
+  const [appCfg, setAppCfg] = useState<{ autoDescriptions: boolean; autoLimit: number }>({ autoDescriptions: false, autoLimit: 0 });
   const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
   const [showVenueSearch, setShowVenueSearch] = useState(false); // osobny ekran „Znajdź lokal" (mapa + szukanie)
   const [sessionCost, setSessionCost] = useState(0); // LIVE koszt sesji (z nagłówka x-session-cost) — rośnie w trakcie
@@ -321,13 +320,8 @@ export default function App() {
       })
       .catch(() => {});
     loadPeekPref().then(setPeekEnabled).catch(() => {});
-    loadCostPrefs().then(setCostPrefs).catch(() => {});
+    fetchAppConfig().then(setAppCfg).catch(() => {}); // zachowania auto-dociągania z serwera (config runtime)
   }, []);
-
-  function changeCostPrefs(next: CostPrefs) {
-    setCostPrefs(next);
-    void saveCostPrefs(next).catch(() => {});
-  }
 
   function togglePeek(on: boolean) {
     setPeekEnabled(on);
@@ -642,7 +636,7 @@ export default function App() {
           void (async () => {
             try {
               const { photos } = await fetchDishPhotos(job.original, undefined, {
-                representativeOnly: true, num: REPR_PER_DISH, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, takeAll: costPrefs.takeAllPhotos,
+                representativeOnly: true, num: REPR_PER_DISH, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, 
               });
               if (photos.length > 0) {
                 const cached = await cachePhotos(photos);
@@ -705,7 +699,7 @@ export default function App() {
             enriched.sections.forEach((s) => s.items.forEach((it) => {
               enrichedAcc.set(it.original, { ...it, enriched: true });
               // od razu kolejkuj tanie poglądowe (limit z „Kosztów"); apply pojawi się gdy pozycja jest w menu
-              if (costPrefs.autoPhotos && it.photo_query && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
+              if (it.photo_query && (appCfg.autoLimit <= 0 || pfEnqueued < appCfg.autoLimit)) {
                 pfEnqueued++;
                 if (myGen === scanGenRef.current) setPhotoProg((p) => ({ done: p?.done ?? 0, total: (p?.total ?? 0) + 1 }));
                 pfQueue.push({ original: it.original, photoQuery: it.photo_query });
@@ -949,7 +943,7 @@ export default function App() {
         if (scanId) void updateScanMenu(scanId, finalMenu);
         setScans(await listScans());
         // (poglądowe lecą POMPĄ w trakcie rollingu — nie wołamy fillDishPhotos tutaj)
-        if (costPrefs.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
+        if (appCfg.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
         // Poglądowe ruszyły → teraz wolno podmieniać ★ z lokalu (jeśli lokal już znaleziony; inaczej
         // zrobi to finalizeVenue gdy lookup wróci). Dzięki temu tanie poglądowe pojawiają się PIERWSZE.
         previewStartedRef.current = true;
@@ -1136,7 +1130,7 @@ export default function App() {
       // ZAMROŻONEJ strukturze (finalizeVenue), żeby nie ruszać rosnącego menu.
       if (!opts?.skipUpgrade) {
         const baseForUpgrade = await rebaseVenue(m, scanId, applyMenu, prevVenue, r);
-        if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+        void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
       }
     } catch {
       // ciche niepowodzenie — karta lokalu po prostu się nie pokaże
@@ -1171,7 +1165,7 @@ export default function App() {
     const venue = freshVenueRef.current;
     const base = structureMenuRef.current;
     const sid = scanIdRef.current;
-    if (!venue || !base || !costPrefs.autoVenuePhotos) return;
+    if (!venue || !base) return;
     venueUpgradedRef.current = true;
     void (async () => {
       try {
@@ -1199,7 +1193,7 @@ export default function App() {
     }
     // Wybrano (być może INNY) lokal → zdejmij nieaktualne ★ ze starego i doszukaj z nowego.
     const baseForUpgrade = await rebaseVenue(menu, scanId, applyMenu, prevVenue, choice);
-    if (costPrefs.autoVenuePhotos) void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
+    void upgradeVenuePhotos(baseForUpgrade, scanId, cached, applyMenu);
   }
 
   // Wyszukanie lokalu PO NAZWIE (na przycisk) — używa nazwy z menu + zapamiętanej/EXIF
@@ -1641,7 +1635,7 @@ export default function App() {
                   photoQuery: item.photo_query,
                   photoQueryLocal: item.photo_query_local,
                   verifyModel: eff.verify,
-                  takeAll: costPrefs.takeAllPhotos,
+                  
                 },
               ).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined }));
         const real = realRes.photos;
@@ -1686,14 +1680,14 @@ export default function App() {
           jobs.push({ si, ii, name: it.original, photoQuery: it.photo_query });
       }),
     );
-    if (costPrefs.autoLimit > 0) {
+    if (appCfg.autoLimit > 0) {
       // autoLimit = ŁĄCZNY limit. Zdjęcia dociągnięte już w trakcie skanu (prefetch) liczą się do
       // niego, więc dobieramy tylko brakujące do limitu (a nie kolejne `autoLimit` ponad prefetch).
       const have = baseMenu.sections.reduce(
         (n, s) => n + s.items.filter((it) => it.photos && it.photos.length > 0).length,
         0,
       );
-      jobs.length = Math.min(jobs.length, Math.max(0, costPrefs.autoLimit - have));
+      jobs.length = Math.min(jobs.length, Math.max(0, appCfg.autoLimit - have));
     }
 
     const eff = modelsForScan(scanId); // weryfikacja zdjęć — model zamrożony z tego menu
@@ -1710,7 +1704,7 @@ export default function App() {
           photoQuery: job.photoQuery,
           num: REPR_PER_DISH,
           verifyModel: eff.verify,
-          takeAll: costPrefs.takeAllPhotos,
+          
         }).catch(() => ({ photos: [] as DishPhotoLite[], usage: ZERO_USAGE, debug: undefined as PhotoDebug | undefined }));
         totalUsage = addUsage(totalUsage, usage);
         if (photos.length === 0) {
@@ -1874,7 +1868,7 @@ export default function App() {
         if (it && !it.extraInfo) jobs.push({ si, ii, name: it.original, desc: it.description });
       }),
     );
-    if (costPrefs.autoLimit > 0) jobs.length = Math.min(jobs.length, costPrefs.autoLimit); // limit auto-dociągania
+    if (appCfg.autoLimit > 0) jobs.length = Math.min(jobs.length, appCfg.autoLimit); // limit auto-dociągania
 
     const CONCURRENCY = 3;
     let next = 0;
@@ -1965,8 +1959,8 @@ export default function App() {
       );
 
       // Dociągnij dla NOWYCH pozycji (bez photos/opisu): tanie zdjęcia + pełne opisy.
-      if (costPrefs.autoPhotos) void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
-      if (costPrefs.autoDescriptions) void fillDescriptions(merged, scanId, scanLang, applyMenu);
+      void fillDishPhotos(merged, scanId, merged.restaurant_name ?? undefined, applyMenu);
+      if (appCfg.autoDescriptions) void fillDescriptions(merged, scanId, scanLang, applyMenu);
     } catch (e) {
       Alert.alert("Nie udało się dodać", friendlyMessage(e instanceof Error ? e.message : undefined));
     } finally {
@@ -2163,7 +2157,7 @@ export default function App() {
             // Postęp ŁĄCZONY: enrich = pierwsza połowa paska, POBIERANIE ZDJĘĆ = druga (żeby pasek nie kończył
             // się na samych tłumaczeniach). Bez zdjęć (autoPhotos off) enrich wypełnia całość. Połowę dla
             // zdjęć rezerwujemy z góry wg ustawienia — bez cofania paska, gdy joby zdjęć dochodzą.
-            const expectPhotos = costPrefs.autoPhotos;
+            const expectPhotos = true;
             const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
             const enrichDn = structureReady && total > 0 && enriched >= total;
             const pct = !expectPhotos ? (total > 0 ? Math.min(1, enriched / total) : 0) : !enrichDn ? (total > 0 ? Math.min(0.5, 0.5 * (enriched / total)) : 0) : (pt > 0 ? Math.min(1, 0.5 + 0.5 * (pd / pt)) : 1);
@@ -2193,8 +2187,6 @@ export default function App() {
           <SettingsView
             targetLang={targetLang}
             onChangeLang={changeLang}
-            costPrefs={costPrefs}
-            onChangeCostPrefs={changeCostPrefs}
             onOpenDiagnostics={() => setShowDiag(true)}
             onOpenCaptures={() => setShowCaptures(true)}
             onOpenPricing={() => setShowPricing(true)}
@@ -2495,7 +2487,7 @@ export default function App() {
                       const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
                       // Łączony postęp: enrich (0–50%) + POBIERANIE ZDJĘĆ (50–100%). Bez zdjęć (autoPhotos off)
                       // enrich wypełnia całość. Pasek pełny i baner znika dopiero gdy pompa zdjęć skończy.
-                      const expectPhotos = costPrefs.autoPhotos;
+                      const expectPhotos = true;
                       const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
                       const enrichDn = structureReady && total > 0 && enriched >= total;
                       const inPhoto = expectPhotos && enrichDn && pt > 0 && pd < pt;

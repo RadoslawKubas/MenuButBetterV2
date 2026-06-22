@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Constants from "expo-constants";
-import type { CostPrefs } from "./storage";
 import {
   LANGUAGES,
   PROVIDER_LABELS,
@@ -27,8 +26,6 @@ function CostSwitch({ label, value, onChange }: { label: string; value: boolean;
 export function SettingsView({
   targetLang,
   onChangeLang,
-  costPrefs,
-  onChangeCostPrefs,
   onOpenDiagnostics,
   onOpenCaptures,
   onOpenPricing,
@@ -36,8 +33,6 @@ export function SettingsView({
 }: {
   targetLang: string;
   onChangeLang: (lang: string) => void;
-  costPrefs: CostPrefs;
-  onChangeCostPrefs: (next: CostPrefs) => void;
   onOpenDiagnostics: () => void;
   onOpenCaptures: () => void;
   onOpenPricing: () => void;
@@ -97,49 +92,9 @@ export function SettingsView({
 
       <Text style={styles.section}>Koszty / limity</Text>
       <Text style={styles.sub}>
-        Wyłącza tylko AUTOMATYCZNE dociąganie po skanie. W dane danie zawsze dociągniesz opis/zdjęcia na dotknięcie.
+        Auto‑dociąganie po skanie (opisy od razu vs na kliknięcie, limit dań) oraz źródła zdjęć i weryfikacja
+        są teraz sterowane centralnie z panelu LAB (config runtime na serwerze).
       </Text>
-      <View style={styles.roleCard}>
-        <CostSwitch
-          label="Auto‑opisy dań po skanie"
-          value={costPrefs.autoDescriptions}
-          onChange={(v) => onChangeCostPrefs({ ...costPrefs, autoDescriptions: v })}
-        />
-        <CostSwitch
-          label="Auto‑zdjęcia poglądowe po skanie"
-          value={costPrefs.autoPhotos}
-          onChange={(v) => onChangeCostPrefs({ ...costPrefs, autoPhotos: v })}
-        />
-        <CostSwitch
-          label="Auto‑zdjęcia z lokalu (Tier 0)"
-          value={costPrefs.autoVenuePhotos}
-          onChange={(v) => onChangeCostPrefs({ ...costPrefs, autoVenuePhotos: v })}
-        />
-        <Text style={styles.costLimitLabel}>Limit dań do auto‑dociągania</Text>
-        <View style={styles.chips}>
-          {[0, 5, 10, 20].map((n) => {
-            const active = costPrefs.autoLimit === n;
-            return (
-              <Pressable
-                key={n}
-                onPress={() => onChangeCostPrefs({ ...costPrefs, autoLimit: n })}
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{n === 0 ? "wszystkie" : n}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        <CostSwitch
-          label="Bierz wszystkie zdjęcia (też odrzucone)"
-          value={costPrefs.takeAllPhotos}
-          onChange={(v) => onChangeCostPrefs({ ...costPrefs, takeAllPhotos: v })}
-        />
-        <Text style={styles.sub}>
-          Domyślnie pokazujemy tylko najlepsze. Włącz, by widzieć też zdjęcia odrzucone przez weryfikację
-          (oznaczone, na końcu) wraz z oceną każdego — do wglądu, co realnie wpada.
-        </Text>
-      </View>
 
       <Text style={styles.section}>Narzędzia</Text>
       <Pressable style={styles.toolBtn} onPress={onOpenPricing}>

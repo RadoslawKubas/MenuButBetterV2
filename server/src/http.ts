@@ -17,7 +17,7 @@ import { matchVenuePhotos, type VenueTaPhoto, type VenueMatch } from "./venuePho
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
 import { ZERO_USAGE } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides, readRuntimeConfig, saveRuntimeConfig } from "./db.ts";
-import { cfgModel, getRuntimeConfig, type RuntimeConfig } from "./runtimeConfig.ts";
+import { cfgModel, getRuntimeConfig, getAppConfig, stepEnabled, type RuntimeConfig } from "./runtimeConfig.ts";
 // ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
 import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
@@ -946,6 +946,8 @@ app.post("/cache-clear", async (c) => {
 
 // Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
 app.post("/venue-photos", async (c) => {
+  // KROK WYŁĄCZONY w configu (lab) — zdjęcia z lokalu (Tier 0) jak inne źródła: pomiń pobranie zdjęć + vision.
+  if (!stepEnabled("photoVenue")) return c.json({ matches: [], usage: ZERO_USAGE });
   if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
   try {
     const body = (await c.req.json()) as {
@@ -1161,6 +1163,10 @@ app.post("/admin/runtime-config", async (c) => {
   await saveRuntimeConfig(cfg);
   return c.json({ ok: true, config: readRuntimeConfig() });
 });
+
+// Zachowania apki sterowane z serwera (dawne „Koszty/Limity"): czy długie opisy generować od razu po skanie
+// i ile dań auto-dociągać. Apka czyta to na starcie i stosuje (sama decyduje, kiedy odpalić dociąganie).
+app.get("/app-config", (c) => c.json(getAppConfig()));
 
 // Lab: nadaj nazwę instalacji.
 app.post("/install/name", async (c) => {
