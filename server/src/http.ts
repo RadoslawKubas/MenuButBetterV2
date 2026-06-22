@@ -750,7 +750,7 @@ app.post("/dish-photos", async (c) => {
         restaurant: body.restaurantName?.trim() || body.restaurantHint?.trim() || null,
         cached: !!debug?.fromCache,
         // SUROWE zwroty API per provider (przed weryfikacją) — same linki, do podglądu.
-        searched: (debug?.searched ?? []).map((s) => ({ provider: s.provider, urls: s.urls.slice(0, 12) })),
+        searched: (debug?.searched ?? []).map((s) => ({ provider: s.provider, query: s.query, urls: s.urls.slice(0, 12) })),
         // Kandydaci z OCENĄ, werdyktem i flagą `final` (czy trafił do zwróconej listy) — do dopasowania
         // oceny do surowych zwrotów (które odrzucone i za ile punktów).
         cands: (() => { const finalUrls = new Set(photos.map((p) => p.url)); return (debug?.steps ?? []).flatMap((st) =>
