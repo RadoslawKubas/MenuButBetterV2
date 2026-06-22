@@ -1115,7 +1115,9 @@ const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper (web + z loka
 async function loadConfig(btn){
   if(btn) btn.disabled=true;
   try{
-    const r=await api('/api/runtime-config');
+    const res=await fetch('/api/runtime-config');
+    if(!res.ok) throw new Error('serwer LAB zwrócił '+res.status+' dla /api/runtime-config — ZRESTARTUJ lab (Ctrl+C → npm run lab); endpoint jest nowy');
+    const r=await res.json();
     if(r.error) throw new Error(r.error);
     CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; renderConfig();
   }catch(e){ document.getElementById('configBox').textContent='błąd: '+e.message; }
@@ -1137,7 +1139,9 @@ async function saveConfig(btn){
   const config={models,steps}; const info=document.getElementById('configInfo');
   if(btn) btn.disabled=true; info.textContent='zapisuję…'; info.style.color='';
   try{
-    const r=await api('/api/runtime-config',{config});
+    const res=await fetch('/api/runtime-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config})});
+    if(!res.ok) throw new Error('serwer LAB '+res.status+' — ZRESTARTUJ lab (Ctrl+C → npm run lab)');
+    const r=await res.json();
     if(r.error) throw new Error(r.error);
     CONFIG=r.config||config; renderConfig();
     info.textContent='✓ zapisane na serwer (działa od następnego requestu)'; info.style.color='#7fd6a0';
