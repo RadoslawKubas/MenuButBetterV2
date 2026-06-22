@@ -207,6 +207,9 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
+  // Postęp POBIERANIA ZDJĘĆ (pompa poglądowych) — żeby pasek liczył też ten krok, a skan nie kończył się
+  // (status „done") zanim zdjęcia dojdą. {done,total} liczone w pompie; total rośnie z każdym enqueue.
+  const [photoProg, setPhotoProg] = useState<{ done: number; total: number } | null>(null);
   // Czy choć jedna partia skanu wróciła Z CACHE (ten sam plik) — do informacji o oszczędności.
   const [scanFromCache, setScanFromCache] = useState(false);
   // Nazwa lokalu wykryta NA ŻYWO w trakcie skanu (z szyldu/okładki) — pokazujemy od razu.
@@ -508,6 +511,7 @@ export default function App() {
     setError(null);
     setStatus("scanning");
     setBrowseEarly(false);
+    setPhotoProg(null); // nowy skan → wyzeruj postęp zdjęć
     setStructureReady(false);
     earlyVenueRef.current = false; // #2a: reset cyklu życia lokalu
     scanIdRef.current = null;
@@ -674,11 +678,13 @@ export default function App() {
               /* ciche — brak poglądowego dla tego dania */
             } finally {
               pfActive--;
+              if (myGen === scanGenRef.current) setPhotoProg((p) => (p ? { done: p.done + 1, total: p.total } : p));
               pumpPreview();
-              // Gdy pompa skończyła (brak aktywnych i kolejka pusta) → zapisz menu z dociągniętymi
-              // poglądowymi (inaczej te dodane PO compose nie trafiłyby do zapisanego skanu).
-              if (pfActive === 0 && pfQueue.length === 0 && scanIdRef.current) {
-                setMenu((prev) => { if (prev && scanIdRef.current) void updateScanMenu(scanIdRef.current, prev); return prev; });
+              // Gdy pompa skończyła (brak aktywnych i kolejka pusta) → zapisz menu z dociągniętymi poglądowymi,
+              // a gdy enrich TEŻ gotowy → dopiero TERAZ status „done" (pasek liczył zdjęcia, znika na końcu).
+              if (pfActive === 0 && pfQueue.length === 0) {
+                if (scanIdRef.current) setMenu((prev) => { if (prev && scanIdRef.current) void updateScanMenu(scanIdRef.current, prev); return prev; });
+                if (myGen === scanGenRef.current) setPhotoProg(null); // pompa skończona → pasek zdjęć znika
               }
             }
           })();
@@ -721,6 +727,7 @@ export default function App() {
               // od razu kolejkuj tanie poglądowe (limit z „Kosztów"); apply pojawi się gdy pozycja jest w menu
               if (costPrefs.autoPhotos && it.photo_query && (costPrefs.autoLimit <= 0 || pfEnqueued < costPrefs.autoLimit)) {
                 pfEnqueued++;
+                if (myGen === scanGenRef.current) setPhotoProg((p) => ({ done: p?.done ?? 0, total: (p?.total ?? 0) + 1 }));
                 pfQueue.push({ original: it.original, photoQuery: it.photo_query });
                 pumpPreview();
               }
@@ -969,6 +976,8 @@ export default function App() {
         maybeUpgradeVenue();
         setScanPhase(null);
         setScanItems([]);
+        // Enrich gotowy → „done" (akcje mutujące odblokowane). Pasek POSTĘPU ZDJĘĆ żyje dalej osobno (photoProg)
+        // i znika dopiero gdy pompa opróżni kolejkę — pasek liczy też wyszukiwanie zdjęć, ale nie blokuje akcji.
         setStatus("done");
       })();
       // (Architektura B: padłe partie nie istnieją po stronie apki — serwer scala wewnętrznie; odporność
@@ -1072,6 +1081,8 @@ export default function App() {
 
   function resetScan() {
     replayCaptureIdRef.current = null; // ręczny „nowy skan" → to nie replay (świeża migawka)
+    scanGenRef.current += 1; // unieważnij ewentualną SPÓŹNIONĄ pompę poprzedniego skanu (nie nadpisze statusu)
+    setPhotoProg(null);
     newSession(); // nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops
     setImages([]);
     setReplayLocation(null);
@@ -2165,11 +2176,17 @@ export default function App() {
           ) : null}
           {/* #3: cienka linia postępu w STAŁYM nagłówku — zawsze widoczna gdy enrich trwa, treść scrolluje
               pod nią. Znika gdy skan gotowy. */}
-          {status === "scanning" && menu && !(showDiag || showCaptures || showPricing || showSettings) ? (() => {
+          {(status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total)) && menu && !(showDiag || showCaptures || showPricing || showSettings) ? (() => {
             const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
             const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
             const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
-            const pct = total > 0 ? Math.min(1, enriched / total) : 0;
+            // Postęp ŁĄCZONY: enrich = pierwsza połowa paska, POBIERANIE ZDJĘĆ = druga (żeby pasek nie kończył
+            // się na samych tłumaczeniach). Bez zdjęć (autoPhotos off) enrich wypełnia całość. Połowę dla
+            // zdjęć rezerwujemy z góry wg ustawienia — bez cofania paska, gdy joby zdjęć dochodzą.
+            const expectPhotos = costPrefs.autoPhotos;
+            const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
+            const enrichDn = structureReady && total > 0 && enriched >= total;
+            const pct = !expectPhotos ? (total > 0 ? Math.min(1, enriched / total) : 0) : !enrichDn ? (total > 0 ? Math.min(0.5, 0.5 * (enriched / total)) : 0) : (pt > 0 ? Math.min(1, 0.5 + 0.5 * (pd / pt)) : 1);
             return (
               <View style={styles.topProgress}>
                 <View style={[styles.topProgressFill, { width: `${Math.round(pct * 100)}%` }]} />
@@ -2490,27 +2507,34 @@ export default function App() {
                   {sessionCost > 0 ? (
                     <Text style={styles.sessionCost}>💰 Koszt sesji: ${sessionCost < 0.01 ? sessionCost.toFixed(4) : sessionCost.toFixed(2)}{status === "scanning" ? " · rośnie…" : ""}</Text>
                   ) : null}
-                  {status === "scanning" ? (
+                  {status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total) ? (
                     // Przeglądanie w trakcie skanu: baner z paskiem postępu DAŃ. Total rośnie w trakcie
                     // struktury (meta „ucieka"), a po jej zamrożeniu (structureReady) jest stały i pasek
-                    // dopełnia się z każdym wzbogaconym daniem.
+                    // dopełnia się z każdym wzbogaconym daniem. Po enrichu (status „done") pasek żyje dalej
+                    // dla POBIERANIA ZDJĘĆ i znika dopiero gdy pompa skończy — bez blokowania akcji menu.
                     (() => {
                       const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
                       const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
                       const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
-                      const pct = total > 0 ? Math.min(1, enriched / total) : 0;
+                      // Łączony postęp: enrich (0–50%) + POBIERANIE ZDJĘĆ (50–100%). Bez zdjęć (autoPhotos off)
+                      // enrich wypełnia całość. Pasek pełny i baner znika dopiero gdy pompa zdjęć skończy.
+                      const expectPhotos = costPrefs.autoPhotos;
+                      const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
+                      const enrichDn = structureReady && total > 0 && enriched >= total;
+                      const inPhoto = expectPhotos && enrichDn && pt > 0 && pd < pt;
+                      const pct = !expectPhotos ? (total > 0 ? Math.min(1, enriched / total) : 0) : !enrichDn ? (total > 0 ? Math.min(0.5, 0.5 * (enriched / total)) : 0) : (pt > 0 ? Math.min(1, 0.5 + 0.5 * (pd / pt)) : 1);
                       return (
                         <View style={styles.scanBanner}>
                           <ActivityIndicator size="small" color={colors.accent} />
                           <View style={{ flex: 1, marginLeft: 10 }}>
                             <Text style={styles.scanBannerTitle}>
-                              {structureReady ? `⏳ Tłumaczę dania ${enriched}/${total}…` : scanProgress ? `⏳ Czytam strony ${scanProgress.done}/${scanProgress.total} · ${total} dań…` : `⏳ Czytam menu · ${total} dań…`}
+                              {inPhoto ? `⏳ Pobieram zdjęcia ${pd}/${pt}…` : structureReady ? `⏳ Tłumaczę dania ${enriched}/${total}…` : scanProgress ? `⏳ Czytam strony ${scanProgress.done}/${scanProgress.total} · ${total} dań…` : `⏳ Czytam menu · ${total} dań…`}
                             </Text>
                             <View style={styles.progressTrack}>
                               <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` }]} />
                             </View>
                             <Text style={styles.scanBannerSub} numberOfLines={1}>
-                              {structureReady ? "Struktura gotowa — reszta dochodzi w miejscu." : "Liczba dań jeszcze rośnie…"}{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
+                              {inPhoto ? "Dania gotowe — dociągam zdjęcia." : structureReady ? "Struktura gotowa — reszta dochodzi w miejscu." : "Liczba dań jeszcze rośnie…"}{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
                             </Text>
                           </View>
                         </View>
