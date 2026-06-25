@@ -419,7 +419,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "rgba(0,0,0,0.4)",
+    backgroundColor: "transparent", // ciemnię daje JEDEN pas cropDim (góra) — bez nakładania = bez dwutonowości
   },
   peekToggle: {
     paddingHorizontal: 12,
@@ -445,7 +445,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
-    backgroundColor: "rgba(0,0,0,0.4)",
+    backgroundColor: "transparent", // jw. — dolny pas cropDim daje ciemnię; bez własnego tła = jednolity pas
   },
   zoomBar: { position: "absolute", left: 0, right: 0, bottom: 132, flexDirection: "row", justifyContent: "center", gap: 8 },
   zoomChip: { minWidth: 40, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.45)", alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" },
