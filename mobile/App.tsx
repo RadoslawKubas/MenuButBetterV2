@@ -82,9 +82,11 @@ import { VenueSearchScreen } from "./src/VenueSearchScreen";
 import { Lightbox, type LightboxState } from "./src/Lightbox";
 import { HistoryView } from "./src/HistoryView";
 import { DiagnosticsView } from "./src/DiagnosticsView";
+import { LogsView } from "./src/LogsView";
 import { CapturesView } from "./src/CapturesView";
 import { SettingsView } from "./src/SettingsView";
 import { PricingView } from "./src/PricingView";
+import { CostStrip } from "./src/CostStrip";
 import { CameraCapture } from "./src/CameraCapture";
 import { ApiErrorToast } from "./src/Toast";
 import { friendlyMessage } from "./src/appLog";
@@ -193,6 +195,7 @@ export default function App() {
   const [openScan, setOpenScan] = useState<SavedScan | null>(null);
   const [sourceLb, setSourceLb] = useState<LightboxState | null>(null); // podgląd zdjęć źródłowych skanu
   const [showDiag, setShowDiag] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const [showCaptures, setShowCaptures] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [captures, setCaptures] = useState<ScanCapture[]>([]);
@@ -233,7 +236,6 @@ export default function App() {
   const [replayLocation, setReplayLocation] = useState<{ location: GeoPoint | null; locationSource: LocationSource; locationHint?: string } | null>(null);
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
-  const [showOptions, setShowOptions] = useState(false); // zwijane „Opcje skanu" (lokal + lokalizacja)
   const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu (z podglądem zdjęcia)
   const [peekEnabled, setPeekEnabled] = useState(true); // „szybki podgląd" na żywo (kuchnia/nazwa)
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
@@ -859,6 +861,7 @@ export default function App() {
     // Przełącz na ekran skanu i przygotuj go w trybie wyboru (resetScan → idle).
     setShowCaptures(false);
     setShowDiag(false);
+    setShowLogs(false);
     setShowSettings(false);
     setOpenScan(null);
     setTab("scan");
@@ -1995,18 +1998,20 @@ export default function App() {
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <Text style={styles.brand}>MenuButBetter</Text>
-            {showDiag || showCaptures || showPricing || showSettings || showingDetail ? (
+            {showDiag || showLogs || showCaptures || showPricing || showSettings || showingDetail ? (
               <Pressable
                 onPress={() =>
                   showDiag
                     ? setShowDiag(false)
-                    : showCaptures
-                      ? setShowCaptures(false)
-                      : showPricing
-                        ? setShowPricing(false)
-                        : showSettings
-                          ? setShowSettings(false)
-                          : setOpenScan(null)
+                    : showLogs
+                      ? setShowLogs(false)
+                      : showCaptures
+                        ? setShowCaptures(false)
+                        : showPricing
+                          ? setShowPricing(false)
+                          : showSettings
+                            ? setShowSettings(false)
+                            : setOpenScan(null)
                 }
                 style={styles.navBtn}
               >
@@ -2018,7 +2023,7 @@ export default function App() {
               </Pressable>
             )}
           </View>
-          {!(showDiag || showCaptures || showPricing || showSettings || showingDetail) ? (
+          {!(showDiag || showLogs || showCaptures || showPricing || showSettings || showingDetail) ? (
             <View style={styles.tabs}>
               <Pressable onPress={() => setTab("scan")}>
                 <Text style={[styles.tab, tab === "scan" && styles.tabActive]}>Skan</Text>
@@ -2038,7 +2043,7 @@ export default function App() {
           ) : null}
           {/* #3: cienka linia postępu w STAŁYM nagłówku — zawsze widoczna gdy enrich trwa, treść scrolluje
               pod nią. Znika gdy skan gotowy. */}
-          {(status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total)) && menu && !(showDiag || showCaptures || showPricing || showSettings) ? (() => {
+          {(status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total)) && menu && !(showDiag || showLogs || showCaptures || showPricing || showSettings) ? (() => {
             // Postęp ŁĄCZONY (te same segmenty co baner): czytanie+enrich+zdjęcia = 0–85%, krok ★ = ostatnie 15% (pełznie).
             const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
             const read = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
@@ -2057,8 +2062,10 @@ export default function App() {
 
         {showDiag ? (
           <DiagnosticsView />
+        ) : showLogs ? (
+          <LogsView />
         ) : showPricing ? (
-          <PricingView />
+          <PricingView scans={scans} />
         ) : showCaptures ? (
           <CapturesView
             onReplay={replayCapture}
@@ -2074,12 +2081,17 @@ export default function App() {
             targetLang={targetLang}
             onChangeLang={changeLang}
             onOpenDiagnostics={() => setShowDiag(true)}
+            onOpenLogs={() => setShowLogs(true)}
             onOpenCaptures={() => setShowCaptures(true)}
             onOpenPricing={() => setShowPricing(true)}
             capturesCount={captures.length}
           />
         ) : (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {/* Widoczny pasek kosztów (ostatnia sesja / dziś / łącznie) — klik → pełny ekran „Koszty". */}
+          {!showingDetail ? (
+            <CostStrip scans={scans} liveSessionCost={sessionCost} onPress={() => setShowPricing(true)} />
+          ) : null}
           {/* PODGLĄD ZAPISANEGO MENU */}
           {showingDetail && openScan
             ? renderMenuDetail({
@@ -2185,62 +2197,6 @@ export default function App() {
 
                   {error ? <Text style={styles.inlineError}>{error}</Text> : null}
 
-                  {/* 3) OPCJE — zwijane (lokal + lokalizacja), domyślnie schowane. */}
-                  <Pressable style={styles.optionsHead} onPress={() => setShowOptions((v) => !v)}>
-                    <Text style={styles.optionsHeadText} numberOfLines={1}>
-                      <Icon name="settings" /> Opcje skanu
-                      {hint.trim() ? ` · ${hint.trim()}` : ""}
-                      {useExifLocation || useDeviceLocation ? " · lokalizacja wł." : " · wył."}
-                    </Text>
-                    <Text style={styles.optionsChevron}>{showOptions ? "▾" : "›"}</Text>
-                  </Pressable>
-                  {showOptions ? (
-                    <View style={styles.optionsBody}>
-                      <Text style={styles.label}>Lokal (opcjonalnie)</Text>
-                      <TextInput
-                        value={hint}
-                        onChangeText={(t) => { setHint(t); setHintManual(t.trim().length > 0); }}
-                        placeholder="np. Trattoria da Marco, Florencja"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
-                      />
-                      <Text style={styles.label}>Lokalizacja (pomaga namierzyć lokal)</Text>
-                      {replayLocation ? (
-                        <Text style={styles.replayLocNote}>
-                          <Icon name="refresh" /> Replay z migawki — lokalizacja wymuszona z próbki: {replayLocation.locationHint || replayLocation.locationSource || "zapisana"} (poniższe przełączniki pominięte)
-                        </Text>
-                      ) : null}
-                      <View style={styles.switchRow}>
-                        <View style={styles.switchTextWrap}>
-                          <Text style={styles.switchTitle}><Icon name="camera" /> Z EXIF zdjęć</Text>
-                          <Text style={styles.switchSub}>
-                            Współrzędne zaszyte w zdjęciu (jeśli zrobione na miejscu). Działa też później.
-                          </Text>
-                        </View>
-                        <Switch value={useExifLocation} onValueChange={setUseExifLocation} trackColor={{ true: colors.accent }} />
-                      </View>
-                      <View style={styles.switchRow}>
-                        <View style={styles.switchTextWrap}>
-                          <Text style={styles.switchTitle}><Icon name="location" /> Moja lokalizacja</Text>
-                          <Text style={styles.switchSub}>
-                            Pozycja GPS telefonu — pomaga ustalić kraj/miasto, też gdy nie jesteś w lokalu.
-                          </Text>
-                        </View>
-                        <Switch value={useDeviceLocation} onValueChange={setUseDeviceLocation} trackColor={{ true: colors.accent }} />
-                      </View>
-                    </View>
-                  ) : null}
-
-                  {/* 4) Modele + język — szybki link do Ustawień (czytelne etykiety). */}
-                  <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
-                    <Text style={styles.modelsLinkText}>
-                      <Icon name="settings" /> Modele:{" "}
-                      {new Set(Object.values(models)).size === 1
-                        ? modelLabel(models.scan)
-                        : `różne (skan ${modelLabel(models.scan)})`}{" "}
-                      · Język: {targetLang} — zmień w Ustawieniach
-                    </Text>
-                  </Pressable>
                 </View>
               ) : null}
 

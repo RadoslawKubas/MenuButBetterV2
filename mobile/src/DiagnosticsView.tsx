@@ -11,7 +11,6 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from "react-native";
@@ -27,8 +26,9 @@ import {
   type DiagTotals,
   type DiagEvent,
 } from "./api";
-import { getCalls, classifyError, type ClientCall } from "./appLog";
+import { getCalls, classifyError } from "./appLog";
 import { MODEL_OPTIONS } from "./types";
+import { Icon } from "./Icon";
 import { colors } from "./theme";
 
 function fmtTime(ts: number): string {
@@ -96,12 +96,10 @@ export function DiagnosticsView() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [calls, setCalls] = useState<ClientCall[]>(getCalls());
   const [stats, setStats] = useState<DiagStats | null>(null);
   const [totals, setTotals] = useState<DiagTotals | null>(null);
   const [events, setEvents] = useState<DiagEvent[]>([]);
   const [exporting, setExporting] = useState(false);
-  const [onlyErrors, setOnlyErrors] = useState(false);
 
   // Eksport WSZYSTKICH logów do pliku JSON (statystyki + wpisy per API z serwera oraz
   // log wywołań z telefonu) i arkusz udostępniania — do wysłania na debug.
@@ -161,10 +159,8 @@ export function DiagnosticsView() {
       ]);
       setProviders(diag.providers);
       setTotals(diag.totals ?? null);
-      setCalls(getCalls());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Nie udało się pobrać diagnostyki.");
-      setCalls(getCalls());
     } finally {
       setLoading(false);
     }
@@ -182,7 +178,22 @@ export function DiagnosticsView() {
 
   const recentErrors = stats?.recentErrors ?? [];
   const activity = events.filter((e) => e.type !== "error").slice(0, 15);
-  const phoneCalls = onlyErrors ? calls.filter((c) => !c.ok) : calls;
+
+  // Status serwera „na skróty": czerwony = krytyczne (brak połączenia / budżet → AI wstrzymane),
+  // bursztyn = ostrzeżenie (API zwróciło błąd / błąd w ostatniej godzinie), zielony = OK.
+  const budgetHit = stats?.dailyBudgetUsd != null && (stats?.todayCostUsd ?? 0) >= stats.dailyBudgetUsd;
+  const provFail = providers.some((p) => p.entries[0] && !p.entries[0].ok);
+  const recentErr = recentErrors.find((e) => Date.now() - Date.parse(e.at) < 3600_000);
+  const status = error
+    ? { sev: "red" as const, text: "Brak połączenia z serwerem" }
+    : budgetHit
+      ? { sev: "red" as const, text: "Budżet dzienny przekroczony — AI wstrzymane do jutra" }
+      : provFail
+        ? { sev: "amber" as const, text: "Któreś API zwróciło błąd — patrz niżej" }
+        : recentErr
+          ? { sev: "amber" as const, text: `Błąd w ostatniej godzinie: ${recentErr.detail ?? recentErr.op ?? "?"}` }
+          : { sev: "green" as const, text: "Serwer OK" };
+  const statusColor = status.sev === "red" ? "#b3261e" : status.sev === "amber" ? "#c77700" : "#2e7d32";
 
   return (
     <ScrollView
@@ -192,26 +203,32 @@ export function DiagnosticsView() {
       <Text style={styles.title}>Diagnostyka</Text>
       <View style={styles.actions}>
         <Pressable style={styles.action} onPress={exportLogs} disabled={exporting || loading}>
-          <Text style={styles.actionText}>{exporting ? "Eksportuję…" : "⬆︎ Eksport logów"}</Text>
+          <Text style={styles.actionText}>{exporting ? "Eksportuję…" : <><Icon name="upload" size={13} color={colors.accent} /> Eksport logów</>}</Text>
         </Pressable>
         <Pressable style={styles.action} onPress={() => void load()} disabled={loading}>
-          <Text style={styles.actionText}>{loading ? "Odświeżam…" : "↻ Odśwież"}</Text>
+          <Text style={styles.actionText}>{loading ? "Odświeżam…" : <><Icon name="refresh" size={13} color={colors.accent} /> Odśwież</>}</Text>
         </Pressable>
       </View>
+      {stats != null || providers.length > 0 || error ? (
+        <View style={[styles.statusBox, status.sev === "red" ? styles.statusRed : status.sev === "amber" ? styles.statusAmber : styles.statusGreen]}>
+          <Icon name={status.sev === "green" ? "check" : "warn"} size={18} color={statusColor} />
+          <Text style={[styles.statusText, { color: statusColor }]}>{status.text}</Text>
+        </View>
+      ) : null}
       <Text style={styles.hintTop}>Pociągnij w dół, aby odświeżyć.</Text>
 
-      {error ? <Text style={styles.error}>⚠️ {error}</Text> : null}
+      {error ? <Text style={styles.error}><Icon name="warn" size={13} color={colors.error} /> {error}</Text> : null}
       {loading && providers.length === 0 && !stats ? (
         <ActivityIndicator color={colors.accent} style={{ marginVertical: 24 }} />
       ) : null}
 
       {/* ===================== TRWAŁE (Postgres) ===================== */}
-      <Text style={styles.bigSection}>📦 Dane trwałe (przeżywają redeploy)</Text>
+      <Text style={styles.bigSection}><Icon name="package" size={15} color={colors.text} /> Dane trwałe (przeżywają redeploy)</Text>
 
       {stats?.enabled ? (
         <>
           <View style={styles.box}>
-            <Text style={styles.boxTitle}>📈 Podsumowanie</Text>
+            <Text style={styles.boxTitle}><Icon name="chartLine" size={14} color={colors.accent} /> Podsumowanie</Text>
             <Text style={styles.line}>
               Skany: {stats.totalScans ?? 0} · Dania: {stats.totalDishes ?? 0} ·{" "}
               <Text style={(stats.errors ?? 0) > 0 ? styles.errN : undefined}>Błędy: {stats.errors ?? 0}</Text>
@@ -223,54 +240,11 @@ export function DiagnosticsView() {
             {stats.since ? <Text style={styles.since}>od {stats.since.slice(0, 10)}</Text> : null}
           </View>
 
-          {/* Koszt per MODEL — wprost do porównań (pełny koszt: skan+opisy+weryfikacja+venue). */}
-          {(stats.byModel ?? []).length > 0 ? (
-            <View style={styles.box}>
-              <Text style={styles.boxTitle}>💸 Koszt per model</Text>
-              {(stats.byModel ?? []).map((m) => (
-                <View key={m.model ?? "?"} style={styles.statRow}>
-                  <Text style={styles.statName} numberOfLines={1}>{modelLabel(m.model)}</Text>
-                  <Text style={styles.statVal}>
-                    {fmtUsd(m.cost)} · {m.calls}× · {fmtTok(m.inputTokens)}/{fmtTok(m.outputTokens)} tok
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {/* Koszt per OPERACJA — gdzie idą pieniądze. */}
-          {(stats.byOp ?? []).length > 0 ? (
-            <View style={styles.box}>
-              <Text style={styles.boxTitle}>🧮 Koszt per operacja</Text>
-              {(stats.byOp ?? []).map((o) => (
-                <View key={o.op ?? "?"} style={styles.statRow}>
-                  <Text style={styles.statName} numberOfLines={1}>{opLabel(o.op)}</Text>
-                  <Text style={styles.statVal}>
-                    {fmtUsd(o.cost)} · {o.calls}× · {fmtTok(o.inputTokens)}/{fmtTok(o.outputTokens)} tok
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {/* Trend dzienny (ostatnie 7 dni). */}
-          {(stats.byDay ?? []).length > 0 ? (
-            <View style={styles.box}>
-              <Text style={styles.boxTitle}>📅 Skany / dzień</Text>
-              {(stats.byDay ?? []).slice(0, 7).map((d) => (
-                <View key={d.day} style={styles.statRow}>
-                  <Text style={styles.statName}>{d.day}</Text>
-                  <Text style={styles.statVal}>{d.scans} skan(y)</Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
           {/* Ostatnie błędy (trwałe). */}
           <View style={styles.box}>
-            <Text style={styles.boxTitle}>🔴 Ostatnie błędy</Text>
+            <Text style={styles.boxTitle}><Icon name="warn" size={14} color={colors.error} /> Ostatnie błędy</Text>
             {recentErrors.length === 0 ? (
-              <Text style={styles.dim}>Brak błędów 🎉</Text>
+              <Text style={styles.dim}>Brak błędów <Icon name="party" size={13} color={colors.muted} /></Text>
             ) : (
               recentErrors.map((e, i) => (
                 <View key={i} style={styles.errRow}>
@@ -286,7 +260,7 @@ export function DiagnosticsView() {
           {/* Feed ostatniej aktywności (trwały). */}
           {activity.length > 0 ? (
             <View style={styles.box}>
-              <Text style={styles.boxTitle}>🕒 Ostatnia aktywność</Text>
+              <Text style={styles.boxTitle}><Icon name="clock" size={14} color={colors.accent} /> Ostatnia aktywność</Text>
               {activity.map((e, i) => {
                 const hint = eventHint(e);
                 return (
@@ -309,13 +283,13 @@ export function DiagnosticsView() {
       )}
 
       {/* ===================== BIEŻĄCA SESJA serwera ===================== */}
-      <Text style={styles.bigSection}>🌐 API serwera — bieżąca sesja</Text>
+      <Text style={styles.bigSection}><Icon name="web" size={15} color={colors.text} /> API serwera — bieżąca sesja</Text>
       <Text style={styles.sub}>Liczby zerują się po redeployu/restarcie serwera. Dotknij serwis, by zobaczyć log odpowiedzi.</Text>
 
       {/* Łączny koszt AI tej sesji. */}
       {providers.some((p) => p.costUsd > 0) ? (
         <View style={styles.costBox}>
-          <Text style={styles.costBig}>💰 Koszt AI (sesja): {fmtUsd(providers.reduce((n, p) => n + p.costUsd, 0))}</Text>
+          <Text style={styles.costBig}><Icon name="cost" size={14} color={colors.accent} /> Koszt AI (sesja): {fmtUsd(providers.reduce((n, p) => n + p.costUsd, 0))}</Text>
           <Text style={styles.costSub}>
             {fmtTok(providers.reduce((n, p) => n + p.inputTokens, 0))} in ·{" "}
             {fmtTok(providers.reduce((n, p) => n + p.outputTokens, 0))} out
@@ -327,11 +301,11 @@ export function DiagnosticsView() {
       {providers.some((p) => p.bytesSent > 0 || p.bytesRecv > 0) ? (
         <View style={styles.costBox}>
           <Text style={styles.costBig}>
-            📡 Ruch danych (sesja): {fmtUsd(totals?.dataCostUsd ?? 0)}
+            <Icon name="signal" size={14} color={colors.accent} /> Ruch danych (sesja): {fmtUsd(totals?.dataCostUsd ?? 0)}
           </Text>
           <Text style={styles.costSub}>
-            ⬆️ wysłane {fmtBytes(providers.reduce((n, p) => n + p.bytesSent, 0))} ·{" "}
-            ⬇️ odebrane {fmtBytes(providers.reduce((n, p) => n + p.bytesRecv, 0))}
+            <Icon name="upload" size={12} color={colors.muted} /> wysłane {fmtBytes(providers.reduce((n, p) => n + p.bytesSent, 0))} ·{" "}
+            <Icon name="download" size={12} color={colors.muted} /> odebrane {fmtBytes(providers.reduce((n, p) => n + p.bytesRecv, 0))}
             {totals?.egressUsdPerGB ? `  ·  egress $${totals.egressUsdPerGB}/GB` : ""}
           </Text>
           {totals?.grandTotalUsd != null ? (
@@ -352,13 +326,13 @@ export function DiagnosticsView() {
             <Pressable onPress={() => setOpen(isOpen ? null : p.provider)}>
               <View style={styles.cardTop}>
                 <Text style={styles.provider}>
-                  {failing ? "🔴 " : p.total > 0 ? "🟢 " : "⚪️ "}
+                  <Icon name="dot" size={10} color={failing ? "#b3261e" : p.total > 0 ? "#2e7d32" : colors.muted} />{" "}
                   {p.label}
                 </Text>
                 <View style={styles.tags}>
                   {p.paid ? <Text style={[styles.tag, styles.tagPaid]}>płatne</Text> : null}
                   <Text style={[styles.tag, p.configured ? styles.tagOn : styles.tagOff]}>
-                    {p.configured ? "klucz ✓" : "brak klucza"}
+                    {p.configured ? <><Icon name="check" size={10} color="#2e7d32" /> klucz</> : "brak klucza"}
                   </Text>
                 </View>
               </View>
@@ -366,7 +340,7 @@ export function DiagnosticsView() {
               {kind ? (
                 <View style={[styles.errBanner, { borderColor: kind.color }]}>
                   <Text style={[styles.errBannerText, { color: kind.color }]}>
-                    {kind.icon} Ostatnie zapytanie: {kind.label}
+                    <Icon name="warn" size={12} color={kind.color} /> Ostatnie zapytanie: {kind.label}
                   </Text>
                 </View>
               ) : null}
@@ -380,12 +354,12 @@ export function DiagnosticsView() {
               </View>
               {p.costUsd > 0 || p.inputTokens > 0 ? (
                 <Text style={styles.tokens}>
-                  🔢 {fmtTok(p.inputTokens)} in · {fmtTok(p.outputTokens)} out · 💰 {fmtUsd(p.costUsd)}
+                  <Icon name="numeric" size={12} color={colors.muted} /> {fmtTok(p.inputTokens)} in · {fmtTok(p.outputTokens)} out · <Icon name="cost" size={12} color={colors.muted} /> {fmtUsd(p.costUsd)}
                 </Text>
               ) : null}
               {p.bytesSent > 0 || p.bytesRecv > 0 ? (
                 <Text style={styles.tokens}>
-                  📡 ⬆️ {fmtBytes(p.bytesSent)} · ⬇️ {fmtBytes(p.bytesRecv)}
+                  <Icon name="signal" size={12} color={colors.muted} /> <Icon name="upload" size={12} color={colors.muted} /> {fmtBytes(p.bytesSent)} · <Icon name="download" size={12} color={colors.muted} /> {fmtBytes(p.bytesRecv)}
                 </Text>
               ) : null}
               {p.lastError ? (
@@ -402,7 +376,7 @@ export function DiagnosticsView() {
                 ) : (
                   p.entries.map((e, i) => (
                     <View key={i} style={styles.entry}>
-                      <Text style={styles.dot}>{e.ok ? "🟢" : classifyError(e.detail).icon}</Text>
+                      <Text style={styles.dot}>{e.ok ? <Icon name="dot" size={11} color="#2e7d32" /> : <Icon name="warn" size={12} color={classifyError(e.detail).color} />}</Text>
                       <Text style={styles.entryTime}>{fmtTime(e.ts)}</Text>
                       <Text style={styles.entryOp} numberOfLines={1}>
                         {e.op} · {e.ms}ms
@@ -418,30 +392,6 @@ export function DiagnosticsView() {
         );
       })}
 
-      {/* ===================== Wywołania z telefonu ===================== */}
-      <View style={styles.callsHeader}>
-        <Text style={styles.bigSection}>📱 Wywołania z telefonu</Text>
-        <View style={styles.errToggle}>
-          <Text style={styles.errToggleLabel}>tylko błędy</Text>
-          <Switch value={onlyErrors} onValueChange={setOnlyErrors} />
-        </View>
-      </View>
-      <Text style={styles.sub}>Co apka wysyłała do naszego serwera (ta sesja).</Text>
-      {phoneCalls.length === 0 ? (
-        <Text style={styles.dim}>{onlyErrors ? "Brak błędów w tej sesji 🎉" : "Brak — zeskanuj coś, by zobaczyć ruch."}</Text>
-      ) : (
-        phoneCalls.map((e, i) => (
-          <View key={i} style={styles.entry}>
-            <Text style={styles.dot}>{e.ok ? "🟢" : classifyError(e.detail).icon}</Text>
-            <Text style={styles.entryTime}>{fmtTime(e.ts)}</Text>
-            <Text style={styles.entryOp} numberOfLines={1}>
-              {e.label} · {e.ms}ms
-              {e.ok ? "" : ` · ${classifyError(e.detail).label}`}
-              {e.detail ? ` · ${e.detail}` : ""}
-            </Text>
-          </View>
-        ))
-      )}
     </ScrollView>
   );
 }
@@ -462,6 +412,12 @@ const styles = StyleSheet.create({
   bigSection: { fontSize: 16, fontWeight: "800", color: colors.accent, marginTop: 20, marginBottom: 6 },
   sub: { fontSize: 12, color: colors.muted, marginBottom: 8 },
   error: { color: colors.error, marginTop: 8 },
+
+  statusBox: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, borderWidth: 1.5, paddingVertical: 12, paddingHorizontal: 12, marginVertical: 8 },
+  statusGreen: { borderColor: "#2e7d32", backgroundColor: "#eef7ee" },
+  statusAmber: { borderColor: "#c77700", backgroundColor: "#fdf6ea" },
+  statusRed: { borderColor: "#b3261e", backgroundColor: "#fdf2f2" },
+  statusText: { fontSize: 15, fontWeight: "800", flexShrink: 1 },
 
   box: { backgroundColor: colors.card, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: colors.badgeBg },
   boxTitle: { fontSize: 14, fontWeight: "800", color: colors.text, marginBottom: 6 },

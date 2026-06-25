@@ -3,7 +3,9 @@
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat, type ImageRef } from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
+import * as Location from "expo-location";
 import { File } from "expo-file-system";
+import { write as writeExif } from "@lodev09/react-native-exify";
 import type { GeoPoint } from "./types";
 
 export interface PreparedImage {
@@ -164,6 +166,46 @@ async function saveToGallery(uri: string): Promise<void> {
   }
 }
 
+// Pozycja urządzenia do GEOTAGU — best-effort i NIEINWAZYJNA: TYLKO gdy zgoda na lokalizację już przyznana
+// (NIE prosimy o nią tylko po to, by geotagować — lokalizacja jest opt-in, patrz location.ts). Najpierw
+// ostatnio znana (natychmiast), potem ewentualnie świeży fix. Cache krótki: zdjęcia jednego menu robione
+// seriami w tym samym miejscu, więc nie odpytujemy GPS przy każdej klatce. Cisza przy braku/błędzie.
+let geoCache: { lat: number; lng: number; ts: number } | null = null;
+async function deviceGeoIfAllowed(): Promise<{ lat: number; lng: number } | null> {
+  try {
+    if (geoCache && Date.now() - geoCache.ts < 60_000) return geoCache;
+    const perm = await Location.getForegroundPermissionsAsync(); // SPRAWDŹ status, NIE proś
+    if (!perm.granted) return null;
+    const pos =
+      (await Location.getLastKnownPositionAsync()) ??
+      (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+    if (!pos) return null;
+    geoCache = { lat: pos.coords.latitude, lng: pos.coords.longitude, ts: Date.now() };
+    return geoCache;
+  } catch {
+    return null;
+  }
+}
+
+// Wpisuje GPS urządzenia w EXIF pliku (file://) NASZEGO zdjęcia — dzięki temu kopia do galerii i ORYGINAŁ
+// zapisany w samplu są geotagowane (expo-camera nie geotaguje sam). Modyfikuje plik W MIEJSCU (dla file:// uri
+// `write` zwraca ten sam uri), więc dalej `compress` liczy srcHash z już-geotagowanego pliku (replay spójny).
+// GPS w EXIF to magnituda + ref (N/S, E/W) — stąd abs()+ref. Best-effort: HEIC/format/IO/brak GPS → bez geotagu.
+async function geotagOwnPhoto(uri: string): Promise<void> {
+  const geo = await deviceGeoIfAllowed();
+  if (!geo) return;
+  try {
+    await writeExif(uri, {
+      GPSLatitude: Math.abs(geo.lat),
+      GPSLatitudeRef: geo.lat >= 0 ? "N" : "S",
+      GPSLongitude: Math.abs(geo.lng),
+      GPSLongitudeRef: geo.lng >= 0 ? "E" : "W",
+    });
+  } catch {
+    // EXIF się nie zapisał (np. HEIC / format / IO) — zostaje oryginał bez geotagu
+  }
+}
+
 /** Robi zdjęcie aparatem (jedno). Zwraca null, gdy użytkownik anuluje. */
 export async function captureFromCamera(): Promise<PreparedImage | null> {
   const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -171,6 +213,7 @@ export async function captureFromCamera(): Promise<PreparedImage | null> {
   const res = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1, exif: true });
   if (res.canceled || !res.assets[0]) return null;
   const a = res.assets[0];
+  await geotagOwnPhoto(a.uri); // NASZE zdjęcie → wpisz device GPS w EXIF PRZED zapisem do galerii i do sampla
   void saveToGallery(a.uri); // tryb testowy: zachowaj oryginał w galerii (równolegle)
   return compress(a.uri, a.exif, { width: a.width, height: a.height });
 }
@@ -181,6 +224,7 @@ export async function prepareCameraPhoto(
   uri: string,
   exif?: Record<string, unknown> | null,
 ): Promise<PreparedImage> {
+  await geotagOwnPhoto(uri); // NASZE zdjęcie → device GPS w EXIF PRZED galerią i samplem
   void saveToGallery(uri); // równolegle, best-effort
   return compress(uri, exif ?? null);
 }

@@ -1,5 +1,7 @@
-// Klient: lekki log wywołań NASZEGO API (do ekranu „Diagnostyka") + powiadomienie o błędach
-// (toast), żeby przy testach od razu było widać, gdy coś poleciało — nawet jeśli niekrytyczne.
+// Klient: lekki log wywołań NASZEGO API (ekran „Logi") + powiadomienie o błędach (toast). TRWAŁY —
+// trzymany lokalnie w AsyncStorage, więc przeżywa restart apki; cap MAX, najnowsze na górze; do czyszczenia.
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 export interface ClientCall {
   ts: number;
   label: string;
@@ -8,19 +10,59 @@ export interface ClientCall {
   detail?: string;
 }
 
-const MAX = 60;
-const calls: ClientCall[] = [];
+const KEY = "mbb.appLog.v1";
+const MAX = 200;
+let calls: ClientCall[] = [];
 type Listener = (e: ClientCall) => void;
 const errorListeners = new Set<Listener>();
+
+// Hydracja z magazynu (raz, przy starcie). Wpisy dodane PRZED hydracją (nowsze) trzymamy z przodu, zapisane doklejamy.
+let hydrateDone!: () => void;
+const hydration = new Promise<void>((r) => { hydrateDone = r; });
+AsyncStorage.getItem(KEY)
+  .then((s) => {
+    if (s) {
+      try {
+        const arr = JSON.parse(s);
+        if (Array.isArray(arr)) calls = [...calls, ...arr].slice(0, MAX);
+      } catch { /* uszkodzony JSON → zaczynamy od zera */ }
+    }
+  })
+  .catch(() => {})
+  .finally(() => hydrateDone());
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function persistSoon(): void {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    AsyncStorage.setItem(KEY, JSON.stringify(calls)).catch(() => {});
+  }, 400);
+}
 
 export function logCall(e: ClientCall): void {
   calls.unshift(e);
   if (calls.length > MAX) calls.length = MAX;
+  persistSoon();
   if (!e.ok) errorListeners.forEach((l) => l(e));
 }
 
+/** Bieżący log (sync) — po hydracji zwraca komplet. */
 export function getCalls(): ClientCall[] {
   return calls.slice();
+}
+
+/** Log po dokończonej hydracji z magazynu — do ekranu „Logi" przy wejściu. */
+export async function loadCalls(): Promise<ClientCall[]> {
+  await hydration;
+  return calls.slice();
+}
+
+/** Czyści lokalny log (pamięć + magazyn). */
+export async function clearCalls(): Promise<void> {
+  calls = [];
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  await AsyncStorage.removeItem(KEY).catch(() => {});
 }
 
 /** Subskrypcja BŁĘDÓW (do toasta). Zwraca funkcję odsubskrybowania. */

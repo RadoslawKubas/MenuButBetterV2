@@ -27,7 +27,8 @@
           "savePhotosPermission": "MenuButBetter zapisuje zrobione zdjęcia menu w Twojej galerii (tryb testowy).",
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "expo-font"
     ],
     "ios": {
       "supportsTablet": true,

@@ -880,7 +880,7 @@ export interface DiagStats {
   totalOutputTokens?: number;
   byModel?: { model: string | null; calls: number; scans: number; cost: number; inputTokens: number; outputTokens: number }[];
   byOp?: { op: string | null; calls: number; cost: number; inputTokens: number; outputTokens: number }[];
-  byDay?: { day: string; scans: number }[];
+  byDay?: { day: string; scans: number; cost: number }[];
   recentErrors?: { at: string; provider: string | null; op: string | null; detail: string | null }[];
   errors?: number;
   todayCostUsd?: number;

@@ -24,14 +24,17 @@ const MODEL_STEP_LABELS: [string, string][] = [
   ["enrich", "Tłumaczenia + krótkie opisy"],
   ["verify", "Weryfikacja zdjęć (vision)"],
   ["dishInfo", "Długie opisy dań"],
+  ["venuePool", "Szeroka pula z lokalu → dania"],
 ];
 const STEP_LABELS: [string, string][] = [
   ["photoSerper", "Zdjęcia — Serper web (generyk)"],
+  ["photoSerperPlain", "Zdjęcia — Serper web proste (eksperyment)"],
   ["photoSerperSite", "Zdjęcia — Serper z lokalu: strona www"],
   ["photoSerperPortal", "Zdjęcia — Serper z lokalu: portale"],
   ["photoWikimedia", "Zdjęcia — Wikimedia"],
   ["photoOpenverse", "Zdjęcia — Openverse"],
   ["photoVenue", "Zdjęcia z lokalu — Tier 0 (Google/TA)"],
+  ["photoVenuePool", "Zdjęcia z lokalu — szeroka pula"],
   ["verifyPhotos", "Weryfikacja AI zdjęć"],
   ["descriptions", "Długie opisy dań"],
 ];
@@ -49,6 +52,7 @@ export function SettingsView({
   targetLang,
   onChangeLang,
   onOpenDiagnostics,
+  onOpenLogs,
   onOpenCaptures,
   onOpenPricing,
   capturesCount,
@@ -56,6 +60,7 @@ export function SettingsView({
   targetLang: string;
   onChangeLang: (lang: string) => void;
   onOpenDiagnostics: () => void;
+  onOpenLogs: () => void;
   onOpenCaptures: () => void;
   onOpenPricing: () => void;
   capturesCount: number;
@@ -122,7 +127,7 @@ export function SettingsView({
 
       <Text style={styles.section}>Narzędzia</Text>
       <Pressable style={styles.toolBtn} onPress={onOpenPricing}>
-        <Text style={styles.toolText}><Icon name="money" /> Cennik (modele i API)</Text>
+        <Text style={styles.toolText}><Icon name="chartBar" /> Koszty</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
       <Pressable style={styles.toolBtn} onPress={onOpenCaptures}>
@@ -130,7 +135,11 @@ export function SettingsView({
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
       <Pressable style={styles.toolBtn} onPress={onOpenDiagnostics}>
-        <Text style={styles.toolText}><Icon name="chartBar" /> Diagnostyka i logi</Text>
+        <Text style={styles.toolText}><Icon name="signal" /> Diagnostyka (serwer)</Text>
+        <Text style={styles.toolChevron}>›</Text>
+      </Pressable>
+      <Pressable style={styles.toolBtn} onPress={onOpenLogs}>
+        <Text style={styles.toolText}><Icon name="note" /> Logi (ten telefon)</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
 

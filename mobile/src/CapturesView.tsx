@@ -24,6 +24,7 @@ import { uploadSample, fetchSampleStatus, reportError, fetchAppServerSamples, do
 import type { SavedScan } from "./storage";
 import { MODEL_OPTIONS, distinctModels } from "./types";
 import { Lightbox, type LightboxState } from "./Lightbox";
+import { Icon } from "./Icon";
 import { colors } from "./theme";
 
 function fmtWhen(ts: number): string {
@@ -254,7 +255,10 @@ export function CapturesView({
           disabled={importing}
           onPress={() => void importFromServer()}
         >
-          <Text style={styles.importBtnText}>{importing ? "⏳ Importuję z serwera…" : "⬇️ Importuj sample z serwera"}</Text>
+          <Text style={styles.importBtnText}>
+            <Icon name={importing ? "hourglass" : "download"} size={14} color="#fff" />{" "}
+            {importing ? "Importuję z serwera…" : "Importuj sample z serwera"}
+          </Text>
         </Pressable>
 
         {captures.length > 0 ? (
@@ -265,7 +269,8 @@ export function CapturesView({
               onPress={() => doExport("all")}
             >
               <Text style={styles.exportText}>
-                {exporting === "all" ? "⏳ Pakuję ZIP…" : `⬆︎ Wyeksportuj wszystkie (${captures.length}) do ZIP`}
+                <Icon name={exporting === "all" ? "hourglass" : "upload"} size={14} color={colors.accent} />{" "}
+                {exporting === "all" ? "Pakuję ZIP…" : `Wyeksportuj wszystkie (${captures.length}) do ZIP`}
               </Text>
             </Pressable>
             <View style={styles.toolbar}>
@@ -273,7 +278,9 @@ export function CapturesView({
                 {captures.length} migawek · {fmtBytes(capturesDiskBytes(captures))} na dysku
               </Text>
               <Pressable onPress={confirmDeleteAll} hitSlop={6}>
-                <Text style={styles.deleteAll}>🗑 Usuń wszystkie</Text>
+                <Text style={styles.deleteAll}>
+                  <Icon name="delete" size={13} color={colors.error} /> Usuń wszystkie
+                </Text>
               </Pressable>
             </View>
           </>
@@ -283,7 +290,8 @@ export function CapturesView({
           <Text style={styles.empty}>Brak migawek — zrób skan, a pojawi się tutaj.</Text>
         ) : (
           captures.map((c) => {
-            const runs = captureRuns(c);
+            const allRuns = captureRuns(c); // WSZYSTKIE przebiegi — tylko do LICZNIKA (skasowane z historii też się liczą)
+            const runs = allRuns.filter((r) => scanById.has(r.scanId)); // tylko ŻYWE (wynik wciąż w historii) — do LISTY
             return (
               <View key={c.id} style={styles.card}>
                 <View style={styles.titleRow}>
@@ -293,47 +301,29 @@ export function CapturesView({
                     </Text>
                     <Text style={styles.titleSub}>
                       <Text style={c.origin === "server" ? styles.originServer : c.origin === "app" ? styles.originApp : styles.titleSub}>
-                        {c.origin === "server" ? "☁ z serwera" : c.origin === "app" ? "📱 własny" : "• pochodzenie ?"}
+                        {c.origin === "server" ? (
+                          <><Icon name="cloud" size={11} color="#5aa9e6" /> z serwera</>
+                        ) : c.origin === "app" ? (
+                          <><Icon name="device" size={11} color="#7fd6a0" /> własny</>
+                        ) : (
+                          <><Icon name="dot" size={8} color={colors.muted} /> pochodzenie ?</>
+                        )}
                       </Text>
-                      {" · "}🕘 {fmtAgo(c.createdAt)}
+                      {" · "}<Icon name="clock" size={11} color={colors.muted} /> {fmtAgo(c.createdAt)}
                       {c.name ? ` · ${fmtWhen(c.createdAt)}` : ""}
                     </Text>
                   </View>
                   <Pressable onPress={() => promptRename(c)} hitSlop={8}>
-                    <Text style={styles.rename}>✏️</Text>
+                    <Icon name="edit" size={17} color={colors.muted} style={styles.rename} />
                   </Pressable>
                 </View>
 
-                {/* Wysyłka na serwer + znacznik stanu (na serwerze / zaimportowany do labu). */}
-                {(() => {
-                  const hash = c.sig || c.id;
-                  const st = sampleStatus[hash];
-                  const onSrv = !!(st?.onServer || st?.imported);
-                  // „Aktualizuj" tylko gdy treść sampla różni się od ostatnio wysłanej (nowy skan/nazwa…).
-                  const changed = uploadedSigs[hash] !== contentSig(c);
-                  return (
-                    <View style={styles.sampleRow}>
-                      {st?.imported ? (
-                        <Text style={[styles.sampleBadge, styles.sampleImported]}>✓ zaimportowany do labu{!changed ? " · aktualny" : ""}</Text>
-                      ) : st?.onServer ? (
-                        <Text style={[styles.sampleBadge, styles.sampleOnServer]}>☁ na serwerze{!changed ? " · aktualny" : ""}</Text>
-                      ) : (
-                        <Text style={styles.sampleDim}>nie wysłano</Text>
-                      )}
-                      {(!onSrv || changed) ? (
-                        <Pressable
-                          style={[styles.sampleBtn, uploading === c.id && styles.disabled]}
-                          disabled={uploading === c.id}
-                          onPress={() => void uploadOne(c)}
-                        >
-                          <Text style={styles.sampleBtnText}>
-                            {uploading === c.id ? "wysyłam…" : (onSrv ? "☁ Aktualizuj na serwerze" : "☁ Wyślij na serwer")}
-                          </Text>
-                        </Pressable>
-                      ) : null}
-                    </View>
-                  );
-                })()}
+                {/* GŁÓWNA AKCJA na górze — najczęściej używana: wczytaj WEJŚCIE na ekran skanu. */}
+                <Pressable style={styles.replayTop} onPress={() => onReplay(c)}>
+                  <Text style={styles.replayText}>
+                    <Icon name="download" size={14} color={colors.buttonText} /> Wczytaj do skanu
+                  </Text>
+                </Pressable>
 
                 {c.images.length > 0 ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbRow}>
@@ -355,40 +345,40 @@ export function CapturesView({
 
                 {/* Zwięzłe meta wejścia. */}
                 <Text style={styles.metaLine}>
-                  📷 {c.images.length} ·{" "}
-                  📍{" "}
+                  <Icon name="camera" size={12} color={colors.muted} /> {c.images.length} ·{" "}
+                  <Icon name="location" size={12} color={colors.muted} />{" "}
                   {c.location
                     ? `${c.location.lat.toFixed(4)}, ${c.location.lng.toFixed(4)} (${sourceLabel(c)})`
                     : sourceLabel(c)}
                 </Text>
-                {c.restaurantHint ? <Text style={styles.metaLine}>🏷️ {c.restaurantHint}</Text> : null}
-                {c.locationHint ? <Text style={styles.metaLine}>🌍 {c.locationHint}</Text> : null}
+                {c.restaurantHint ? (
+                  <Text style={styles.metaLine}><Icon name="tag" size={12} color={colors.muted} /> {c.restaurantHint}</Text>
+                ) : null}
+                {c.locationHint ? (
+                  <Text style={styles.metaLine}><Icon name="globe" size={12} color={colors.muted} /> {c.locationHint}</Text>
+                ) : null}
                 <Text style={styles.metaLine}>
-                  ⚙️ EXIF {c.useExifLocation ? "✓" : "✗"} · GPS telefonu {c.useDeviceLocation ? "✓" : "✗"}
+                  <Icon name="settings" size={12} color={colors.muted} /> EXIF{" "}
+                  <Icon name={c.useExifLocation ? "check" : "close"} size={12} color={c.useExifLocation ? "#2E7D32" : colors.error} />
+                  {" · "}GPS telefonu{" "}
+                  <Icon name={c.useDeviceLocation ? "check" : "close"} size={12} color={c.useDeviceLocation ? "#2E7D32" : colors.error} />
                 </Text>
 
                 {/* Hub uruchomień — przebiegi tego wejścia (najnowszy na górze), każdy do historii. */}
                 <View style={styles.runs}>
-                  <Text style={styles.runsTitle}>Uruchomienia ({runs.length})</Text>
-                  {runs.length === 0 ? (
+                  <Text style={styles.runsTitle}>Uruchomienia ({allRuns.length})</Text>
+                  {allRuns.length === 0 ? (
                     <Text style={styles.dim}>Jeszcze nie uruchomiono — „Wczytaj do skanu" i przetłumacz.</Text>
                   ) : (
                     runs
                       .slice()
                       .reverse()
                       .map((r, i) => {
-                        const scan = scanById.get(r.scanId);
-                        if (!scan) {
-                          return (
-                            <Text key={i} style={styles.runGone}>
-                              • {fmtAgo(r.at)} · wynik usunięty z historii
-                            </Text>
-                          );
-                        }
+                        const scan = scanById.get(r.scanId)!; // runs przefiltrowane do żywych → scan zawsze istnieje
                         return (
                           <Pressable key={i} style={styles.runRow} onPress={() => onOpenScan(scan)}>
                             <Text style={styles.runMain} numberOfLines={1}>
-                              🧪 {modelSummary(scan)} · {itemCount(scan)} dań
+                              <Icon name="flask" size={13} color={colors.accent} /> {modelSummary(scan)} · {itemCount(scan)} dań
                               {costOf(scan) ? ` · ${costOf(scan)}` : ""} · {fmtAgo(r.at)}
                             </Text>
                             <Text style={styles.runChevron}>›</Text>
@@ -398,21 +388,54 @@ export function CapturesView({
                   )}
                 </View>
 
-                <View style={styles.actions}>
-                  <Pressable style={styles.replay} onPress={() => onReplay(c)}>
-                    <Text style={styles.replayText}>📥 Wczytaj do skanu</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.iconAction, !!exporting && styles.disabled]}
-                    disabled={!!exporting}
-                    onPress={() => doExport(c.id, [c.id])}
-                  >
-                    <Text style={styles.iconActionText}>{exporting === c.id ? "⏳" : "⬆︎"}</Text>
-                  </Pressable>
-                  <Pressable style={styles.iconAction} onPress={() => confirmDelete(c)}>
-                    <Text style={styles.iconActionText}>🗑</Text>
-                  </Pressable>
-                </View>
+                {/* STREFA POBOCZNA (dół): stan + eksport/kasowanie w jednym rzędzie; synchronizacja jako cichy guzik-obrys. */}
+                {(() => {
+                  const hash = c.sig || c.id;
+                  const st = sampleStatus[hash];
+                  const onSrv = !!(st?.onServer || st?.imported);
+                  // „Aktualizuj" tylko gdy treść sampla różni się od ostatnio wysłanej (nowy skan/nazwa…).
+                  const changed = uploadedSigs[hash] !== contentSig(c);
+                  return (
+                    <View style={styles.secondary}>
+                      <View style={styles.footerRow}>
+                        {st?.imported ? (
+                          <Text style={[styles.sampleBadge, styles.sampleImported]} numberOfLines={1}>
+                            <Icon name="check" size={11} color="#2E7D32" /> zaimportowany{!changed ? " · aktualny" : ""}
+                          </Text>
+                        ) : st?.onServer ? (
+                          <Text style={[styles.sampleBadge, styles.sampleOnServer]} numberOfLines={1}>
+                            <Icon name="cloud" size={11} color="#1A4E8A" /> na serwerze{!changed ? " · aktualny" : ""}
+                          </Text>
+                        ) : (
+                          <Text style={styles.sampleDim}>nie wysłano</Text>
+                        )}
+                        <View style={styles.footerIcons}>
+                          <Pressable hitSlop={10} disabled={!!exporting} onPress={() => doExport(c.id, [c.id])}>
+                            <Icon name={exporting === c.id ? "hourglass" : "upload"} size={20} color={exporting ? colors.muted : colors.accent} />
+                          </Pressable>
+                          <Pressable hitSlop={10} onPress={() => confirmDelete(c)}>
+                            <Icon name="delete" size={20} color={colors.error} />
+                          </Pressable>
+                        </View>
+                      </View>
+                      {(!onSrv || changed) ? (
+                        <Pressable
+                          style={[styles.syncGhost, uploading === c.id && styles.disabled]}
+                          disabled={uploading === c.id}
+                          onPress={() => void uploadOne(c)}
+                        >
+                          <Text style={styles.syncGhostText}>
+                            {uploading === c.id ? (
+                              "wysyłam…"
+                            ) : (
+                              <><Icon name="cloud" size={12} color={colors.accent} /> {onSrv ? "Aktualizuj na serwerze" : "Wyślij na serwer"}</>
+                            )}
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  );
+                })()}
               </View>
             );
           })
@@ -458,13 +481,10 @@ const styles = StyleSheet.create({
   originServer: { fontSize: 11, color: "#5aa9e6", fontWeight: "700" }, // ☁ z serwera
   originApp: { fontSize: 11, color: "#7fd6a0", fontWeight: "700" }, // 📱 własny
   rename: { fontSize: 16, paddingLeft: 10 },
-  sampleRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" },
-  sampleBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: "hidden" },
+  sampleBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: "hidden", flexShrink: 1 },
   sampleOnServer: { backgroundColor: "#DDEBFF", color: "#1A4E8A" },
   sampleImported: { backgroundColor: "#D7EFD7", color: "#2E7D32" },
   sampleDim: { fontSize: 11, color: colors.muted },
-  sampleBtn: { backgroundColor: colors.accent, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12 },
-  sampleBtnText: { color: colors.buttonText, fontWeight: "800", fontSize: 12 },
   thumbRow: { flexDirection: "row", marginTop: 10 },
   thumb: { width: 64, height: 80, borderRadius: 8, marginRight: 8, backgroundColor: colors.badgeBg },
   metaLine: { fontSize: 12, color: colors.text, marginTop: 4 },
@@ -483,18 +503,12 @@ const styles = StyleSheet.create({
   },
   runMain: { flex: 1, fontSize: 13, color: colors.text, fontWeight: "600" },
   runChevron: { fontSize: 18, color: colors.muted, paddingLeft: 8 },
-  runGone: { fontSize: 12, color: colors.muted, fontStyle: "italic", marginTop: 4 },
-  actions: { flexDirection: "row", gap: 10, marginTop: 12, alignItems: "center" },
-  replay: { flex: 1, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
+  replayTop: { backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 13, alignItems: "center", marginTop: 12 },
   replayText: { color: colors.buttonText, fontWeight: "800", fontSize: 14 },
+  secondary: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.badgeBg, gap: 8 },
+  footerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  footerIcons: { flexDirection: "row", alignItems: "center", gap: 18 },
+  syncGhost: { borderWidth: 1, borderColor: colors.accent, borderRadius: 9, paddingVertical: 9, alignItems: "center", backgroundColor: "transparent" },
+  syncGhostText: { color: colors.accent, fontWeight: "700", fontSize: 13 },
   disabled: { opacity: 0.4 },
-  iconAction: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: colors.badgeBg,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconActionText: { fontSize: 16 },
 });
