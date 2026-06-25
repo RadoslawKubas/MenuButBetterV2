@@ -772,8 +772,8 @@ export default function App() {
       setPhotoProg(null); // pipeline (z fotkami) skończony → znika pasek „Pobieram zdjęcia…"
       setStatus("done"); // pipeline gotowy → akcje mutujące odblokowane
       if (scanIdRef.current) {
-        void updateScanMenu(scanIdRef.current, finalMenu);
-        void addScanUsage(scanIdRef.current, done.usage); // koszt całego skanu (struktura+enrich+zdjęcia) raz
+        await updateScanMenu(scanIdRef.current, finalMenu); // serializowane w storage → koszt poniżej NIE nadpisze menu ze zdjęciami
+        await addScanUsage(scanIdRef.current, done.usage); // koszt całego skanu (struktura+enrich+zdjęcia) raz
         if (appCfg.autoDescriptions) void fillDescriptions(finalMenu, scanIdRef.current, opts.targetLang, setMenu);
       }
       setScans(await listScans());
