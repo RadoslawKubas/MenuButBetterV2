@@ -26,6 +26,9 @@ export interface RuntimeConfig {
   /** ŻYWOTNOŚĆ (TTL, dni) per rodzaj cache — nadpisuje domyślne TTL_DAYS. Stosowane przy ZAPISIE (nowe/odświeżane
    *  wpisy); brak/0/nie-liczba = TTL domyślny rodzaju. */
   cacheTtl?: Record<string, number>;
+  /** Sufit WSPÓŁBIEŻNOŚCI per dostawca upstream (anti-429 przy skali). Klucz = Provider ("claude","serper",
+   *  "google_places"…). Nadpisuje domyślny cap w apiLog. brak/0/nie-liczba = domyślny. Czytane dynamicznie. */
+  providerLimits?: Record<string, number>;
   /** Zachowania APKI (dawne „Koszty/Limity" przeniesione na serwer; apka czyta przez /app-config). */
   app?: {
     /** Długie opisy dań generowane OD RAZU po skanie (true) czy dopiero na kliknięcie usera (false=domyślnie). */

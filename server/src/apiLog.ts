@@ -1,5 +1,6 @@
 // Diagnostyka: lekki, w pamięci log wywołań ZEWNĘTRZNYCH API (per provider, ring buffer).
 import { logEvent, reqContext } from "./db.ts";
+import { getRuntimeConfig } from "./runtimeConfig.ts";
 
 // Akumulator zużycia API PER-REQUEST (ALS) — żeby na końcu requestu zalogować nie-AI providerów
 // (Serper/Places/Wiki/Openverse…) jako osobne zdarzenia (inaczej ich koszt umyka ze statystyk prod).
@@ -127,17 +128,80 @@ export function recordUsage(provider: Provider, inputTokens: number, outputToken
   }
 }
 
-/** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude). Re-rzuca błąd. */
+// --- Limitery WSPÓŁBIEŻNOŚCI per dostawca (anti-429 przy skali) -----------------------------
+// Globalny (NA PROCES) sufit „ile naraz w locie" per upstream. Nadmiar CZEKA w kolejce (backpressure) zamiast
+// strzelać wszystkim naraz i obrywać 429. Cap czytany DYNAMICZNIE (config LABu > domyślny) → zmiana z LABu działa
+// na żywo, bez redeployu. Komplementarne z single-flight (ono tnie duplikaty, to wygładza resztę). Per PROCES:
+// przy 1 instancji Railway = cały app; przy skali poziomej dziel budżet przez liczbę instancji. Wikimedia ma
+// własny limiter w dishPhotos.ts (nie dublujemy). „app"/„other" bez limitu (ruch wewnętrzny / nieznane).
+interface ProviderCap { max: number; gap: number }
+const DEFAULT_CAPS: Partial<Record<Provider, ProviderCap>> = {
+  claude: { max: 15, gap: 0 },
+  openai: { max: 15, gap: 0 },
+  google: { max: 10, gap: 0 },
+  google_places: { max: 10, gap: 50 },
+  google_places_photo: { max: 12, gap: 0 },
+  google_cse: { max: 8, gap: 100 },
+  tripadvisor: { max: 6, gap: 100 },
+  serper: { max: 10, gap: 50 },
+  serpapi: { max: 6, gap: 100 },
+  openverse: { max: 4, gap: 100 },
+};
+function capFor(provider: Provider): ProviderCap {
+  const def = DEFAULT_CAPS[provider]!; // wołane tylko dla providerów z domyślnym capem
+  const ov = getRuntimeConfig().providerLimits?.[provider];
+  const max = typeof ov === "number" && Number.isFinite(ov) && ov > 0 ? Math.floor(ov) : def.max;
+  return { max, gap: def.gap };
+}
+interface Limiter { run<T>(fn: () => Promise<T>): Promise<T> }
+function makeProviderLimiter(provider: Provider): Limiter {
+  let active = 0;
+  let nextSlot = 0;
+  const queue: (() => void)[] = [];
+  const pump = (): void => {
+    const cap = capFor(provider);
+    if (active >= cap.max || queue.length === 0) return;
+    const now = Date.now();
+    const wait = Math.max(0, nextSlot - now);
+    nextSlot = Math.max(now, nextSlot) + cap.gap;
+    active++;
+    const job = queue.shift()!;
+    setTimeout(job, wait);
+  };
+  return {
+    run<T>(fn: () => Promise<T>): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        queue.push(() => { fn().then(resolve, reject).finally(() => { active--; pump(); }); });
+        pump();
+      });
+    },
+  };
+}
+const limiters = new Map<Provider, Limiter>();
+/** Owija `fn` limiterem WSPÓŁBIEŻNOŚCI dostawcy (kolejkuje nadmiar). Bez domyślnego capa (app/other/wikimedia)
+ *  przepuszcza bez zmian — zero narzutu. */
+export function withProviderLimit<T>(provider: Provider, fn: () => Promise<T>): Promise<T> {
+  if (!DEFAULT_CAPS[provider]) return fn();
+  let lim = limiters.get(provider);
+  if (!lim) { lim = makeProviderLimiter(provider); limiters.set(provider, lim); }
+  return lim.run(fn);
+}
+
+/** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude), przepuszczając ją przez limiter
+ *  współbieżności dostawcy (kolejkuje nadmiar). Czas mierzony PO wyjściu z kolejki (sam call, bez czekania).
+ *  Re-rzuca błąd. */
 export async function track<T>(provider: Provider, op: string, fn: () => Promise<T>): Promise<T> {
-  const t0 = Date.now();
-  try {
-    const r = await fn();
-    record(provider, op, true, Date.now() - t0);
-    return r;
-  } catch (e) {
-    record(provider, op, false, Date.now() - t0, (e as Error)?.message ?? String(e));
-    throw e;
-  }
+  return withProviderLimit(provider, async () => {
+    const t0 = Date.now();
+    try {
+      const r = await fn();
+      record(provider, op, true, Date.now() - t0);
+      return r;
+    } catch (e) {
+      record(provider, op, false, Date.now() - t0, (e as Error)?.message ?? String(e));
+      throw e;
+    }
+  });
 }
 
 function detect(u: string): { provider: Provider; op: string } {
@@ -177,28 +241,31 @@ const FETCH_TIMEOUT_MS = 10000;
 export async function trackedFetch(input: string | URL, init?: RequestInit, op?: string): Promise<Response> {
   const urlStr = typeof input === "string" ? input : input.toString();
   const d = detect(urlStr);
-  const t0 = Date.now();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(input, { ...init, signal: init?.signal ?? ctrl.signal });
-    let detail: string | undefined;
-    if (!res.ok) {
-      // Dołóż fragment treści odpowiedzi — pozwala sklasyfikować błąd (quota/klucz/itp.).
-      const body = await res.clone().text().catch(() => "");
-      detail = `HTTP ${res.status}${body ? " " + body.replace(/\s+/g, " ").slice(0, 180) : ""}`;
+  // Przez limiter współbieżności dostawcy (kolejkuje nadmiar). t0/timeout liczone PO wyjściu z kolejki.
+  return withProviderLimit(d.provider, async () => {
+    const t0 = Date.now();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(input, { ...init, signal: init?.signal ?? ctrl.signal });
+      let detail: string | undefined;
+      if (!res.ok) {
+        // Dołóż fragment treści odpowiedzi — pozwala sklasyfikować błąd (quota/klucz/itp.).
+        const body = await res.clone().text().catch(() => "");
+        detail = `HTTP ${res.status}${body ? " " + body.replace(/\s+/g, " ").slice(0, 180) : ""}`;
+      }
+      record(d.provider, op ?? d.op, res.ok, Date.now() - t0, detail);
+      // Ruch: wysłane = ciało żądania; odebrane = z nagłówka Content-Length (best-effort, gdy jest).
+      recordBytes(d.provider, bodyBytes(init?.body), Number(res.headers.get("content-length")) || 0);
+      return res;
+    } catch (e) {
+      const msg = ctrl.signal.aborted ? `timeout ${FETCH_TIMEOUT_MS}ms` : (e as Error)?.message ?? String(e);
+      record(d.provider, op ?? d.op, false, Date.now() - t0, msg);
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
-    record(d.provider, op ?? d.op, res.ok, Date.now() - t0, detail);
-    // Ruch: wysłane = ciało żądania; odebrane = z nagłówka Content-Length (best-effort, gdy jest).
-    recordBytes(d.provider, bodyBytes(init?.body), Number(res.headers.get("content-length")) || 0);
-    return res;
-  } catch (e) {
-    const msg = ctrl.signal.aborted ? `timeout ${FETCH_TIMEOUT_MS}ms` : (e as Error)?.message ?? String(e);
-    record(d.provider, op ?? d.op, false, Date.now() - t0, msg);
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+  });
 }
 
 export interface ProviderReport {
