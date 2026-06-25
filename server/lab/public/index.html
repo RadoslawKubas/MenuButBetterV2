@@ -1395,7 +1395,7 @@ function toggleCacheRow(i){
   el.innerHTML=inner;
 }
 // ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
-let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={}, CONFIG_TTL_DEFAULTS={};
+let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={}, CONFIG_TTL_DEFAULTS={}, CONFIG_PL_DEFAULTS={};
 const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań'],['venuePool','Szeroka pula z lokalu → dania (vision)']];
 const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper web (generyk typu dania + kuchnia)'],['photoSerperPlain','Wyszukiwanie zdjęć — Serper web PROSTE (sam termin, bez kuchni) — EKSPERYMENT'],['photoSerperSite','Wyszukiwanie zdjęć — Serper z lokalu: strona www (site:domena)'],['photoSerperPortal','Wyszukiwanie zdjęć — Serper z lokalu: portale/social'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA, vision)'],['photoVenuePool','Zdjęcia z lokalu — SZEROKA PULA (Serper site:+portale + Google + TA → dania, 1× vision). Zamiast/obok kroków „z lokalu" powyżej. Model: „Szeroka pula"'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
 async function loadConfig(btn){
@@ -1405,12 +1405,12 @@ async function loadConfig(btn){
     if(!res.ok) throw new Error('serwer LAB zwrócił '+res.status+' dla /api/runtime-config — ZRESTARTUJ lab (Ctrl+C → npm run lab); endpoint jest nowy');
     const r=await res.json();
     if(r.error) throw new Error(r.error);
-    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; CONFIG_DEFAULTS=r.defaults||{}; CONFIG_TTL_DEFAULTS=r.ttlDefaults||{}; renderConfig();
+    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; CONFIG_DEFAULTS=r.defaults||{}; CONFIG_TTL_DEFAULTS=r.ttlDefaults||{}; CONFIG_PL_DEFAULTS=r.providerLimitDefaults||{}; renderConfig();
   }catch(e){ document.getElementById('configBox').textContent='błąd: '+e.message; }
   finally{ if(btn) btn.disabled=false; }
 }
 function renderConfig(){
-  const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{}, cr=CONFIG.cacheRead||{}, ct=CONFIG.cacheTtl||{};
+  const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{}, cr=CONFIG.cacheRead||{}, ct=CONFIG.cacheTtl||{}, pl=CONFIG.providerLimits||{};
   const opts=(step,sel)=>{
     const defId=CONFIG_DEFAULTS[step]; const defMd=CONFIG_MODELS.find(md=>md.id===defId);
     const defLabel=defMd?defMd.label:(defId||'?');
@@ -1420,11 +1420,13 @@ function renderConfig(){
   const toggleRows=CFG_TOGGLES.map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgS-${k}" ${s[k]!==false?'checked':''}><span>${esc(lab)}</span></label>`).join('');
   const cacheRows=Object.entries(CACHE_LABELS).map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgC-${k}" ${cr[k]!==false?'checked':''}><span>${esc(lab)} <span class="mut small">(${esc(k)})</span></span></label>`).join('');
   const ttlRows=Object.entries(CACHE_LABELS).map(([k,lab])=>{const def=CONFIG_TTL_DEFAULTS[k]; const v=ct[k]; return `<div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span style="width:280px">${esc(lab)} <span class="mut small">(${esc(k)})</span></span><input type="number" id="cfgT-${k}" min="0" step="1" value="${v?Number(v):''}" placeholder="${def!=null?def:''}" style="width:90px; padding:3px"><span class="mut small">dni${def!=null?` · domyślnie ${def}`:''}</span></div>`;}).join('');
+  const plRows=Object.entries(CONFIG_PL_DEFAULTS).map(([k,def])=>{const v=pl[k]; return `<div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span style="width:280px">${esc(k)}</span><input type="number" id="cfgPL-${esc(k)}" min="1" step="1" value="${v?Number(v):''}" placeholder="${def!=null?def:''}" style="width:90px; padding:3px"><span class="mut small">naraz · domyślnie ${def}</span></div>`;}).join('');
   document.getElementById('configBox').innerHTML=`
     <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny serwera)</span></h4>${modelRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Cache — odczyt <span class="mut small">(odznacz = ZAWSZE miss → regeneruje, ale dalej zapisuje)</span></h4>${cacheRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Cache — żywotność (TTL, dni) <span class="mut small">(puste = domyślny rodzaju; dotyczy NOWYCH/odświeżanych wpisów)</span></h4>${ttlRows}</div>
+    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Limity współbieżności per dostawca <span class="mut small">(anti-429 przy skali; puste = domyślny; ile naraz w locie, nadmiar czeka w kolejce; działa na żywo)</span></h4>${plRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Zachowania apki <span class="mut small">(apka czyta na starcie)</span></h4>
       <label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgA-autoDescriptions" ${a.autoDescriptions===true?'checked':''}><span>Długie opisy dań OD RAZU po skanie (odznacz = dopiero na kliknięcie usera)</span></label>
       <div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span>Limit dań do auto-dociągania zdjęć</span><input type="number" id="cfgA-autoLimit" min="0" step="1" value="${Number(a.autoLimit)||0}" style="width:90px; padding:3px"><span class="mut small">0 = wszystkie (domyślnie)</span></div>
@@ -1438,8 +1440,10 @@ async function saveConfig(btn){
   for(const k of Object.keys(CACHE_LABELS)){ const el=document.getElementById('cfgC-'+k); if(el) cacheRead[k]=el.checked; }
   const cacheTtl={};
   for(const k of Object.keys(CACHE_LABELS)){ const el=document.getElementById('cfgT-'+k); if(el){ const n=parseInt(el.value,10); if(Number.isFinite(n)&&n>0) cacheTtl[k]=n; } }
+  const providerLimits={};
+  for(const k of Object.keys(CONFIG_PL_DEFAULTS)){ const el=document.getElementById('cfgPL-'+k); if(el){ const n=parseInt(el.value,10); if(Number.isFinite(n)&&n>0) providerLimits[k]=n; } }
   const app={ autoDescriptions: document.getElementById('cfgA-autoDescriptions').checked, autoLimit: parseInt(document.getElementById('cfgA-autoLimit').value,10)||0 };
-  const config={models,steps,cacheRead,cacheTtl,app}; const info=document.getElementById('configInfo');
+  const config={models,steps,cacheRead,cacheTtl,providerLimits,app}; const info=document.getElementById('configInfo');
   if(btn) btn.disabled=true; info.textContent='zapisuję…'; info.style.color='';
   try{
     const res=await fetch('/api/runtime-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config})});

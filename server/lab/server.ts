@@ -33,7 +33,7 @@ import { openaiVisionJson } from "../src/openaiClient.ts";
 import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../src/models.ts";
 import { SERVER_DEFAULT_MODELS } from "../src/runtimeConfig.ts";
 import { OTHER_RATES, aiPrice, otherRate as priceOtherRate, apiCallCost, type PriceOverrides } from "../src/pricing.ts";
-import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
+import { snapshot, cacheHitsSnapshot, modelSnapshot, providerLimitDefaults } from "../src/apiLog.ts";
 import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, TTL_DAYS, type CacheKind } from "../src/cache.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1897,7 +1897,7 @@ app.get("/api/runtime-config", async (c) => {
     const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider }));
     // defaults: domyślne SERWERA per krok (gdy config nie ustawia) — lab pokazuje je zamiast „z apki".
     // ttlDefaults: domyślne TTL (dni) per rodzaj cache — lab pokazuje jako placeholder przy nadpisaniach.
-    return c.json({ config: j.config ?? {}, models, defaults: SERVER_DEFAULT_MODELS, ttlDefaults: TTL_DAYS });
+    return c.json({ config: j.config ?? {}, models, defaults: SERVER_DEFAULT_MODELS, ttlDefaults: TTL_DAYS, providerLimitDefaults: providerLimitDefaults() });
   } catch (e) {
     return c.json({ error: (e as Error).message, config: {}, models: [], defaults: {}, ttlDefaults: {} }, 502);
   }

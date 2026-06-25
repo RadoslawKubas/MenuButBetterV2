@@ -187,6 +187,13 @@ export function withProviderLimit<T>(provider: Provider, fn: () => Promise<T>): 
   return lim.run(fn);
 }
 
+/** Domyślne capy współbieżności per dostawca (dla LABu — lista limitowanych providerów + placeholdery). */
+export function providerLimitDefaults(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [p, cap] of Object.entries(DEFAULT_CAPS)) if (cap) out[p] = cap.max;
+  return out;
+}
+
 /** Mierzy + loguje dowolną async operację (np. wywołanie SDK Claude), przepuszczając ją przez limiter
  *  współbieżności dostawcy (kolejkuje nadmiar). Czas mierzony PO wyjściu z kolejki (sam call, bez czekania).
  *  Re-rzuca błąd. */
