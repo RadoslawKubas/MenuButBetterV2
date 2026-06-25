@@ -844,7 +844,7 @@ export default function App() {
   async function replayCapture(c: ScanCapture) {
     const imgs: PreparedImage[] = [];
     for (const im of c.images) {
-      const base64 = await captureImageBase64(im);
+      const base64 = await captureImageBase64(im, true); // replay: crop DO MODELU jak w żywym skanie z aparatu (sampel = pełny)
       if (!base64) continue;
       imgs.push({
         uri: resolveCaptureUri(im.path) ?? im.path,

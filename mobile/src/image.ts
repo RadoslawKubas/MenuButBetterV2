@@ -108,9 +108,9 @@ async function encodeAt(uri: string, dims: { width?: number | null; height?: num
 }
 
 /** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU (scan) → base64. */
-export async function downscaleForModel(uri: string): Promise<string | null> {
+export async function downscaleForModel(uri: string, crop = false): Promise<string | null> {
   try {
-    const r = await encodeAt(uri, undefined, scanSpec);
+    const r = await encodeAt(uri, undefined, scanSpec, crop); // crop=true przy replayu → ten sam kadr DO MODELU co świeży skan z aparatu
     return r.base64 || null;
   } catch {
     return null;

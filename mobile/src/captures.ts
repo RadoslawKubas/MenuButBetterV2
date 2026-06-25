@@ -301,11 +301,11 @@ export function resolveCaptureUri(path: string): string | undefined {
 
 /** Odczytuje zapisane zdjęcie do ponownego wysłania (replay). Sampel jest HI-RES → pomniejszamy do
  *  rozmiaru modelu (jak przy świeżym skanie), żeby payload był taki sam. Fallback: surowy base64. */
-export async function captureImageBase64(im: CaptureImage): Promise<string | null> {
+export async function captureImageBase64(im: CaptureImage, crop = false): Promise<string | null> {
   try {
     const f = fileFor(im.path);
     if (!f?.exists) return null;
-    return (await downscaleForModel(f.uri)) ?? (await f.base64());
+    return (await downscaleForModel(f.uri, crop)) ?? (await f.base64()); // crop tylko przy replayu (eksport/upload = pełne)
   } catch {
     return null;
   }
