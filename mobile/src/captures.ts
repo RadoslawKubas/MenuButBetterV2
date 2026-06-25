@@ -17,6 +17,16 @@ import { DEFAULT_MODELS, type GeoPoint, type LocationSource, type Menu, type Mod
 const DIR = new Directory(Paths.document, "captures");
 const KEY = "mbb.captures.v1";
 
+// Mutacje listy migawek = read-modify-write na JEDNEJ tablicy AsyncStorage (jak w storage.ts). Bez serializacji
+// równoległe zapisy (saveCapture + addCaptureRun po skanie; albo importCapturesFromZip z LAB trwający przez wiele
+// await, gdy user robi nową migawkę) nadpisują się → ginie migawka albo przebieg. Kolejka — po jednym, atomowo.
+let writeChain: Promise<unknown> = Promise.resolve();
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.then(() => {}, () => {});
+  return run;
+}
+
 function ensureDir(): void {
   if (!DIR.exists) DIR.create({ intermediates: true, idempotent: true });
 }
@@ -185,75 +195,83 @@ export async function saveCapture(input: {
   useDeviceLocation: boolean;
 }): Promise<ScanCapture> {
   const sig = captureSig(input);
-  const all = await listCaptures();
-  // TE SAME ZDJĘCIA (+ hint/miasto) → nie duplikuj, zwróć istniejącą migawkę (caller podepnie nowy scanId,
-  // więc wskazuje najświeższy wynik). Dzięki temu KOLEJNE PRÓBY tego samego menu (np. po nieudanym odczycie,
-  // gdy GPS dryfuje bo idziesz) NIE tworzą nowych migawek — trafiają w tę samą, z PIERWSZĄ (najlepszą) pozycją.
-  const dup = all.find((c) => c.sig && c.sig === sig);
-  if (dup) return dup;
+  return serialize(async () => {
+    const all = await listCaptures();
+    // TE SAME ZDJĘCIA (+ hint/miasto) → nie duplikuj, zwróć istniejącą migawkę (caller podepnie nowy scanId,
+    // więc wskazuje najświeższy wynik). Dzięki temu KOLEJNE PRÓBY tego samego menu (np. po nieudanym odczycie,
+    // gdy GPS dryfuje bo idziesz) NIE tworzą nowych migawek — trafiają w tę samą, z PIERWSZĄ (najlepszą) pozycją.
+    const dup = all.find((c) => c.sig && c.sig === sig);
+    if (dup) return dup;
 
-  const id = newId();
-  const images: CaptureImage[] = [];
-  input.images.forEach((img, i) => {
-    try {
-      images.push(persistImage(id, i, img));
-    } catch {
-      // nie udało się skopiować pojedynczego pliku — pomiń, reszta migawki i tak się przyda
-    }
+    const id = newId();
+    const images: CaptureImage[] = [];
+    input.images.forEach((img, i) => {
+      try {
+        images.push(persistImage(id, i, img));
+      } catch {
+        // nie udało się skopiować pojedynczego pliku — pomiń, reszta migawki i tak się przyda
+      }
+    });
+    const capture: ScanCapture = {
+      id,
+      createdAt: Date.now(),
+      restaurantHint: input.restaurantHint,
+      locationHint: input.locationHint,
+      location: input.location,
+      locationSource: input.locationSource,
+      useExifLocation: input.useExifLocation,
+      useDeviceLocation: input.useDeviceLocation,
+      images,
+      sig,
+      origin: "app", // własny skan w aplikacji
+    };
+    all.unshift(capture); // najnowsze na górze
+    await AsyncStorage.setItem(KEY, JSON.stringify(all));
+    return capture;
   });
-  const capture: ScanCapture = {
-    id,
-    createdAt: Date.now(),
-    restaurantHint: input.restaurantHint,
-    locationHint: input.locationHint,
-    location: input.location,
-    locationSource: input.locationSource,
-    useExifLocation: input.useExifLocation,
-    useDeviceLocation: input.useDeviceLocation,
-    images,
-    sig,
-    origin: "app", // własny skan w aplikacji
-  };
-  all.unshift(capture); // najnowsze na górze
-  await AsyncStorage.setItem(KEY, JSON.stringify(all));
-  return capture;
 }
 
 /** Dopisuje PRZEBIEG (nowy skan z tego wejścia) do migawki — hub porównań. Najnowszy = scanId. */
 export async function addCaptureRun(id: string, scanId: string): Promise<void> {
-  const all = await listCaptures();
-  const c = all.find((c) => c.id === id);
-  if (!c) return;
-  if (!c.runs) c.runs = c.scanId ? [{ scanId: c.scanId, at: c.createdAt }] : [];
-  // Nie dubluj, jeśli ten sam skan jest już ostatni (np. podwójny zapis).
-  if (c.runs[c.runs.length - 1]?.scanId !== scanId) c.runs.push({ scanId, at: Date.now() });
-  c.scanId = scanId; // „ostatni" — do eksportu i back-compat
-  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  return serialize(async () => {
+    const all = await listCaptures();
+    const c = all.find((c) => c.id === id);
+    if (!c) return;
+    if (!c.runs) c.runs = c.scanId ? [{ scanId: c.scanId, at: c.createdAt }] : [];
+    // Nie dubluj, jeśli ten sam skan jest już ostatni (np. podwójny zapis).
+    if (c.runs[c.runs.length - 1]?.scanId !== scanId) c.runs.push({ scanId, at: Date.now() });
+    c.scanId = scanId; // „ostatni" — do eksportu i back-compat
+    await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  });
 }
 
 /** Nadaje migawce nazwę (pusta = usuwa nazwę). */
 export async function renameCapture(id: string, name: string): Promise<void> {
-  const all = await listCaptures();
-  const c = all.find((c) => c.id === id);
-  if (!c) return;
-  c.name = name.trim() || undefined;
-  await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  return serialize(async () => {
+    const all = await listCaptures();
+    const c = all.find((c) => c.id === id);
+    if (!c) return;
+    c.name = name.trim() || undefined;
+    await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  });
 }
 
 /** Kasuje WSZYSTKIE migawki + ich pliki zdjęć (porządki). */
 export async function deleteAllCaptures(): Promise<void> {
-  const all = await listCaptures();
-  for (const cap of all) {
-    for (const im of cap.images) {
-      try {
-        const f = fileFor(im.path);
-        if (f?.exists) f.delete();
-      } catch {
-        /* plik mógł już zniknąć */
+  return serialize(async () => {
+    const all = await listCaptures();
+    for (const cap of all) {
+      for (const im of cap.images) {
+        try {
+          const f = fileFor(im.path);
+          if (f?.exists) f.delete();
+        } catch {
+          /* plik mógł już zniknąć */
+        }
       }
     }
-  }
-  await AsyncStorage.setItem(KEY, JSON.stringify([]));
+    await AsyncStorage.setItem(KEY, JSON.stringify([]));
+  });
 }
 
 /** Suma rozmiaru zdjęć migawek na dysku (bajty) — do informacji o zajętym miejscu. */
@@ -273,19 +291,21 @@ export function capturesDiskBytes(captures: ScanCapture[]): number {
 }
 
 export async function deleteCapture(id: string): Promise<void> {
-  const all = await listCaptures();
-  const cap = all.find((c) => c.id === id);
-  if (cap) {
-    for (const im of cap.images) {
-      try {
-        const f = fileFor(im.path);
-        if (f?.exists) f.delete();
-      } catch {
-        // plik mógł już zniknąć — ignoruj
+  return serialize(async () => {
+    const all = await listCaptures();
+    const cap = all.find((c) => c.id === id);
+    if (cap) {
+      for (const im of cap.images) {
+        try {
+          const f = fileFor(im.path);
+          if (f?.exists) f.delete();
+        } catch {
+          // plik mógł już zniknąć — ignoruj
+        }
       }
     }
-  }
-  await AsyncStorage.setItem(KEY, JSON.stringify(all.filter((c) => c.id !== id)));
+    await AsyncStorage.setItem(KEY, JSON.stringify(all.filter((c) => c.id !== id)));
+  });
 }
 
 // Składa obiekt File z zapisanej ścieżki względnej ("captures/<plik>").
@@ -442,6 +462,7 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
   const metaFile = zip.file("metadata.json");
   if (!metaFile) throw new Error("ZIP bez metadata.json");
   const caps = (JSON.parse(await metaFile.async("string")).captures ?? []) as CaptureExportEntry[];
+  return serialize(async () => {
   const all = await listCaptures();
   let added = 0, updated = 0;
   for (const entry of caps) {
@@ -514,4 +535,5 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
   }
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
   return { added, updated };
+  });
 }
