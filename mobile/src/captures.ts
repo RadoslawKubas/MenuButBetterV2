@@ -90,18 +90,12 @@ function captureSig(input: {
   useExifLocation: boolean;
   useDeviceLocation: boolean;
 }): string {
+  // TOŻSAMOŚĆ MIGAWKI = SAME ZDJĘCIA. Hint lokalu, miasto, GPS, źródło i przełączniki NIE wchodzą w klucz:
+  // hint/miasto nie są już ręcznie wpisywane (usunęliśmy „Opcje skanu" — robisz zdjęcia i skanujesz), GPS dryfuje
+  // przy spacerze, a auto-hint z peeka bywa zmienny → każdy z nich tworzyłby nową migawkę tej samej karty.
+  // Te same zdjęcia = ta sama migawka; pozycję/hint/miasto migawka i tak STORE'uje w danych (z PIERWSZEJ próby).
   const imgs = input.images.map((im) => imgFingerprint(im.base64 ?? "")).join(",");
-  const loc = input.location ? `${input.location.lat.toFixed(5)},${input.location.lng.toFixed(5)}` : "";
-  return [
-    input.images.length,
-    imgs,
-    input.restaurantHint ?? "",
-    input.locationHint ?? "",
-    loc,
-    input.locationSource ?? "",
-    input.useExifLocation ? 1 : 0,
-    input.useDeviceLocation ? 1 : 0,
-  ].join("|");
+  return [input.images.length, imgs].join("|");
 }
 
 export async function listCaptures(): Promise<ScanCapture[]> {
@@ -118,21 +112,27 @@ export async function listCaptures(): Promise<ScanCapture[]> {
 // SAMPEL = ORYGINAŁ VERBATIM z telefonu (hiResUri, kopiowany 1:1 bez przekodowania) — PEŁNA jakość, jak zapis
 // do galerii. To NIE jest pomniejszona wersja do modelu (ta idzie osobno, dociela ją telefon). Dzięki temu
 // md5(pliku)=srcHash, więc replay liczy ten sam klucz cache, a do modelu replay pomniejsza ten plik na nowo.
+function tryCopyFile(srcUri: string, dest: File): boolean {
+  try { new File(srcUri).copy(dest); return true; } catch { return false; }
+}
 function persistImage(captureId: string, idx: number, img: PreparedImage): CaptureImage {
   ensureDir();
   const name = `${captureId}-${idx}.jpg`;
   const dest = new File(DIR, name);
   if (dest.exists) dest.delete();
-  dest.create();
-  if (img.hiResUri) {
-    // SAMPEL = ORYGINAŁ VERBATIM (kopiowany 1:1, bez przekodowania) → md5(pliku)=srcHash, więc replay liczy
-    // ten sam klucz cache. Model dostaje osobno pomniejszone; replay pomniejsza ten plik (captureImageBase64).
-    new File(img.hiResUri).copy(dest);
+  // SAMPEL = najlepiej ORYGINAŁ VERBATIM (hiResUri, 1:1 → md5(pliku)=srcHash, replay trafia w cache).
+  // UWAGA: `File.copy()` SAM tworzy plik docelowy — NIE wolno robić `dest.create()` przed copy, bo kopiowanie
+  // na istniejący plik rzuca („destination exists") → hi-res nigdy się nie zapisywał, a `saveCapture` cicho
+  // połykał błąd (migawka bez zdjęcia). Gdy hi-res nie wyjdzie (plik zniknął / EXIF) — NIE GUB zdjęcia:
+  // zapisz pomniejszoną wersję DO MODELU (base64, zawsze w pamięci; `write` wymaga utworzonego pliku).
+  if (img.hiResUri && tryCopyFile(img.hiResUri, dest)) {
+    /* hi-res OK */
   } else if (img.base64) {
+    if (img.hiResUri) console.warn(`[capture] hi-res niedostępny (${name}) → zapisuję pomniejszoną wersję z pamięci`);
+    if (!dest.exists) dest.create();
     dest.write(img.base64, { encoding: "base64" });
-  } else {
-    // Awaryjnie: gdy brak hi-res i base64, skopiuj plik źródłowy.
-    new File(img.uri).copy(dest);
+  } else if (!tryCopyFile(img.uri, dest)) {
+    throw new Error("brak źródła zdjęcia do zapisu migawki");
   }
   return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
 }
@@ -186,9 +186,9 @@ export async function saveCapture(input: {
 }): Promise<ScanCapture> {
   const sig = captureSig(input);
   const all = await listCaptures();
-  // Identyczne WEJŚCIE jak istniejąca migawka → nie duplikuj, zwróć tamtą (caller podepnie
-  // do niej nowy scanId, więc migawka wskazuje najświeższy wynik). Zmiana czegokolwiek w
-  // wejściu daje inną sygnaturę → powstaje nowa migawka.
+  // TE SAME ZDJĘCIA (+ hint/miasto) → nie duplikuj, zwróć istniejącą migawkę (caller podepnie nowy scanId,
+  // więc wskazuje najświeższy wynik). Dzięki temu KOLEJNE PRÓBY tego samego menu (np. po nieudanym odczycie,
+  // gdy GPS dryfuje bo idziesz) NIE tworzą nowych migawek — trafiają w tę samą, z PIERWSZĄ (najlepszą) pozycją.
   const dup = all.find((c) => c.sig && c.sig === sig);
   if (dup) return dup;
 

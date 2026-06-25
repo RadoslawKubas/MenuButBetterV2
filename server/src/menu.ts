@@ -251,9 +251,13 @@ export const STRUCTURE_SYSTEM = [
   "[{label, price}] i `price`=null; nie rozbijaj na osobne dania dla samych rozmiarów. Dodatki/dopłaty do wyboru",
   "('+2 ekstra ser') → do `menu_description`, nie jako osobne dania.",
   // zestawy
-  "ZESTAWY / MENU DNIA ('Menú del día', lunch, zestaw obiadowy): gdy zestaw ma DANIA DO WYBORU (pełnoprawne potrawy) —",
-  "każdy wybór jako OSOBNA pozycja w jednej sekcji zestawu, otaguj `course` ('1. danie'/'2. danie'/'deser'), `price`=null,",
-  "ew. `surcharge` ('+2 €'). Cenę i zasady zestawu (po jednym z grupy, co wliczone) → adnotacja `kind='set'` przy sekcji.",
+  "ZESTAWY / MENU DNIA ('Menú del día', lunch, zestaw obiadowy): CAŁY zestaw to JEDNA sekcja, której `title` = NAZWA",
+  "zestawu z karty (np. 'Menú del Día — Viernes', 'Menu dnia', 'Lunch') — ZAWSZE wypełnij ten tytuł, nie zostawiaj pustego.",
+  "NAWET gdy karta dzieli wybór na pod-nagłówki KURSÓW (PRIMEROS/SEGUNDOS/POSTRES,",
+  "Przystawki/Główne/Desery, Starters/Mains/Desserts) — te pod-nagłówki to NIE osobne sekcje, tylko wartość `course`.",
+  "Każde danie do wyboru = OSOBNA pozycja w tej JEDNEJ sekcji: `course`='1. danie'/'2. danie'/'deser' (wg pod-nagłówka),",
+  "`price`=null, `surcharge` przy dopłatach ('+6,80€'). Cenę zestawu + co wliczone + dzień/zasady (po jednym z każdego",
+  "kursu) → JEDNA adnotacja `kind='set'` ze `scope='section'` przy tej sekcji (NIE rozbijaj na osobne notatki `menu`).",
   "Zestaw bez wyboru (1-2 stałe pozycje) — wystarczy adnotacja.",
   // notes + availability
   "Teksty NIE-dania (czas oczekiwania, dopłaty/serwis/cover, VAT, napiwek, godziny, min. zamówienie, ogólne uwagi o",

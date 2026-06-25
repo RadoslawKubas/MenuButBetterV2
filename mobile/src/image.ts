@@ -67,9 +67,22 @@ export function setModelImageSpec(spec: {
   applySpec(peekSpec, spec.peekImageMaxEdge, spec.peekImageQuality);
 }
 
-/** Koduje zdjęcie pod dany `spec`: resize po DŁUŻSZEJ krawędzi do `spec.maxEdge` (BEZ upscalingu) + JPEG `spec.quality`.
- *  `dims` (z assetu pickera/kamery) pozwala pominąć sondujący render; brak → renderujemy raz po wymiary (replay/peek). */
-async function encodeAt(uri: string, dims: { width?: number | null; height?: number | null } | undefined, spec: ImgSpec): Promise<{ uri: string; base64: string }> {
+// Crop „DO MODELU": wycina ŚRODEK (mniej marginesów) PRZED skalowaniem do maxEdge → menu wypełnia więcej budżetu
+// pikseli = lepszy OCR (i tak rozdzielczość > sufit modelu, więc lepiej oddać piksele menu). WIĘCEJ tniemy z
+// DŁUŻSZEJ osi (tam karta zwykle zostawia puste pasy góra/dół). TYLKO zdjęcia z APARATU (kadrowane przez ramkę);
+// galeria/replay/sampel — pełne. Te same proporcje co ramka w CameraCapture (import MODEL_CROP).
+export const MODEL_CROP = { ends: 0.1 } as const; // ile uciąć z KAŻDEGO końca DŁUŻSZEJ osi (= góra/dół ekranu); boki PEŁNE (tunowalne)
+function cropRect(w: number, h: number): { originX: number; originY: number; width: number; height: number } {
+  // Tniemy tylko końce DŁUŻSZEJ osi (pion ekranu trzymanego w pionie) — boki zostają pełne („to co widać na ekranie").
+  const e = MODEL_CROP.ends;
+  return h >= w
+    ? { originX: 0, originY: Math.round(h * e), width: w, height: Math.round(h * (1 - 2 * e)) }
+    : { originX: Math.round(w * e), originY: 0, width: Math.round(w * (1 - 2 * e)), height: h };
+}
+
+/** Koduje zdjęcie pod dany `spec`: (opcjonalny crop środka dla aparatu) → resize po DŁUŻSZEJ krawędzi do
+ *  `spec.maxEdge` (BEZ upscalingu) + JPEG `spec.quality`. `dims` (z assetu) pozwala pominąć sondujący render. */
+async function encodeAt(uri: string, dims: { width?: number | null; height?: number | null } | undefined, spec: ImgSpec, crop = false): Promise<{ uri: string; base64: string }> {
   let w = typeof dims?.width === "number" ? dims.width : undefined;
   let h = typeof dims?.height === "number" ? dims.height : undefined;
   let source: string | ImageRef = uri;
@@ -80,6 +93,12 @@ async function encodeAt(uri: string, dims: { width?: number | null; height?: num
     source = probe; // reużyj zdekodowanego obrazu (manipulate przyjmuje ImageRef) — bez drugiego dekodowania
   }
   let ctx = ImageManipulator.manipulate(source);
+  if (crop) {
+    const r = cropRect(w, h);
+    ctx = ctx.crop(r);
+    w = r.width;
+    h = r.height;
+  }
   if (Math.max(w, h) > spec.maxEdge) {
     ctx = w >= h ? ctx.resize({ width: spec.maxEdge }) : ctx.resize({ height: spec.maxEdge });
   }
@@ -134,13 +153,14 @@ async function compress(
   uri: string,
   exif?: Record<string, unknown> | null,
   dims?: { width?: number | null; height?: number | null },
+  crop = false, // true = zdjęcie Z APARATU (kadrowane ramką) → wytnij środek do wersji DO MODELU (sampel zostaje pełny)
 ): Promise<PreparedImage> {
   // STABILNY hash ŹRÓDŁA — md5 ORYGINAŁU (przed jakąkolwiek modyfikacją). Natywnie, synchronicznie.
   // Best-effort: gdy plik niedostępny → brak hasha → serwer po prostu nie cache'uje struktury tej fotki.
   let srcHash: string | undefined;
   try { srcHash = new File(uri).md5 ?? undefined; } catch { /* brak hasha = brak cache struktury */ }
-  // DO MODELU (scan) — pomniejszone do spec serwera (dł. krawędź) + base64. `dims` z assetu = bez sondującego renderu.
-  const model = await encodeAt(uri, dims, scanSpec);
+  // DO MODELU (scan) — (crop środka dla aparatu) → pomniejszone do spec serwera (dł. krawędź) + base64.
+  const model = await encodeAt(uri, dims, scanSpec, crop);
   if (!model.base64) throw new Error("Nie udało się przygotować zdjęcia.");
   // DO SAMPLA — ORYGINAŁ VERBATIM (plik z aparatu/pickera, już JPEG). BEZ przekodowania: md5(sampla)=srcHash,
   // więc replay liczy ten sam hash z pliku (nie zapisujemy go w migawce). persistImage kopiuje ten plik 1:1.
@@ -215,7 +235,7 @@ export async function captureFromCamera(): Promise<PreparedImage | null> {
   const a = res.assets[0];
   await geotagOwnPhoto(a.uri); // NASZE zdjęcie → wpisz device GPS w EXIF PRZED zapisem do galerii i do sampla
   void saveToGallery(a.uri); // tryb testowy: zachowaj oryginał w galerii (równolegle)
-  return compress(a.uri, a.exif, { width: a.width, height: a.height });
+  return compress(a.uri, a.exif, { width: a.width, height: a.height }, true); // aparat → crop środka do modelu
 }
 
 /** Przetwarza zdjęcie zrobione WŁASNYM aparatem (tryb seryjny, expo-camera): kompresja
@@ -226,7 +246,7 @@ export async function prepareCameraPhoto(
 ): Promise<PreparedImage> {
   await geotagOwnPhoto(uri); // NASZE zdjęcie → device GPS w EXIF PRZED galerią i samplem
   void saveToGallery(uri); // równolegle, best-effort
-  return compress(uri, exif ?? null);
+  return compress(uri, exif ?? null, undefined, true); // aparat → crop środka do modelu (sampel pełny)
 }
 
 /** Wybiera z galerii — MOŻNA WIELE. Zwraca [] gdy anulowano. */

@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { Icon } from "./Icon";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { MODEL_CROP } from "./image"; // te same proporcje co crop „do modelu" — ramka pokazuje, co trafi do OCR
 import { MAX_IMAGES } from "./image";
 import type { PeekResult } from "./api";
 import { colors } from "./theme";
@@ -233,6 +234,15 @@ export function CameraCapture({
             {/* Warstwa pinch-zoom nad aparatem (paski są renderowane później → są na wierzchu). */}
             {!pending ? <View style={StyleSheet.absoluteFill} {...pinch.panHandlers} /> : null}
 
+            {/* Crop „do modelu" pokazany na ekranie: CIEMNE pasy góra/dół = co NIE trafia do OCR (sampel dostaje
+                pełne zdjęcie). Jasny środek na pełną szerokość = dokładnie to, co idzie do modelu. MODEL_CROP.ends. */}
+            {!pending ? (
+              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <View style={[styles.cropDim, { top: 0, left: 0, right: 0, height: `${MODEL_CROP.ends * 100}%` }]} />
+                <View style={[styles.cropDim, { bottom: 0, left: 0, right: 0, height: `${MODEL_CROP.ends * 100}%` }]} />
+              </View>
+            ) : null}
+
             {/* Zamrożony podgląd ostatniego zdjęcia. */}
             {pending ? (
               <Image source={{ uri: pending.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
@@ -397,6 +407,7 @@ export function CameraCapture({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   camera: { flex: 1 },
+  cropDim: { position: "absolute", backgroundColor: "rgba(0,0,0,0.85)" }, // ~3× ciemniej niż wcześniej — wyraźnie odcina marginesy
   topBar: {
     position: "absolute",
     top: 0,
