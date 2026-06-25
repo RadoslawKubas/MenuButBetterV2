@@ -5,7 +5,7 @@ import { usesOpenAiApi, isOpenAiReasoning, apiTag } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
 import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
-import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { cacheGet, cacheSet, cacheKey, singleFlight } from "./cache.ts";
 import { langCode } from "./lang.ts";
 import { stepEnabled } from "./runtimeConfig.ts";
 
@@ -65,6 +65,9 @@ export async function describeDish(
     if (hit) return { text: hit, usage: ZERO_USAGE, cached: true };
   }
 
+  // SINGLE-FLIGHT: równoległe identyczne „miss" (to samo danie+kuchnia+kraj+region+język) liczą się RAZ;
+  // reszta bierze gotowy wynik (usage 0 — nie płaci 2×). Przy noCache (LAB) — świeże per request, bez koalescencji.
+  const compute = async () => {
   // Treść zapytania (ta sama dla obu providerów). Karmimy model DOKŁADNIE tym, co jest w kluczu cache
   // (nazwa, kuchnia, region) — bez miasta, nazwy restauracji i krótkiego opisu z menu: miasto/lokal
   // przeciekały do treści, a krótki opis tylko rozdrabniał cache bez realnej korzyści (opis i tak powstaje
@@ -122,4 +125,9 @@ export async function describeDish(
   logUsage("dish-info", model, usage);
   if (useCache) void cacheSet("dish-info", ck, text.text, { lang: input.targetLang, model });
   return { text: text.text, usage };
+  };
+  if (!useCache) return compute();
+  const { promise, coalesced } = singleFlight(ck, compute);
+  const { text, usage } = await promise;
+  return { text, usage: coalesced ? ZERO_USAGE : usage, cached: coalesced };
 }

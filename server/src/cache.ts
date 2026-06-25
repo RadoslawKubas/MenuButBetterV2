@@ -165,6 +165,21 @@ export async function cacheSet(kind: CacheKind, key: string, value: unknown, opt
   ).catch((e) => console.error("[cache] set:", (e as Error).message));
 }
 
+// --- Single-flight (koalescencja równoległych „miss") -------------------------------------
+// Gdy N requestów na ZIMNO prosi o ten sam klucz, bez tego KAŻDY odpala tę samą drogą operację (vision/Serper/
+// Places) — N× koszt i N× obciążenie upstreamu w oknie zanim cache się zapisze. Tu: PIERWSZY „leci", reszta
+// DOCZEPIA się do jego Promise (coalesced=true) i bierze gotowy wynik. Prymityw NIE dotyka cache — to robi caller
+// (cacheGet przed, cacheSet w compute), bo kształt wartości i rozliczenie usage bywają różne (coalesced → usage 0,
+// nie płaci drugi raz). Mapa trzyma TYLKO trwające loty (czyszczona w finally). Działa też bez DB (sam L1 + mapa).
+const inFlight = new Map<string, Promise<unknown>>();
+export function singleFlight<T>(key: string, compute: () => Promise<T>): { promise: Promise<T>; coalesced: boolean } {
+  const existing = inFlight.get(key) as Promise<T> | undefined;
+  if (existing) return { promise: existing, coalesced: true };
+  const run = compute().finally(() => inFlight.delete(key));
+  inFlight.set(key, run);
+  return { promise: run, coalesced: false };
+}
+
 /** Usuwa wpis (np. gdy URL zdjęcia okazał się martwy → wymusza świeże szukanie). */
 export async function cacheDelete(key: string): Promise<void> {
   L1.delete(key);

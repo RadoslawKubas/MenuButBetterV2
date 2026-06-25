@@ -15,7 +15,7 @@ import {
 import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
 import { stepEnabled, type ToggleStep } from "./runtimeConfig.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
-import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { cacheGet, cacheSet, cacheKey, singleFlight } from "./cache.ts";
 
 export interface DishPhotosParams {
   dish: string;
@@ -421,12 +421,23 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       dbg.fromCache = true;
       return { photos, usage: ZERO_USAGE, cached: true };
     }
-    const { photos, usage } = await representatives(verifyFlag);
     // Do cache TYLKO dobre (nieodrzucone) — odrzucone zwracamy do podglądu (takeAll/test), ale nie zapisujemy,
     // dzięki czemu tryb „bierz wszystko" nie zanieczyszcza wpisu (i nie musi być w kluczu).
-    const toCache = photos.filter((ph) => !ph.rejected);
-    if (toCache.length) void cacheSet("repr-photos", ck, toCache, { model: verifyModel });
-    return { photos, usage, cached: false };
+    const compute = async () => {
+      const r = await representatives(verifyFlag);
+      const toCache = r.photos.filter((ph) => !ph.rejected);
+      if (toCache.length) void cacheSet("repr-photos", ck, toCache, { model: verifyModel });
+      return r;
+    };
+    // SINGLE-FLIGHT: gdy wielu prosi na ZIMNO o ten sam termin (popularne danie), liczy TYLKO pierwszy —
+    // reszta bierze jego zdjęcia, usage 0 (nie płacą 2× za Serper+vision). Pomijane przy noCache (LAB: świeże).
+    if (p.noCache) {
+      const { photos, usage } = await compute();
+      return { photos, usage, cached: false };
+    }
+    const { promise, coalesced } = singleFlight(ck, compute);
+    const { photos, usage } = await promise;
+    return { photos, usage: coalesced ? ZERO_USAGE : usage, cached: coalesced };
   }
 
   // Tryb poglądowy (do tła po skanie): z cache albo Serper/Wikimedia/Openverse (weryfikowane).
