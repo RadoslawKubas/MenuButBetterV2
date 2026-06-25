@@ -67,17 +67,24 @@ export function setModelImageSpec(spec: {
   applySpec(peekSpec, spec.peekImageMaxEdge, spec.peekImageQuality);
 }
 
-// Crop „DO MODELU": wycina ŚRODEK (mniej marginesów) PRZED skalowaniem do maxEdge → menu wypełnia więcej budżetu
-// pikseli = lepszy OCR (i tak rozdzielczość > sufit modelu, więc lepiej oddać piksele menu). WIĘCEJ tniemy z
-// DŁUŻSZEJ osi (tam karta zwykle zostawia puste pasy góra/dół). TYLKO zdjęcia z APARATU (kadrowane przez ramkę);
-// galeria/replay/sampel — pełne. Te same proporcje co ramka w CameraCapture (import MODEL_CROP).
-export const MODEL_CROP = { ends: 0.1 } as const; // ile uciąć z KAŻDEGO końca DŁUŻSZEJ osi (= góra/dół ekranu); boki PEŁNE (tunowalne)
+// Crop „DO MODELU" = DOKŁADNIE obszar między scrimami paska górnego/dolnego w aparacie (to, co zostaje po
+// odcięciu przyciemnionych kawałków góra/dół) PRZED skalowaniem do maxEdge → menu wypełnia więcej budżetu pikseli
+// = lepszy OCR. CameraCapture mierzy realne wysokości pasków i ustawia te insety przez setModelCropInsets; domyślne
+// ≈ typowe wysokości (na wypadek replayu zanim aparat się zmierzy). Boki PEŁNE. TYLKO zdjęcia z aparatu (crop=true).
+let modelCropInsets = { top: 0.12, bottom: 0.16 }; // ułamek wysokości EKRANU ucinany z góry / z dołu
+export function setModelCropInsets(top: number, bottom: number): void {
+  const clamp = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(0.4, v)) : 0); // nigdy nie zjedz całego kadru
+  modelCropInsets = { top: clamp(top), bottom: clamp(bottom) };
+}
 function cropRect(w: number, h: number): { originX: number; originY: number; width: number; height: number } {
-  // Tniemy tylko końce DŁUŻSZEJ osi (pion ekranu trzymanego w pionie) — boki zostają pełne („to co widać na ekranie").
-  const e = MODEL_CROP.ends;
-  return h >= w
-    ? { originX: 0, originY: Math.round(h * e), width: w, height: Math.round(h * (1 - 2 * e)) }
-    : { originX: Math.round(w * e), originY: 0, width: Math.round(w * (1 - 2 * e)), height: h };
+  const { top, bottom } = modelCropInsets;
+  if (h >= w) {
+    // pion (upright aparat/sampel): tnij górę/dół WYSOKOŚCI, boki pełne
+    return { originX: 0, originY: Math.round(h * top), width: w, height: Math.round(h * (1 - top - bottom)) };
+  }
+  // landscape-stored (orientacja nieznormalizowana): tnij symetrycznie końce DŁUŻSZEJ osi (= góra/dół po obrocie)
+  const e = (top + bottom) / 2;
+  return { originX: Math.round(w * e), originY: 0, width: Math.round(w * (1 - 2 * e)), height: h };
 }
 
 /** Koduje zdjęcie pod dany `spec`: (opcjonalny crop środka dla aparatu) → resize po DŁUŻSZEJ krawędzi do

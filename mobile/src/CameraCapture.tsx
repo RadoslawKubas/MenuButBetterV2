@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { Icon } from "./Icon";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { MAX_IMAGES } from "./image";
+import { MAX_IMAGES, setModelCropInsets } from "./image";
 import type { PeekResult } from "./api";
 import { colors } from "./theme";
 
@@ -61,6 +61,13 @@ export function CameraCapture({
   onRemoveShot: (uri: string) => void;
 }) {
   const { width, height } = useWindowDimensions();
+  // Crop „do modelu" = obszar między scrimami paska górnego/dolnego: mierzymy ich realne wysokości (px) i podajemy
+  // jako ułamki wysokości ekranu → kadr trafiający do OCR = dokładnie to, co widać między ciemnymi paskami.
+  const [topH, setTopH] = useState(0);
+  const [barH, setBarH] = useState(0);
+  useEffect(() => {
+    if (topH > 0 && barH > 0 && height > 0) setModelCropInsets(topH / height, barH / height);
+  }, [topH, barH, height]);
   const ref = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false); // robienie zdjęcia
@@ -239,7 +246,7 @@ export function CameraCapture({
             ) : null}
 
             {/* Górny pasek: latarka + przełącznik „szybkiego podglądu" + banner z kontekstem. */}
-            <View style={styles.topBar}>
+            <View style={styles.topBar} onLayout={(e) => setTopH(e.nativeEvent.layout.height)}>
               <Pressable
                 style={[styles.peekToggle, torch && styles.peekToggleOn]}
                 onPress={() => setTorch((t) => !t)}
@@ -286,7 +293,7 @@ export function CameraCapture({
                 })}
               </View>
               {/* Pasek aparatu: Gotowe / migawka / licznik. */}
-              <View style={styles.bar}>
+              <View style={styles.bar} onLayout={(e) => setBarH(e.nativeEvent.layout.height)}>
                 <Pressable style={styles.side} onPress={onClose}>
                   <Text style={styles.doneText}>Gotowe ({count})</Text>
                 </Pressable>
