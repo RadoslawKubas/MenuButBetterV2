@@ -25,7 +25,7 @@ import { cfgModel, getRuntimeConfig, getAppConfig, getServerConfigView, stepEnab
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
 import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
 import { apiCallCost, getPriceOverrides, otherRate, type PriceOverrides } from "./pricing.ts";
-import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheClear, cacheGet, cacheSet, cacheKey, type CacheKind } from "./cache.ts";
+import { initCache, cacheDelete, cacheStats, cacheBrowse, cacheSize, cacheClear, cacheGet, cacheSet, cacheKey, singleFlight, type CacheKind } from "./cache.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { initSamples, samplesEnabled, storeMode, saveSample, listSamples, getSampleZip, markImported, deleteSample, statusByHashes } from "./samples.ts";
 import { DEFAULT_MODEL, apiTag, type ModelId } from "./models.ts";
@@ -1270,10 +1270,16 @@ export async function runVenuePhotos(body: VenuePhotosArgs): Promise<{ matches: 
       const harvestId = createHash("sha256").update(JSON.stringify(["h", name.toLowerCase(), (body.city || "").toLowerCase(), domain || ""])).digest("hex").slice(0, 32);
       const harvestKey = cacheKey("venue-match", "harvest", harvestId);
       let harvest = (name || domain) ? await cacheGet<Awaited<ReturnType<typeof harvestVenuePool>>>("venue-match", harvestKey, { op: "venue-photos" }) : null;
-      if (!harvest) {
-        harvest = (name || domain) ? await harvestVenuePool({ domain, name, city: body.city, perQuery: 12 }).catch(() => ({ photos: [] as PoolPhoto[], queries: [] })) : { photos: [] as PoolPhoto[], queries: [] };
-        if (name || domain) void cacheSet("venue-match", harvestKey, harvest, { model: poolModel });
+      if (!harvest && (name || domain)) {
+        // SINGLE-FLIGHT: kilka osób w tym samym lokalu naraz na zimno → harvest Serpera leci RAZ, reszta bierze pulę.
+        const { promise } = singleFlight(harvestKey, async () => {
+          const h = await harvestVenuePool({ domain, name, city: body.city, perQuery: 12 }).catch(() => ({ photos: [] as PoolPhoto[], queries: [] }));
+          void cacheSet("venue-match", harvestKey, h, { model: poolModel });
+          return h;
+        });
+        harvest = await promise;
       }
+      if (!harvest) harvest = { photos: [] as PoolPhoto[], queries: [] };
       const pool: PoolPhoto[] = [...harvest.photos];
       for (const n of photoNames.slice(0, 10)) pool.push({ source: "google", photoName: n });
       for (const p of taPhotos.slice(0, 12)) pool.push({ source: "tripadvisor", url: p.url, caption: p.caption });

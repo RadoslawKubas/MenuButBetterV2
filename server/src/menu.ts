@@ -8,7 +8,7 @@ import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, addUsage, type Usage 
 import { track, recordUsage, recordBytes } from "./apiLog.ts";
 import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, isOpenAiReasoning, supportsTemperature, apiTag, type ModelId } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
-import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { cacheGet, cacheSet, cacheKey, BatchInFlight } from "./cache.ts";
 import { langCode } from "./lang.ts";
 
 // Rejestr modeli + walidator współdzielone z resztą serwera (re-eksport z models.ts).
@@ -784,6 +784,9 @@ async function enrichCall(
  * pozycja (`original+menu_desc + kuchnia + kraj + język + model`) i per nazwa sekcji — do modelu idą
  * TYLKO niezcache'owane pozycje. Składa wynik z bezpiecznymi fallbackami.
  */
+// Single-flight WSADOWY enrich: koalescencja per (full_name+kontekst) między RÓWNOLEGŁYMI skanami (popularne dania
+// na zimno → liczone RAZ; reszta bierze wynik, usage 0). Modułowy singleton współdzielony przez requesty.
+const enrichInFlight = new BatchInFlight<ItemEnrich | null>();
 export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model: ModelId): Promise<{ menu: Menu; usage: Usage }> {
   const cuisine = structure.cuisine;
   const country = countryOf(opts.locationHint);
@@ -822,34 +825,49 @@ export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions,
   for (let gi = 0; gi < flat.length; gi++) if (enrichByGi[gi]) emitEnrich(gi);
 
   let usage = ZERO_USAGE;
-  if (needItems.length) {
-    // BATCHOWANIE: całe duże menu w JEDNYM wywołaniu enrich = ogromny, wolny output (dziesiątki dań → kilka
-    // minut + ryzyko ucięcia na max_tokens). Tniemy na partie ~12 i puszczamy z ograniczoną współbieżnością —
-    // szybciej, bezpieczniej i deterministycznie (każda partia ma własny mały output). Cache per pozycja → reuse.
+  // SINGLE-FLIGHT WSADOWY (tryb cache): koalescencja per pozycję między RÓWNOLEGŁYMI skanami. MISS-y dzielimy na
+  // OWNED (liczę ja) i BORROWED (inny skan już liczy ten sam danie+kontekst → biorę jego wynik, usage 0). Duplikaty
+  // full_name w obrębie skanu też scalamy (jeden compute → wynik do wszystkich pozycji). noCache → bez koalescencji.
+  const keyToEntries = new Map<string, { gi: number; fullName: string; fd: string }[]>();
+  for (const ni of needItems) { const k = itemKey(ni.fullName, ni.fd); let a = keyToEntries.get(k); if (!a) { a = []; keyToEntries.set(k, a); } a.push(ni); }
+  const claimed = opts.noCache ? null : enrichInFlight.claim([...keyToEntries.keys()], () => null);
+  const ownedNeed = (claimed ? claimed.owned : [...keyToEntries.keys()]).map((k) => keyToEntries.get(k)![0]!);
+  if (ownedNeed.length || (claimed && claimed.borrowed.size)) {
+    // BATCHOWANIE: duże menu w JEDNYM wywołaniu = wolny output + ryzyko ucięcia na max_tokens. Partie ~12, współbieżność ≤4.
     const ENRICH_BATCH = 12;
     const chunks: { gi: number; fullName: string; fd: string }[][] = [];
-    for (let i = 0; i < needItems.length; i += ENRICH_BATCH) chunks.push(needItems.slice(i, i + ENRICH_BATCH));
+    for (let i = 0; i < ownedNeed.length; i += ENRICH_BATCH) chunks.push(ownedNeed.slice(i, i + ENRICH_BATCH));
     const acc: Usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     let next = 0;
+    // Zastosuj enrich `it` do WSZYSTKICH pozycji o tym kluczu; przy PIERWSZYM ustawieniu — domknij borrowerów + cache.
+    const applyTo = (key: string, it: ItemEnrich, fallbackEntries: { gi: number }[]) => {
+      let setAny = false;
+      for (const e of (keyToEntries.get(key) ?? fallbackEntries)) if (enrichByGi[e.gi] == null) { enrichByGi[e.gi] = it; emitEnrich(e.gi); setAny = true; }
+      if (setAny && !opts.noCache) { enrichInFlight.resolve(key, it); void cacheSet("item-enrich", key, it, { lang: opts.targetLang, model }); }
+    };
     const worker = async () => {
       while (next < chunks.length) {
         const chunk = chunks[next++]!;
-        // emituj PO JEDNYM — gdy tylko danie domknie się w strumieniu (nie czekamy aż wróci cała partia 6).
-        const apply = (it: ItemEnrich) => {
-          const tgt = chunk[it.index];
-          if (tgt && enrichByGi[tgt.gi] == null) { // idempotentnie: stream vs bezpiecznik nie podwoją
-            enrichByGi[tgt.gi] = it;
-            if (!opts.noCache) void cacheSet("item-enrich", itemKey(tgt.fullName, tgt.fd), it, { lang: opts.targetLang, model });
-            emitEnrich(tgt.gi);
-          }
-        };
+        // emituj PO JEDNYM — gdy danie domknie się w strumieniu (nie czekamy aż wróci cała partia).
+        const apply = (it: ItemEnrich) => { const tgt = chunk[it.index]; if (tgt) applyTo(itemKey(tgt.fullName, tgt.fd), it, [tgt]); };
         const r = await enrichCall(model, opts, cuisine, country, chunk, apply);
         acc.inputTokens += r.usage.inputTokens; acc.outputTokens += r.usage.outputTokens; acc.costUsd += r.usage.costUsd;
         // BEZPIECZNIK: cokolwiek strumień pominął (parse / model OpenAI bez per-item) — dolicz z autorytatywnego wyniku.
         for (const it of r.items) apply(it);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
+    // OWNED (moje partie) i BORROWED (cudze loty) RÓWNOLEGLE — sekwencyjnie groziłoby zakleszczeniem dwóch skanów
+    // czekających na siebie nawzajem. Borrowed NIGDY nie wiszą (timeout→null w BatchInFlight); null = degraduj bez enrich.
+    const workersP = Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
+    const borrowedP: Promise<unknown> = claimed
+      ? Promise.all([...claimed.borrowed].map(async ([key, p]) => {
+          const it = await p;
+          for (const e of (keyToEntries.get(key) ?? [])) if (enrichByGi[e.gi] == null) { if (it) enrichByGi[e.gi] = it; emitEnrich(e.gi); }
+        }))
+      : Promise.resolve();
+    await workersP;
+    if (claimed) enrichInFlight.settleRemaining(claimed.owned, () => null); // owned pominięte przez model → null → borrowerzy degradują
+    await borrowedP;
     usage = acc;
   }
 

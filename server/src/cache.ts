@@ -180,6 +180,46 @@ export function singleFlight<T>(key: string, compute: () => Promise<T>): { promi
   return { promise: run, coalesced: false };
 }
 
+// --- Batch single-flight (koalescencja per-klucz WEWNĄTRZ wsadowego compute) ----------------
+// item-enrich / verify-photos liczą WIELE kluczy JEDNYM wywołaniem modelu (partia) — singleFlight (1 klucz =
+// 1 lot) tu nie pasuje. BatchInFlight koordynuje per klucz: `claim` dzieli klucze na OWNED (liczę ja) i BORROWED
+// (ktoś już liczy → doczekam jego wynik, bez drugiego compute). Owner po policzeniu woła `resolve(key, val)`;
+// klucze, które model POMINĄŁ w partii, domyka `settleRemaining(fallback)`. Bezpieczeństwo: borrowed Promise
+// NIGDY nie wisi (timeout → fallback) i NIE rzuca; owned wpis sam się sprząta (timer) gdyby owner padł/zniknął.
+export class BatchInFlight<V> {
+  private map = new Map<string, { promise: Promise<V>; resolve: (v: V) => void; timer: ReturnType<typeof setTimeout> }>();
+  constructor(private readonly timeoutMs = 30_000) {}
+  /** Rejestruje klucze. owned = liczę JA (muszę domknąć resolve/settleRemaining). borrowed = obietnice na CUDZE
+   *  loty, zawsze się rozwiążą do V (timeout/fallback wbudowany — bez zawisów, bez rzucania). */
+  claim(keys: string[], fallback: (key: string) => V): { owned: string[]; borrowed: Map<string, Promise<V>> } {
+    const owned: string[] = [];
+    const borrowed = new Map<string, Promise<V>>();
+    for (const k of keys) {
+      const e = this.map.get(k);
+      if (e) { borrowed.set(k, e.promise); continue; }
+      let resolve!: (v: V) => void;
+      const promise = new Promise<V>((res) => { resolve = res; });
+      const timer = setTimeout(() => { if (this.map.get(k)?.promise === promise) { this.map.delete(k); resolve(fallback(k)); } }, this.timeoutMs);
+      (timer as { unref?: () => void }).unref?.(); // nie trzymaj procesu przy życiu samym timerem
+      this.map.set(k, { promise, resolve, timer });
+      owned.push(k);
+    }
+    return { owned, borrowed };
+  }
+  /** Domyka MÓJ klucz wynikiem (dla borrowerów) + usuwa z mapy. No-op gdy nie mój / już domknięty. */
+  resolve(key: string, value: V): void {
+    const e = this.map.get(key);
+    if (!e) return;
+    this.map.delete(key);
+    clearTimeout(e.timer);
+    e.resolve(value);
+  }
+  /** Domyka pozostałe OWNED klucze (model je pominął / partia padła) fallbackiem — żeby borrower nie czekał do timeoutu. */
+  settleRemaining(keys: string[], fallback: (key: string) => V): void {
+    for (const k of keys) this.resolve(k, fallback(k)); // resolve = no-op jeśli już domknięte
+  }
+}
+
 /** Usuwa wpis (np. gdy URL zdjęcia okazał się martwy → wymusza świeże szukanie). */
 export async function cacheDelete(key: string): Promise<void> {
   L1.delete(key);
