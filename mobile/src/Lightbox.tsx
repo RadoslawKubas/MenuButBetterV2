@@ -5,6 +5,7 @@ import {
   Animated,
   FlatList,
   Image,
+  Linking,
   Modal,
   PanResponder,
   Pressable,
@@ -13,6 +14,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { Icon } from "./Icon";
 import { sourceMeta } from "./photoSource";
 import { resolveCachedUri } from "./imageCache";
 
@@ -22,6 +24,9 @@ export interface LightboxPhoto {
   fromVenue?: boolean;
   fromVenueReason?: string;
   attribution?: string;
+  /** URL strony źródłowej (klikalne „źródło") + domena (nazwa strony). */
+  contextUrl?: string;
+  domain?: string;
   /** Dodatkowa notka pod zdjęciem (np. szybki podgląd „quick peek": kuchnia/lokal/jakość). */
   note?: string;
   /** Ocena vision 0..1 (dopasowanie do dania) — pokazywana jako %. */
@@ -33,6 +38,12 @@ export interface LightboxPhoto {
 export interface LightboxState {
   photos: LightboxPhoto[];
   index: number;
+}
+
+/** Nazwa strony źródłowej (host bez „www.") do pokazania przy zdjęciu. */
+function sourceHost(p: LightboxPhoto): string {
+  if (p.domain) return p.domain.replace(/^www\./, "");
+  try { return new URL(p.contextUrl!).host.replace(/^www\./, ""); } catch { return ""; }
 }
 
 export function Lightbox({
@@ -142,16 +153,26 @@ export function Lightbox({
         </Pressable>
 
         {/* Skąd jest aktualnie oglądane zdjęcie. */}
-        <View style={styles.infoBar} pointerEvents="none">
+        <View style={styles.infoBar} pointerEvents="box-none">
           {cur.note ? <Text style={styles.peekNote} numberOfLines={2}>{cur.note}</Text> : null}
           {cur.fromVenue ? <Text style={styles.venueTag}>★ z tego lokalu</Text> : null}
           <View style={styles.sourceRow}>
             <View style={[styles.sourceDot, { backgroundColor: meta.color }]} />
             <Text style={styles.sourceLabel}>{meta.label}</Text>
           </View>
+          {!cur.fromVenue ? (
+            <Text style={styles.webDisclaimer} numberOfLines={2}>
+              Zdjęcie poglądowe z sieci — może nie przedstawiać dokładnie tej potrawy.
+            </Text>
+          ) : null}
+          {cur.contextUrl ? (
+            <Pressable onPress={() => Linking.openURL(cur.contextUrl!).catch(() => {})} style={styles.sourceLinkBtn} hitSlop={8}>
+              <Text style={styles.sourceLink} numberOfLines={1}><Icon name="link" /> Źródło{sourceHost(cur) ? `: ${sourceHost(cur)}` : ""} ↗</Text>
+            </Pressable>
+          ) : null}
           {cur.rejected || cur.score != null ? (
             <Text style={cur.rejected ? styles.rejectedTag : styles.scoreTag}>
-              {cur.rejected ? "❌ odrzucone (słaba jakość)" : "✓ trafność"}
+              {cur.rejected ? "odrzucone (słaba jakość)" : "✓ trafność"}
               {cur.score != null ? ` ${Math.round(cur.score * 100)}%` : ""}
             </Text>
           ) : null}
@@ -189,6 +210,9 @@ const styles = StyleSheet.create({
   sourceRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   sourceDot: { width: 9, height: 9, borderRadius: 5 },
   sourceLabel: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  webDisclaimer: { color: "#fff", opacity: 0.6, fontSize: 12, fontStyle: "italic", textAlign: "center", maxWidth: 320, marginTop: 4, lineHeight: 16 },
+  sourceLinkBtn: { marginTop: 5, paddingVertical: 5, paddingHorizontal: 12, backgroundColor: "rgba(255,255,255,0.14)", borderRadius: 8, maxWidth: 300 },
+  sourceLink: { color: "#9ecbff", fontSize: 13, fontWeight: "700" },
   attrib: { color: "#fff", fontSize: 12, opacity: 0.6, marginTop: 3, maxWidth: 280, textAlign: "center" },
   venueReason: { color: "#fff", fontSize: 11, opacity: 0.7, marginTop: 5, maxWidth: 300, textAlign: "center" },
   counter: { color: "#fff", fontSize: 13, opacity: 0.75, marginTop: 8 },

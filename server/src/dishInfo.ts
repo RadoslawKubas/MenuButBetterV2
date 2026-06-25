@@ -6,6 +6,7 @@ import { getClientForModel } from "./openaiClient.ts";
 import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, type Usage } from "./usage.ts";
 import { track, recordUsage } from "./apiLog.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { langCode } from "./lang.ts";
 import { stepEnabled } from "./runtimeConfig.ts";
 
 const client = new Anthropic({ maxRetries: 4 });
@@ -44,27 +45,35 @@ export async function describeDish(
   if (!stepEnabled("descriptions")) return { text: "DISABLED", usage: ZERO_USAGE };
   const model: ModelId = isModelId(input.model) ? input.model : DEFAULT_MODEL;
 
-  // ② CACHE opisu ROZSZERZONEGO. Klucz: danie + KRÓTKI OPIS (wariant) + kuchnia + REGION+KRAJ + język +
-  // model. Opis JEST w kluczu → cache'ujemy ZAWSZE bezstratnie (różny opis → różny wpis), a re-skan tego
-  // samego menu trafia. REGION (a nie sam kraj) — bo długi opis ma mieć regionalny wibe (Katalonia,
-  // województwo, stan…). Gdy znamy region (3 człony „miasto, region, kraj") → „region, kraj"; inaczej sam
-  // kraj. UWAGA: krótki enrich keyuje po samym kraju — region dostaje tylko TEN długi (on-tap) opis.
+  // ② CACHE opisu ROZSZERZONEGO. Klucz: danie + kuchnia + KRAJ + REGION + język + model — DOKŁADNIE to, co
+  // idzie do promptu (spójność klucz↔prompt → brak przecieków i poprawne trafienia). KRAJ i REGION to DWA
+  // OSOBNE człony (nie sklejony „region, kraj") — łatwiej nimi sterować osobno (np. w razie czego olać sam
+  // region, nie ruszając kraju). KRÓTKI OPIS z menu ani MIASTO ani RESTAURACJA NIE wchodzą do klucza (ani do
+  // promptu): długi opis powstaje z NAZWY dania — keyowanie po krótkim opisie tylko rozdrabniało cache bez
+  // korzyści, a miasto/restauracja przeciekały do treści (opis wskazywał konkretne miasto/lokal i podstawiał
+  // się błędnie). REGION dla regionalnego wibe (Katalonia, województwo, stan…); MIASTO świadomie wycięte.
+  // Lokalizacja z apki = „miasto, region, kraj(EN)": kraj = ostatni człon, region = środek (gdy są 3 człony),
+  // miasto pomijane. UWAGA: krótki enrich keyuje tylko po kraju.
   const locParts = (input.location || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const regionKey = locParts.length >= 3 ? locParts.slice(1).join(", ") : locParts[locParts.length - 1] || "";
+  const country = locParts[locParts.length - 1] || "";
+  const region = locParts.length >= 3 ? locParts.slice(1, -1).join(", ") : "";
   const useCache = !input.noCache;
-  const ck = cacheKey("dish-info", input.name, input.description ?? "", input.cuisine, regionKey, input.targetLang, model);
+  // Język w kluczu jako KOD ISO (np. „pl"); MODEL NIE w kluczu (osobna metadana, referencyjna).
+  const ck = cacheKey("dish-info", input.name, input.cuisine, country, region, langCode(input.targetLang));
   if (useCache) {
     const hit = await cacheGet<string>("dish-info", ck, { op: "dish-info" });
     if (hit) return { text: hit, usage: ZERO_USAGE, cached: true };
   }
 
-  // Treść zapytania (ta sama dla obu providerów).
+  // Treść zapytania (ta sama dla obu providerów). Karmimy model DOKŁADNIE tym, co jest w kluczu cache
+  // (nazwa, kuchnia, region) — bez miasta, nazwy restauracji i krótkiego opisu z menu: miasto/lokal
+  // przeciekały do treści, a krótki opis tylko rozdrabniał cache bez realnej korzyści (opis i tak powstaje
+  // z nazwy dania). Pola description/restaurant z body są nadal przyjmowane, ale tu świadomie ignorowane.
   const userText =
     `Danie: ${input.name}\n` +
-    (input.description ? `Krótki opis z menu: ${input.description}\n` : "") +
     (input.cuisine ? `Rodzaj kuchni: ${input.cuisine}\n` : "") +
-    (input.location ? `Lokalizacja lokalu: ${input.location}\n` : "") +
-    (input.restaurant ? `Restauracja: ${input.restaurant}\n` : "") +
+    (country ? `Kraj: ${country}\n` : "") +
+    (region ? `Region: ${region}\n` : "") +
     `Język odpowiedzi: ${input.targetLang}\n\n` +
     "Rozwiń informacje o tym daniu, trzymając się powyższego kontekstu.";
 
@@ -89,7 +98,7 @@ export async function describeDish(
     const usage = usageFromOpenAI(model, resp.usage);
     recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
     logUsage(`dish-info (${tag})`, model, usage);
-    if (useCache) void cacheSet("dish-info", ck, out, { lang: input.targetLang });
+    if (useCache) void cacheSet("dish-info", ck, out, { lang: input.targetLang, model });
     return { text: out, usage };
   }
 
@@ -111,6 +120,6 @@ export async function describeDish(
   const usage = usageFrom(model, response.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   logUsage("dish-info", model, usage);
-  if (useCache) void cacheSet("dish-info", ck, text.text, { lang: input.targetLang });
+  if (useCache) void cacheSet("dish-info", ck, text.text, { lang: input.targetLang, model });
   return { text: text.text, usage };
 }

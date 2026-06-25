@@ -261,7 +261,9 @@ export class WikimediaProvider implements DishPhotoProvider {
     const url = new URL("https://commons.wikimedia.org/w/api.php");
     url.searchParams.set("action", "query");
     url.searchParams.set("generator", "search");
-    url.searchParams.set("gsrsearch", dish);
+    // filetype:bitmap → tylko zdjęcia rastrowe; wycina skany książek/dokumentów (PDF/DJVU=OFFICE) i grafiki
+    // (SVG=DRAWING), które przy długich zapytaniach pełnotekstowo trafiały zamiast zdjęć potraw.
+    url.searchParams.set("gsrsearch", `${dish} filetype:bitmap`);
     url.searchParams.set("gsrnamespace", "6"); // pliki
     url.searchParams.set("gsrlimit", String(this.num));
     url.searchParams.set("prop", "imageinfo");

@@ -58,18 +58,6 @@ export async function initInstallId(): Promise<string> {
 }
 export function getInstallId(): string { return INSTALL_ID; }
 
-// DEBUG: wymuszenie świeżego wyniku — serwer omija ODCZYT z cache (generuje od nowa), ale wynik nadal
-// ZAPISUJE (cache się odświeża). Stan trzymany w pamięci + AsyncStorage (przeżywa restart apki).
-let FORCE_FRESH = false;
-export function isForceFresh(): boolean { return FORCE_FRESH; }
-export async function initForceFresh(): Promise<void> {
-  try { FORCE_FRESH = (await AsyncStorage.getItem("force-fresh")) === "1"; } catch { /* ignoruj */ }
-}
-export async function setForceFresh(on: boolean): Promise<void> {
-  FORCE_FRESH = on;
-  try { await AsyncStorage.setItem("force-fresh", on ? "1" : "0"); } catch { /* ignoruj */ }
-}
-
 /** Rejestruje instalację na serwerze: urządzenie (model/brand/OS) + wersja apki → zakładka „Instancje". */
 export async function registerInstall(): Promise<void> {
   try {
@@ -106,7 +94,6 @@ function jsonHeaders(): Record<string, string> {
   if (APP_TOKEN) h["x-app-token"] = APP_TOKEN;
   if (INSTALL_ID) h["x-install-id"] = INSTALL_ID;
   if (SESSION_ID) h["x-session-id"] = SESSION_ID;
-  if (FORCE_FRESH) h["x-force-fresh"] = "1"; // debug: omiń odczyt z cache (serwer i tak zapisze świeży wynik)
   return h;
 }
 
@@ -226,7 +213,12 @@ export type ScanPhase =
 
 /** Pozycja wyłuskana NA ŻYWO ze strumienia (nazwa + photo_query) — do podglądu i prefetchu zdjęć. */
 export interface ScanItemStub {
+  /** Stabilne id RENDEROWE z pipeline (enrich-item niesie je; live ticker struktury — brak). */
+  id?: string;
   original: string;
+  /** Kanoniczna nazwa (EN, z kontekstem grupy) = TOŻSAMOŚĆ dania. Klucz merge enrich (odporny na powtórzone
+   *  `original` — dwa „Mango": lunch=mango curry vs drink=mango lemonade). */
+  full_name: string;
   translated: string;
   photoQuery: string;
   photoQueryLocal: string;
@@ -292,6 +284,7 @@ export function scanMenu(
           else if (ev.phase === "item")
             onItem?.({
               original: ev.original,
+              full_name: ev.full_name ?? ev.original,
               translated: ev.translated,
               photoQuery: ev.photoQuery,
               photoQueryLocal: ev.photoQueryLocal,
@@ -303,6 +296,7 @@ export function scanMenu(
           else if (ev.phase === "enrich-item")
             onEnrichItem?.({
               original: ev.original,
+              full_name: ev.full_name ?? ev.original,
               translated: ev.translated,
               photoQuery: ev.photoQuery,
               photoQueryLocal: ev.photoQueryLocal,
@@ -398,6 +392,7 @@ export function enrichMenuOnServer(
           else if (ev.phase === "enrich-item")
             onEnrichItem?.({
               original: ev.original,
+              full_name: ev.full_name ?? ev.original,
               translated: ev.translated,
               photoQuery: ev.photoQuery,
               photoQueryLocal: ev.photoQueryLocal,
@@ -446,7 +441,7 @@ export function enrichMenuOnServer(
 // pasek postępu), serwer buforuje per sesja i sam tnie na partie modelu w /scan/run. ───
 
 /** Zaczyna sesję skanu (parametry bez zdjęć) → zwraca sessionId. */
-export async function scanStart(params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
+export async function scanStart(params: { targetLang: string; restaurantHint?: string; locationHint?: string; location?: GeoPoint | null; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
   const res = await fetch(`${API_BASE}/scan/start`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(params) });
   readSessionCost(res.headers.get("x-session-cost"));
   if (!res.ok) throw new Error(`Nie udało się rozpocząć skanu (HTTP ${res.status}).`);
@@ -497,7 +492,7 @@ export function scanRun(
           const ev = JSON.parse(t);
           if (ev.phase === "extracting") onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items });
           else if (ev.phase === "received") onProgress?.({ phase: "received" });
-          else if (ev.phase === "item") onItem?.({ original: ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null });
+          else if (ev.phase === "item") onItem?.({ original: ev.original, full_name: ev.full_name ?? ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null });
           else if (ev.phase === "meta") onMeta?.({ restaurantName: ev.restaurantName, cuisine: ev.cuisine, venueMatch: ev.venueMatch });
         } catch { /* niepełna linia */ }
       }
@@ -523,6 +518,93 @@ export function scanRun(
     };
     xhr.send(JSON.stringify({ sessionId, stream: true, nearbyVenues }));
   });
+}
+
+/** Callbacki renderowe pipeline'u skanu — serwer streamuje, apka tylko odświeża widok po `id`. */
+export interface ScanPipelineHandlers {
+  onProgress?: (p: ScanPhase) => void;
+  /** „Live ticker" nazw w trakcie czytania struktury (mini-lista na ekranie skanu) — bez id. */
+  onItem?: (item: ScanItemStub) => void;
+  onMeta?: (m: { restaurantName?: string; cuisine?: string; venueMatch?: { index: number; by: "name" | "cuisine" } | null }) => void;
+  /** Autorytatywne, scalone menu z nadanymi `id` — apka buduje z niego ekran menu. */
+  onStructure?: (menu: Menu) => void;
+  /** Wzbogacona pozycja (tłumaczenie/opis/photo_query) — niesie `id`. */
+  onEnrichItem?: (item: ScanItemStub) => void;
+  /** Zdjęcia poglądowe dla pozycji o danym `id`. */
+  onPhoto?: (id: string, photos: DishPhotoLite[]) => void;
+  /** ★ zdjęcia „z lokalu" dla pozycji o danym `id`. */
+  onVenuePhoto?: (id: string, photos: DishPhotoLite[]) => void;
+  /** Rozpoznany lokal (karta: nazwa/ocena/TripAdvisor) + kandydaci do ręcznej zmiany — z serwera. */
+  onVenue?: (restaurant: RestaurantInfo, candidates: RestaurantInfo[]) => void;
+}
+
+/** PIPELINE skanu (jeden strumień): apka wysłała już zdjęcia (`scanStart`+`scanUploadPhoto`), tu otwiera
+ *  POJEDYNCZE połączenie — serwer robi strukturę→enrich→zdjęcia poglądowe→★ i streamuje zdarzenia po `id`.
+ *  Apka NIE odsyła menu i niczego nie scala. `cancel()` przerywa (abort) → serwer staje i nie dolicza kosztu. */
+export function scanRunPipeline(
+  sessionId: string,
+  handlers: ScanPipelineHandlers,
+): { promise: Promise<{ menu: Menu; usage: Usage; cached: boolean }>; cancel: () => void } {
+  const t0 = Date.now();
+  const xhr = new XMLHttpRequest();
+  // google → bez publicznego URL: serwer ślе `photoName`, apka buduje proxy /place-photo (zna swój API_BASE).
+  const toLite = (photos: { url?: string; photoName?: string; [k: string]: unknown }[]): DishPhotoLite[] =>
+    photos
+      .map((ph) => ({ ...ph, url: ph.url ?? (ph.photoName ? placePhotoUrl(ph.photoName, 1000) : "") }) as DishPhotoLite)
+      .filter((p) => p.url);
+  const promise = new Promise<{ menu: Menu; usage: Usage; cached: boolean }>((resolve, reject) => {
+    xhr.open("POST", `${API_BASE}/scan/run`);
+    Object.entries(jsonHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v as string));
+    xhr.timeout = 600000; // pełny pipeline (struktura+enrich+zdjęcia+★) dużego menu — duży zapas
+    let scanned = 0;
+    const parseLines = (text: string) => {
+      const nl = text.lastIndexOf("\n");
+      if (nl < scanned) return;
+      const chunk = text.slice(scanned, nl);
+      scanned = nl + 1;
+      for (const line of chunk.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const ev = JSON.parse(t);
+          switch (ev.phase) {
+            case "received": handlers.onProgress?.({ phase: "received" }); break;
+            case "extracting": handlers.onProgress?.({ phase: "extracting", elapsedMs: ev.elapsedMs ?? Date.now() - t0, items: ev.items }); break;
+            case "item": handlers.onItem?.({ id: ev.id, original: ev.original, full_name: ev.full_name ?? ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null }); break;
+            case "meta": handlers.onMeta?.({ restaurantName: ev.restaurantName, cuisine: ev.cuisine, venueMatch: ev.venueMatch }); break;
+            case "structure": if (ev.menu) handlers.onStructure?.(ev.menu as Menu); break;
+            case "enrich-item": handlers.onEnrichItem?.({ id: ev.id, original: ev.original, full_name: ev.full_name ?? ev.original, translated: ev.translated, photoQuery: ev.photoQuery, photoQueryLocal: ev.photoQueryLocal, branded: !!ev.branded, description: ev.description ?? "", price: ev.price ?? null, currency: ev.currency ?? null }); break;
+            case "photo": if (ev.id) handlers.onPhoto?.(ev.id, toLite(ev.photos ?? [])); break;
+            case "venue-photo": if (ev.id) handlers.onVenuePhoto?.(ev.id, toLite(ev.photos ?? [])); break;
+            case "venue": if (ev.restaurant) handlers.onVenue?.(ev.restaurant as RestaurantInfo, (ev.candidates ?? []) as RestaurantInfo[]); break;
+            case "cost": readSessionCost(ev.costUsd != null ? String(ev.costUsd) : null); break;
+          }
+        } catch { /* niepełna linia */ }
+      }
+    };
+    xhr.onprogress = () => parseLines(xhr.responseText);
+    const fail = (msg: string) => { appLog.logCall({ ts: Date.now(), label: "scan-pipeline", ok: false, ms: Date.now() - t0, detail: msg }); reject(new Error(msg)); };
+    xhr.onerror = () => fail("Błąd sieci podczas skanu.");
+    xhr.ontimeout = () => fail("Skan trwał za długo (timeout).");
+    xhr.onload = () => {
+      readSessionCost(xhr.getResponseHeader("x-session-cost"));
+      appLog.logCall({ ts: Date.now(), label: "scan-pipeline", ok: xhr.status >= 200 && xhr.status < 300, ms: Date.now() - t0, detail: xhr.status >= 200 && xhr.status < 300 ? undefined : `HTTP ${xhr.status}` });
+      const out = xhr.responseText || "";
+      let result: { menu?: Menu; usage?: Usage; error?: string; cached?: boolean } | null = null;
+      for (const line of out.split("\n")) {
+        const tt = line.trim();
+        if (!tt) continue;
+        try { const ev = JSON.parse(tt); if (ev.phase === "done" || ev.error) result = ev; } catch { /* keepalive/niepełne */ }
+      }
+      if (!result) return fail("Połączenie przerwane w trakcie skanu — spróbuj ponownie.");
+      if (xhr.status < 200 || xhr.status >= 300 || result.error) return fail(result.error ?? `Błąd serwera (HTTP ${xhr.status})`);
+      if (!result.menu) return fail("Pusta odpowiedź serwera.");
+      resolve({ menu: result.menu, usage: result.usage ?? ZERO_USAGE, cached: !!result.cached });
+    };
+    // nearbyVenues (venue_match) liczy SERWER z GPS z scanStart — apka już ich nie wysyła.
+    xhr.send(JSON.stringify({ sessionId, stream: true, pipeline: true }));
+  });
+  return { promise, cancel: () => { try { xhr.abort(); } catch { /* już zamknięte */ } } };
 }
 
 export interface DishInfoParams {
@@ -640,14 +722,17 @@ export function placePhotoUrl(photoName: string, width = 800): string {
 
 export interface VenueMatch {
   dish: string;
-  source: "google" | "tripadvisor";
+  /** Tier 0: „google"/„tripadvisor". Szeroka pula: też kategorie źródła („restaurant"/„web"/portale). */
+  source: string;
   photoName?: string; // Google: nazwa zasobu (→ placePhotoUrl)
-  url?: string; // TripAdvisor: bezpośredni URL
+  url?: string; // pozostałe źródła: bezpośredni URL
   caption: string | null;
   confidence: number;
 }
 
-/** Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań. */
+/** Zdjęcia z lokalu → dania. Serwer wybiera tryb (Tier 0 Google/TA albo SZEROKA PULA Serper+Google+TA)
+ *  na podstawie configu (toggle photoVenue / photoVenuePool z LABu). `venue` (nazwa/strona/miasto)
+ *  potrzebne do harvestu Serperem przy szerokiej puli — ignorowane przez klasyczny Tier 0. */
 export async function fetchVenuePhotos(
   photoNames: string[],
   taPhotos: { url: string; caption: string | null }[],
@@ -655,11 +740,12 @@ export async function fetchVenuePhotos(
   cuisine?: string,
   model?: string,
   certain = true,
+  venue?: { name?: string; website?: string; city?: string },
 ): Promise<{ matches: VenueMatch[]; usage: Usage }> {
   const res = await loggedFetch("venue-photos", `${API_BASE}/venue-photos`, {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine, model, certain }),
+    body: JSON.stringify({ photoNames, taPhotos, dishes, cuisine, model, certain, name: venue?.name, website: venue?.website, city: venue?.city }),
   });
   const json = (await res.json()) as { matches?: VenueMatch[]; usage?: Usage; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
@@ -741,14 +827,45 @@ export async function fetchDiagnostics(): Promise<{ now: number; providers: Diag
 
 /** Zachowania auto-dociągania STEROWANE Z SERWERA (config runtime): czy opisy od razu po skanie + limit dań.
  *  Dawne „Koszty/Limity" z apki — teraz ustawiane w LAB. Błąd/brak → bezpieczne domyślne (opisy off, limit=wszystkie). */
-export async function fetchAppConfig(): Promise<{ autoDescriptions: boolean; autoLimit: number }> {
+export async function fetchAppConfig(): Promise<{ autoDescriptions: boolean; autoLimit: number; imageMaxEdge?: number; imageQuality?: number; peekImageMaxEdge?: number; peekImageQuality?: number }> {
   try {
     const res = await fetch(`${API_BASE}/app-config`, { headers: jsonHeaders() });
     if (!res.ok) return { autoDescriptions: false, autoLimit: 0 };
-    const j = (await res.json()) as { autoDescriptions?: boolean; autoLimit?: number };
-    return { autoDescriptions: j.autoDescriptions === true, autoLimit: Number(j.autoLimit) || 0 };
+    const j = (await res.json()) as { autoDescriptions?: boolean; autoLimit?: number; imageMaxEdge?: number; imageQuality?: number; peekImageMaxEdge?: number; peekImageQuality?: number };
+    return {
+      autoDescriptions: j.autoDescriptions === true,
+      autoLimit: Number(j.autoLimit) || 0,
+      // SPEC zdjęć DO MODELU (serwer wylicza z modeli skanu i peeka) — apka dociela przed wysyłką. Brak = fallback w image.ts.
+      imageMaxEdge: Number.isFinite(j.imageMaxEdge) ? Number(j.imageMaxEdge) : undefined,
+      imageQuality: Number.isFinite(j.imageQuality) ? Number(j.imageQuality) : undefined,
+      peekImageMaxEdge: Number.isFinite(j.peekImageMaxEdge) ? Number(j.peekImageMaxEdge) : undefined,
+      peekImageQuality: Number.isFinite(j.peekImageQuality) ? Number(j.peekImageQuality) : undefined,
+    };
   } catch {
     return { autoDescriptions: false, autoLimit: 0 };
+  }
+}
+
+// Podgląd EFEKTYWNEJ konfiguracji serwera (read-only) — apka pokazuje to w Ustawieniach. Sterowane z LABu.
+export interface ServerConfigView {
+  models: Record<string, string>;
+  steps: Record<string, boolean>;
+  cacheReadOff: string[];
+  app: { autoDescriptions: boolean; autoLimit: number };
+}
+export async function fetchServerConfig(): Promise<ServerConfigView | null> {
+  try {
+    const res = await fetch(`${API_BASE}/server-config`, { headers: jsonHeaders() });
+    if (!res.ok) return null;
+    const j = (await res.json()) as Partial<ServerConfigView>;
+    return {
+      models: j.models ?? {},
+      steps: j.steps ?? {},
+      cacheReadOff: Array.isArray(j.cacheReadOff) ? j.cacheReadOff : [],
+      app: { autoDescriptions: j.app?.autoDescriptions === true, autoLimit: Number(j.app?.autoLimit) || 0 },
+    };
+  } catch {
+    return null;
   }
 }
 

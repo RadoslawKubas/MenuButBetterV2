@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Icon } from "./Icon";
 import type { Menu, MenuItem, MenuNote } from "./types";
 import { colors } from "./theme";
 import { Lightbox, type LightboxPhoto, type LightboxState } from "./Lightbox";
@@ -23,6 +24,8 @@ function toLightbox(photos: MenuItem["photos"]): LightboxPhoto[] {
     fromVenue: p.fromVenue,
     fromVenueReason: p.fromVenueReason,
     attribution: p.attribution,
+    contextUrl: p.contextUrl,
+    domain: p.domain,
     score: p.score,
     rejected: p.rejected,
   }));
@@ -46,10 +49,10 @@ function clean(md: string): string {
 
 function Badges({ item }: { item: MenuItem }) {
   const badges: string[] = [];
-  if (item.dietary.vegan) badges.push("🌱 wega");
-  else if (item.dietary.vegetarian) badges.push("🥕 wege");
-  if (item.dietary.gluten_free) badges.push("🚫 gluten");
-  if (item.spice_level > 0) badges.push("🌶️".repeat(item.spice_level));
+  if (item.dietary.vegan) badges.push("wega");
+  else if (item.dietary.vegetarian) badges.push("wege");
+  if (item.dietary.gluten_free) badges.push("gluten");
+  if (item.spice_level > 0) badges.push("".repeat(item.spice_level));
   if (badges.length === 0) return null;
   return (
     <View style={styles.badgeRow}>
@@ -161,7 +164,7 @@ function InfoFooter({
                   ) : null}
                   {p.rejected ? (
                     <View style={styles.rejectedBadge}>
-                      <Text style={styles.rejectedBadgeText}>❌ odrzuc.{p.score != null ? ` ${Math.round(p.score * 100)}%` : ""}</Text>
+                      <Text style={styles.rejectedBadgeText}><Icon name="close" /> odrzuc.{p.score != null ? ` ${Math.round(p.score * 100)}%` : ""}</Text>
                     </View>
                   ) : null}
                   <View style={[styles.sourceBar, { backgroundColor: sourceMeta(p.source).color }]}>
@@ -178,7 +181,7 @@ function InfoFooter({
                     <ActivityIndicator size="small" color={colors.accent} />
                   ) : (
                     <>
-                      <Text style={styles.morePhotosGlyph}>🔍</Text>
+                      <Text style={styles.morePhotosGlyph}><Icon name="search" /></Text>
                       <Text style={styles.morePhotosText}>więcej{"\n"}zdjęć</Text>
                     </>
                   )}
@@ -186,7 +189,7 @@ function InfoFooter({
               ) : null}
             </ScrollView>
             <Text style={styles.photoNote}>
-              {anyRepresentative ? "🔸 Poglądowe (typ dania) · " : "📷 "}dotknij zdjęcie, by powiększyć
+              {anyRepresentative ? "Poglądowe (typ dania) · " : ""}dotknij zdjęcie, by powiększyć
             </Text>
           </>
         ) : !item.photosUpgraded ? (
@@ -196,7 +199,7 @@ function InfoFooter({
               <ActivityIndicator size="small" color={colors.accent} />
             ) : (
               <>
-                <Text style={styles.morePhotosGlyph}>🔍</Text>
+                <Text style={styles.morePhotosGlyph}><Icon name="search" /></Text>
                 <Text style={styles.morePhotosText}>poszukaj zdjęć</Text>
               </>
             )}
@@ -204,7 +207,7 @@ function InfoFooter({
         ) : (
           // Szukano, nic nie znaleziono — wyblakły placeholder.
           <View style={[styles.dishPhoto, styles.thumbPlaceholder, styles.photoStrip]}>
-            <Text style={styles.thumbPlaceholderGlyph}>🍽️</Text>
+            <Text style={styles.thumbPlaceholderGlyph}><Icon name="food" /></Text>
           </View>
         )}
         {item.extraInfo ? (
@@ -215,9 +218,9 @@ function InfoFooter({
             <Text style={styles.infoHint}>  Generuję opis…</Text>
           </View>
         ) : null}
-        {/* Debug wyszukiwania zdjęć (małe 🐛). */}
+        {/* Debug wyszukiwania zdjęć (małe <Icon name="bug" />). */}
         <Pressable onPress={() => setShowDebug((v) => !v)} hitSlop={6}>
-          <Text style={styles.debugBtn}>🐛 debug zdjęć {showDebug ? "▲" : "▾"}</Text>
+          <Text style={styles.debugBtn}><Icon name="bug" /> debug zdjęć {showDebug ? "▲" : "▾"}</Text>
         </Pressable>
         {showDebug ? <PhotoDebugPanel item={item} /> : null}
         <Text style={styles.infoToggle}>▲ Zwiń</Text>
@@ -228,7 +231,7 @@ function InfoFooter({
     return (
       <View style={styles.infoRow}>
         <Text style={styles.infoAvail}>
-          ℹ️ Więcej info{photos.length > 1 ? ` i ${photos.length} zdjęcia` : photos.length === 1 ? " i zdjęcie" : ""} ✓
+          <Icon name="info" /> Więcej info{photos.length > 1 ? ` i ${photos.length} zdjęcia` : photos.length === 1 ? " i zdjęcie" : ""} ✓
         </Text>
       </View>
     );
@@ -243,12 +246,29 @@ function InfoFooter({
   }
   return (
     <View style={styles.infoRow}>
-      <Text style={styles.infoHint}>ℹ️ Więcej info ›</Text>
+      <Text style={styles.infoHint}><Icon name="info" /> Więcej info ›</Text>
     </View>
   );
 }
 
-const NOTE_ICON: Record<string, string> = { set: "🎫", included: "🍽", wait: "⏱", fee: "➕", tax: "🧾", tip: "💶", hours: "🕒", info: "ℹ️" };
+const NOTE_ICON: Record<string, string> = { set: "", included: "", wait: "", fee: "", tax: "", tip: "", hours: "", info: "" };
+
+/** Wyłuskuje SAMĄ cenę z notatki zestawu (która bywa długa: cena + dodatki + godziny + wybór). Dopasowuje
+ *  kwotę z walutą: „28 PLN", „19,50€", „€19.50", „12 zł", „$10". Zwraca null, gdy nie ma kwoty. */
+function extractSetPrice(text: string): string | null {
+  const m = text.match(/[€$£]\s?\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s?(?:€|£|\$|eur|pln|zł|zl|usd|gbp|kč|czk|chf|huf)/i);
+  return m ? m[0].trim() : null;
+}
+/** Reszta notatki zestawu PO wyłuskaniu ceny (bez etykiet „cena/precio" i wiodących separatorów). */
+function setNoteRest(text: string, price: string | null): string {
+  if (!price) return "";
+  return text
+    .replace(price, " ")
+    .replace(/\b(precio|preu|cena|price|prezzo|prix|preis)\b\s*:?/gi, " ")
+    .replace(/^[\s:—–\-·•]+/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 /** Adnotacje menu (czas oczekiwania, dopłaty, VAT…) — osobny blok, nie dania. */
 function NotesBlock({ notes, title }: { notes: MenuNote[]; title?: string }) {
@@ -259,9 +279,34 @@ function NotesBlock({ notes, title }: { notes: MenuNote[]; title?: string }) {
       {notes.map((n, i) => {
         const tr = (n.text_translated || n.text).trim();
         const showOrig = tr && tr !== n.text.trim();
+        // ZESTAW/menu dnia: cena zestawu to NIE drobna notatka — wyróżniamy ją banerem (jak cena dania,
+        // dobrze widoczna), żeby nie ginęła wśród adnotacji.
+        if (n.kind === "set") {
+          const price = extractSetPrice(tr);
+          const rest = setNoteRest(tr, price);
+          return (
+            <View key={i}>
+              {price ? (
+                <View style={styles.setPriceNote}>
+                  <Text style={styles.setPriceIcon}>{NOTE_ICON.set}</Text>
+                  <Text style={styles.setPriceText}>Cena: {price}</Text>
+                </View>
+              ) : null}
+              {!price || rest ? (
+                <View style={styles.noteRow}>
+                  <Text style={styles.noteIcon}>{NOTE_ICON.set}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.noteText}>{price ? rest : tr}</Text>
+                    {showOrig ? <Text style={styles.noteOriginal}>{n.text}</Text> : null}
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          );
+        }
         return (
           <View key={i} style={styles.noteRow}>
-            <Text style={styles.noteIcon}>{NOTE_ICON[n.kind] || "ℹ️"}</Text>
+            <Text style={styles.noteIcon}>{NOTE_ICON[n.kind] || ""}</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.noteText}>{tr}</Text>
               {showOrig ? <Text style={styles.noteOriginal}>{n.text}</Text> : null}
@@ -295,6 +340,7 @@ export function MenuView({
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [collapsedCourses, setCollapsedCourses] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<LightboxState | null>(null);
   const headerName = menu.restaurant_name || nameFallback || null;
 
@@ -303,6 +349,16 @@ export function MenuView({
       const next = new Set(prev);
       if (next.has(si)) next.delete(si);
       else next.add(si);
+      return next;
+    });
+  }
+
+  // Zwijanie POJEDYNCZEJ podgrupy zestawu (1. danie / 2. danie / deser) — klucz: „si::course".
+  function toggleCourse(key: string) {
+    setCollapsedCourses((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -332,15 +388,18 @@ export function MenuView({
       ) : null}
 
       <NotesBlock
-        title="ℹ️ Dobrze wiedzieć"
+        title="Dobrze wiedzieć"
         notes={(menu.notes ?? []).filter((n) => n.scope === "menu" || n.section_index == null)}
       />
 
       {menu.sections.map((section, si) => {
         const isCollapsed = collapsed.has(si);
         const secNotes = (menu.notes ?? []).filter((n) => n.scope === "section" && n.section_index === si);
+        // Sekcja-ZESTAW (menu dnia): ma podgrupy course lub notatkę [set] → ramka wspólna, żeby było widać,
+        // że to jedno menu, a dania są jego częściami.
+        const isSet = section.items.some((it) => !!it.course) || secNotes.some((n) => n.kind === "set");
         return (
-        <View key={si} style={styles.section}>
+        <View key={si} style={[styles.section, isSet && styles.setSection]}>
           <Pressable onPress={() => toggleSection(si)} style={styles.sectionHeader}>
             <Text style={styles.sectionChevron}>{isCollapsed ? "▸" : "▾"}</Text>
             <View style={styles.sectionHeaderText}>
@@ -351,7 +410,7 @@ export function MenuView({
               <Text style={styles.sectionOriginal}>{section.name}</Text>
               {section.availability ? (
                 <View style={styles.availBadge}>
-                  <Text style={styles.availText}>⏰ {section.availability}</Text>
+                  <Text style={styles.availText}><Icon name="clock" /> {section.availability}</Text>
                 </View>
               ) : null}
             </View>
@@ -361,9 +420,17 @@ export function MenuView({
             const key = `${si}-${ii}`;
             // Zestaw: podgrupy „1. danie/2. danie/deser" — nagłówek, gdy course się zmienia.
             const showCourse = !!item.course && item.course !== (ii > 0 ? section.items[ii - 1].course : undefined);
+            const courseKey = `${si}::${item.course ?? ""}`;
+            const courseCollapsed = !!item.course && collapsedCourses.has(courseKey);
             return (
               <View key={ii}>
-                {showCourse ? <Text style={styles.courseHeader}>{item.course}</Text> : null}
+                {showCourse ? (
+                  <Pressable onPress={() => toggleCourse(courseKey)} style={styles.courseHeaderRow}>
+                    <Text style={styles.courseChevron}>{courseCollapsed ? "▸" : "▾"}</Text>
+                    <Text style={styles.courseHeader}>{item.course}</Text>
+                  </Pressable>
+                ) : null}
+                {courseCollapsed ? null : (
               <Pressable style={styles.card} onPress={() => press(si, ii, item)}>
                 <View style={styles.cardRow}>
                   <View style={styles.cardMain}>
@@ -391,14 +458,14 @@ export function MenuView({
                     {enriching && !item.enriched ? (
                       <View style={styles.pendingRow}>
                         <ActivityIndicator size="small" color={colors.muted} />
-                        <Text style={styles.pendingText}>tłumaczę i opisuję…</Text>
+                        <Text style={styles.pendingText}>opisuję…</Text>
                       </View>
                     ) : null}
                     {item.menu_description_translated && item.menu_description_translated.trim() ? (
                       <Text style={styles.menuDesc}>„{item.menu_description_translated.trim()}"</Text>
                     ) : null}
                     {item.source_text && item.source_text.trim() && item.source_text.trim() !== item.original.trim() ? (
-                      <Text style={styles.sourceText}>📄 {item.source_text}</Text>
+                      <Text style={styles.sourceText}><Icon name="file" /> {item.source_text}</Text>
                     ) : null}
                     <Badges item={item} />
                     <Text style={styles.description}>{item.description}</Text>
@@ -417,7 +484,7 @@ export function MenuView({
                         {/* Wyblakły placeholder zawsze pod spodem — daje stały rozmiar i tło, więc
                             layout się nie przesuwa, gdy zdjęcia brak albo jeszcze się ładuje. */}
                         <View style={[styles.cardThumb, styles.thumbPlaceholder]}>
-                          <Text style={styles.thumbPlaceholderGlyph}>🍽️</Text>
+                          <Text style={styles.thumbPlaceholderGlyph}><Icon name="food" /></Text>
                         </View>
                         {photo ? (
                           <CachedImage
@@ -461,6 +528,7 @@ export function MenuView({
                   onSearchMore={() => onSearchMorePhotos(si, ii)}
                 />
               </Pressable>
+                )}
               </View>
             );
           })}
@@ -484,7 +552,12 @@ const styles = StyleSheet.create({
   noteIcon: { fontSize: 15, marginTop: 1 },
   noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
   noteOriginal: { fontSize: 12, color: colors.muted, fontStyle: "italic", marginTop: 1 },
+  setPriceNote: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, marginTop: 4, marginBottom: 4 },
+  setPriceIcon: { fontSize: 18 },
+  setPriceText: { flex: 1, fontSize: 16, fontWeight: "800", color: "#FFFFFF" },
+  setPriceOriginal: { fontSize: 12, color: "#FFFFFFB0", fontStyle: "italic", marginTop: 1 },
   section: { marginBottom: 24 },
+  setSection: { borderWidth: 1.5, borderColor: colors.accent + "44", backgroundColor: colors.bg, borderRadius: 14, padding: 12, paddingBottom: 6 },
   // Nagłówek sekcji — klikalny (zwija/rozwija grupę).
   sectionHeader: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 6 },
   sectionChevron: { fontSize: 15, color: colors.accent, width: 16, marginTop: 6 },
@@ -551,7 +624,9 @@ const styles = StyleSheet.create({
   // Dopłata przy wyborze w zestawie (gdy danie bez własnej ceny).
   surcharge: { fontSize: 14, fontWeight: "800", color: colors.accent, flexShrink: 0 },
   // Nagłówek podgrupy zestawu („1. danie").
-  courseHeader: { fontSize: 12, fontWeight: "800", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4, marginTop: 10, marginBottom: 2, marginLeft: 2 },
+  courseHeaderRow: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 14, marginBottom: 4, paddingVertical: 4, paddingHorizontal: 8, backgroundColor: colors.accent + "12", borderRadius: 8, alignSelf: "flex-start" },
+  courseChevron: { fontSize: 14, color: colors.accent, width: 14, textAlign: "center", fontWeight: "800" },
+  courseHeader: { fontSize: 16, fontWeight: "800", color: colors.accent, letterSpacing: 0.2 },
   // Plakietka ograniczenia czasowego sekcji (menu dnia / weekend / sezon).
   availBadge: { alignSelf: "flex-start", backgroundColor: "#f6e0c0", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, marginTop: 3 },
   availText: { fontSize: 12, color: "#8a5a1a", fontWeight: "700" },

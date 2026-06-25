@@ -1,7 +1,9 @@
-// Ekran „Ustawienia": język + wejścia do Narzędzi + informacje techniczne (wersja + numer builda, serwer,
-// status kluczy). Modele i Koszty/Limity sterowane teraz z LABu (config runtime na serwerze).
+// Ekran „Ustawienia": język + wejścia do Narzędzi + PODGLĄD ustawień serwera (read-only) + informacje
+// techniczne (wersja + numer builda, serwer, status kluczy). Modele, źródła zdjęć, weryfikacja, opisy i cache
+// ustawia się CENTRALNIE w panelu LAB (config runtime na serwerze) — apka tylko pokazuje, co serwer ma teraz.
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Icon } from "./Icon";
 import Constants from "expo-constants";
 import * as Application from "expo-application";
 import {
@@ -10,19 +12,38 @@ import {
   PROVIDER_DIAG_KEY,
   type ModelProvider,
 } from "./types";
-import { fetchDiagnostics, API_BASE, isForceFresh, setForceFresh } from "./api";
+import { fetchDiagnostics, fetchServerConfig, API_BASE, type ServerConfigView } from "./api";
 import { colors } from "./theme";
 
 const PROVIDER_ORDER: ModelProvider[] = ["anthropic", "openai", "google"];
 
-function CostSwitch({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <View style={styles.costRow}>
-      <Text style={styles.costLabel}>{label}</Text>
-      <Switch value={value} onValueChange={onChange} trackColor={{ true: colors.accent }} />
-    </View>
-  );
-}
+// Etykiety zgodne z panelem LAB (Config) — żeby podgląd w apce nazywał kroki tak samo.
+const MODEL_STEP_LABELS: [string, string][] = [
+  ["peek", "Szybki podgląd zdjęcia"],
+  ["scan", "Skan struktury menu"],
+  ["enrich", "Tłumaczenia + krótkie opisy"],
+  ["verify", "Weryfikacja zdjęć (vision)"],
+  ["dishInfo", "Długie opisy dań"],
+];
+const STEP_LABELS: [string, string][] = [
+  ["photoSerper", "Zdjęcia — Serper web (generyk)"],
+  ["photoSerperSite", "Zdjęcia — Serper z lokalu: strona www"],
+  ["photoSerperPortal", "Zdjęcia — Serper z lokalu: portale"],
+  ["photoWikimedia", "Zdjęcia — Wikimedia"],
+  ["photoOpenverse", "Zdjęcia — Openverse"],
+  ["photoVenue", "Zdjęcia z lokalu — Tier 0 (Google/TA)"],
+  ["verifyPhotos", "Weryfikacja AI zdjęć"],
+  ["descriptions", "Długie opisy dań"],
+];
+const CACHE_LABELS: Record<string, string> = {
+  "repr-photos": "zdjęcia poglądowe",
+  "dish-info": "opisy dań",
+  "vision-url": "werdykty vision",
+  "menu-structure": "struktura menu",
+  "item-enrich": "wzbogacenie pozycji",
+  "venue-match": "dopasowanie zdjęć lokalu",
+  "bad-photo": "złe kadry (za słaba jakość)",
+};
 
 export function SettingsView({
   targetLang,
@@ -39,9 +60,19 @@ export function SettingsView({
   onOpenPricing: () => void;
   capturesCount: number;
 }) {
-  const [forceFresh, setForceFreshState] = useState(isForceFresh());
   // Status kluczy providerów (z /diagnostics) — by ostrzec przed modelem bez klucza.
   const [configured, setConfigured] = useState<Record<string, boolean> | null>(null);
+  // Podgląd konfiguracji serwera (read-only). null = jeszcze nie wczytano / błąd.
+  const [serverCfg, setServerCfg] = useState<ServerConfigView | null>(null);
+  const [cfgLoading, setCfgLoading] = useState(true);
+
+  function loadServerCfg() {
+    setCfgLoading(true);
+    fetchServerConfig()
+      .then((c) => setServerCfg(c))
+      .catch(() => setServerCfg(null))
+      .finally(() => setCfgLoading(false));
+  }
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +84,7 @@ export function SettingsView({
         setConfigured(map);
       })
       .catch(() => {});
+    loadServerCfg();
     return () => {
       alive = false;
     };
@@ -88,44 +120,83 @@ export function SettingsView({
         })}
       </View>
 
-      <Text style={styles.section}>Modele AI</Text>
-      <Text style={styles.sub}>
-        Modele dla poszczególnych etapów (skan, opisy, weryfikacja zdjęć…) ustawia się teraz centralnie w
-        panelu LAB (config runtime na serwerze) — apka korzysta z aktualnej konfiguracji serwera.
-      </Text>
-
-      <Text style={styles.section}>Koszty / limity</Text>
-      <Text style={styles.sub}>
-        Auto‑dociąganie po skanie (opisy od razu vs na kliknięcie, limit dań) oraz źródła zdjęć i weryfikacja
-        są teraz sterowane centralnie z panelu LAB (config runtime na serwerze).
-      </Text>
-
       <Text style={styles.section}>Narzędzia</Text>
       <Pressable style={styles.toolBtn} onPress={onOpenPricing}>
-        <Text style={styles.toolText}>💲 Cennik (modele i API)</Text>
+        <Text style={styles.toolText}><Icon name="money" /> Cennik (modele i API)</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
       <Pressable style={styles.toolBtn} onPress={onOpenCaptures}>
-        <Text style={styles.toolText}>🧪 Migawki (tryb testowy){capturesCount ? ` · ${capturesCount}` : ""}</Text>
+        <Text style={styles.toolText}><Icon name="flask" /> Migawki (tryb testowy){capturesCount ? ` · ${capturesCount}` : ""}</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
       <Pressable style={styles.toolBtn} onPress={onOpenDiagnostics}>
-        <Text style={styles.toolText}>📊 Diagnostyka i logi</Text>
+        <Text style={styles.toolText}><Icon name="chartBar" /> Diagnostyka i logi</Text>
         <Text style={styles.toolChevron}>›</Text>
       </Pressable>
 
-      <Text style={styles.section}>Debugowanie</Text>
-      <Text style={styles.sub}>
-        Tryb bez cache: serwer NIE czyta z cache (generuje wszystko od nowa — skan, opisy, zdjęcia), ale świeży
-        wynik nadal zapisuje (cache się odświeża). Do testowania zmian. Zostaw wyłączone na co dzień.
-      </Text>
-      <View style={styles.roleCard}>
-        <CostSwitch
-          label="🧪 Wymuś świeży wynik (bez cache)"
-          value={forceFresh}
-          onChange={(v) => { setForceFreshState(v); void setForceFresh(v); }}
-        />
+      <View style={styles.cfgHead}>
+        <Text style={[styles.section, styles.cfgHeadText]}>Konfiguracja serwera</Text>
+        <Pressable onPress={loadServerCfg} hitSlop={8}>
+          <Text style={styles.cfgRefresh}>↻ odśwież</Text>
+        </Pressable>
       </View>
+      <Text style={styles.sub}>
+        Podgląd tego, co ustawiono w panelu LAB (Config) i wysłano na serwer. Tu tylko do wglądu — apka stosuje
+        aktualną konfigurację serwera, nie zmienia jej.
+      </Text>
+      {cfgLoading && !serverCfg ? (
+        <Text style={styles.cfgMuted}>Wczytywanie…</Text>
+      ) : !serverCfg ? (
+        <Text style={styles.cfgMuted}>Nie udało się wczytać konfiguracji serwera.</Text>
+      ) : (
+        <View style={styles.cfgBox}>
+          <Text style={styles.cfgGroup}>Modele AI (per krok)</Text>
+          {MODEL_STEP_LABELS.map(([key, label]) => (
+            <View key={key} style={styles.cfgRow}>
+              <Text style={styles.cfgKey}>{label}</Text>
+              <Text style={styles.cfgModel} numberOfLines={1}>{serverCfg.models[key] ?? "—"}</Text>
+            </View>
+          ))}
+
+          <Text style={styles.cfgGroup}>Aktywne kroki</Text>
+          {STEP_LABELS.map(([key, label]) => {
+            const on = serverCfg.steps[key] !== false;
+            return (
+              <View key={key} style={styles.cfgRow}>
+                <Text style={styles.cfgKey}>{label}</Text>
+                <Text style={[styles.cfgVal, on ? styles.cfgOn : styles.cfgOff]}>{on ? "✓ wł." : "✗ wył."}</Text>
+              </View>
+            );
+          })}
+
+          <Text style={styles.cfgGroup}>Odczyt z cache</Text>
+          {serverCfg.cacheReadOff.length === 0 ? (
+            <Text style={styles.cfgNote}>Wszystkie cache czytane normalnie.</Text>
+          ) : (
+            <>
+              <Text style={styles.cfgNote}>Wyłączony odczyt (regeneracja, ale zapis działa) dla:</Text>
+              {serverCfg.cacheReadOff.map((k) => (
+                <View key={k} style={styles.cfgRow}>
+                  <Text style={styles.cfgKey}>{CACHE_LABELS[k] ?? k}</Text>
+                  <Text style={[styles.cfgVal, styles.cfgOff]}>✗ odczyt wył.</Text>
+                </View>
+              ))}
+            </>
+          )}
+
+          <Text style={styles.cfgGroup}>Zachowania apki</Text>
+          <View style={styles.cfgRow}>
+            <Text style={styles.cfgKey}>Auto‑opisy dań po skanie</Text>
+            <Text style={[styles.cfgVal, serverCfg.app.autoDescriptions ? styles.cfgOn : styles.cfgOff]}>
+              {serverCfg.app.autoDescriptions ? "✓ od razu" : "✗ na kliknięcie"}
+            </Text>
+          </View>
+          <View style={styles.cfgRow}>
+            <Text style={styles.cfgKey}>Limit dań do auto‑dociągania zdjęć</Text>
+            <Text style={styles.cfgVal}>{serverCfg.app.autoLimit > 0 ? `${serverCfg.app.autoLimit}` : "wszystkie"}</Text>
+          </View>
+        </View>
+      )}
 
       <Text style={styles.section}>Informacje</Text>
       <View style={styles.infoBox}>
@@ -135,7 +206,7 @@ export function SettingsView({
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoK}>Serwer</Text>
-          <Text style={styles.infoV} numberOfLines={1}>{isProd ? "🌐 produkcja" : "💻 lokalny"} · {serverHost}</Text>
+          <Text style={styles.infoV} numberOfLines={1}>{isProd ? "produkcja" : "lokalny"} · {serverHost}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoK}>Klucze</Text>
@@ -159,37 +230,24 @@ const styles = StyleSheet.create({
   chipText: { color: colors.text, fontWeight: "600", fontSize: 13 },
   chipTextActive: { color: colors.buttonText },
 
-  preset: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.badgeBg, minWidth: 100 },
-  presetActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  presetLabel: { color: colors.text, fontWeight: "800", fontSize: 14 },
-  presetDesc: { color: colors.muted, fontSize: 11, marginTop: 1 },
-  presetDescActive: { color: colors.buttonText, opacity: 0.85 },
-  resetBtn: { marginTop: 10, alignSelf: "flex-start" },
-  resetText: { color: colors.accent, fontWeight: "700", fontSize: 13 },
-
-  roleCard: { backgroundColor: colors.card, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: colors.badgeBg, overflow: "hidden" },
-  roleHeader: { flexDirection: "row", alignItems: "center", padding: 12, gap: 10 },
-  roleHeadMain: { flex: 1 },
-  roleLabel: { fontSize: 15, fontWeight: "700", color: colors.text },
-  roleHint: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  roleCur: { alignItems: "flex-end" },
-  roleCurModel: { fontSize: 13, fontWeight: "700", color: colors.accent, maxWidth: 130 },
-  roleCurPrice: { fontSize: 11, color: colors.muted },
-  chevron: { fontSize: 18, color: colors.muted, width: 16, textAlign: "center" },
-  picker: { paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
-  provGroup: { marginTop: 4 },
-  provLabel: { fontSize: 11, fontWeight: "700", color: colors.muted, marginBottom: 6 },
-  modelChip: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.badgeBg, alignItems: "center" },
-  modelChipWarn: { borderColor: "#d6a200", borderStyle: "dashed" },
-  modelChipText: { color: colors.text, fontWeight: "700", fontSize: 13 },
-  modelChipPrice: { color: colors.muted, fontSize: 10, marginTop: 1 },
-
-  costRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6, gap: 10 },
-  costLabel: { fontSize: 14, color: colors.text, fontWeight: "600", flexShrink: 1 },
-  costLimitLabel: { fontSize: 13, fontWeight: "700", color: colors.muted, marginTop: 10, marginBottom: 8 },
   toolBtn: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.card, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 16, marginBottom: 10, borderWidth: 1, borderColor: colors.badgeBg },
   toolText: { fontSize: 15, fontWeight: "700", color: colors.text },
   toolChevron: { fontSize: 20, color: colors.muted },
+
+  // Podgląd konfiguracji serwera (read-only)
+  cfgHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 18 },
+  cfgHeadText: { marginTop: 0, marginBottom: 0 },
+  cfgRefresh: { color: colors.accent, fontWeight: "700", fontSize: 13 },
+  cfgMuted: { fontSize: 13, color: colors.muted, fontStyle: "italic", marginBottom: 8 },
+  cfgBox: { backgroundColor: colors.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: colors.badgeBg },
+  cfgGroup: { fontSize: 12, fontWeight: "800", color: colors.muted, marginTop: 12, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.3 },
+  cfgRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 5, gap: 12 },
+  cfgKey: { fontSize: 13, color: colors.text, flexShrink: 1 },
+  cfgVal: { fontSize: 13, fontWeight: "700", color: colors.text, textAlign: "right" },
+  cfgModel: { fontSize: 12, fontWeight: "700", color: colors.accent, maxWidth: 150, textAlign: "right" },
+  cfgOn: { color: colors.accent },
+  cfgOff: { color: colors.muted },
+  cfgNote: { fontSize: 12, color: colors.muted, marginTop: 2, marginBottom: 2, lineHeight: 16 },
 
   infoBox: { backgroundColor: colors.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: colors.badgeBg },
   infoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4, gap: 12 },

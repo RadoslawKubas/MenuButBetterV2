@@ -74,6 +74,7 @@
   <h1>🔬 LAB</h1>
   <nav class="tabs">
     <button class="tab on" id="tabBtn-lab" onclick="switchTab('lab')">🧪 Laboratorium</button>
+    <button class="tab" id="tabBtn-flow" onclick="switchTab('flow')">🎬 Pełny flow</button>
     <button class="tab" id="tabBtn-logs" onclick="switchTab('logs')">📊 Logi</button>
     <button class="tab" id="tabBtn-cache" onclick="switchTab('cache')">🗄 Cache</button>
     <button class="tab" id="tabBtn-samples" onclick="switchTab('samples')">📦 Sample</button>
@@ -98,7 +99,7 @@
       <span>Migawki — klik = do testu · 📍 lokal · 🗄 archiwum</span>
       <button id="archToggle" onclick="toggleShowArchived()" style="padding:3px 8px; font-size:12px"></button>
     </div>
-    <input type="text" id="capQuery" placeholder="🔍 szukaj migawki (nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderCaptures()" />
+    <input type="text" id="capQuery" placeholder="🔍 szukaj migawki (id, nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderCaptures()" />
     <div id="captures"></div>
   </div>
 
@@ -153,8 +154,10 @@
       <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap">
         <button class="primary" id="simScanBtn" onclick="simScan(false)">1) Skanuj menu</button>
         <button id="simRescanBtn" onclick="simScan(true)" title="zignoruj zapisany skan i zeskanuj od nowa (nadpisze)">🔄 na nowo</button>
+        <button id="simOnepassBtn" onclick="simOnepass()" title="EKSPERYMENT: porównaj skan JEDNOFAZOWY (struktura+enrich w 1 wywołaniu vision) vs DWUFAZOWY. Model = „skan: struktura". Liczy realny koszt (bez cache).">🧪 1-fazowy vs 2-fazowy</button>
         <span class="mut small" id="simInfo"></span>
       </div>
+      <div id="simOnepassOut"></div>
       <div id="simVenueBox"></div>
       <div id="simItems"></div>
     </div>
@@ -181,6 +184,46 @@
   </div>
 </div>
 </div><!-- /tab-lab -->
+
+<div id="tab-flow" class="tabpane scrollpane" style="display:none">
+  <style>
+    .flowSample{ display:inline-block; border:1px solid var(--line); border-radius:8px; padding:5px 9px; margin:3px 4px 3px 0; cursor:pointer; font-size:13px; }
+    .flowSample.on{ border-color:var(--acc); background:rgba(0,0,0,0.12); }
+    .flowItems{ display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:8px; }
+    .flowItem{ border:1px solid var(--line); border-radius:8px; padding:8px; }
+    .flowItemHead{ display:flex; justify-content:space-between; gap:6px; }
+    .flowThumbs{ display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+    .flowThumb{ width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+    .flowThumb.venue{ border-color:var(--acc); border-width:2px; }
+    .flowHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+    #flowResults .panel{ margin-top:10px; }
+    .flowStep{ border-left:3px solid var(--line); padding:3px 0 3px 8px; margin:3px 0; }
+    .flowStep.run{ border-left-color:#e9b949; }
+    .flowStep.done{ border-left-color:var(--acc); }
+    .flowDetails{ border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin:6px 0; }
+    .flowDetails summary{ cursor:pointer; font-weight:700; }
+    .flowJson{ max-height:340px; overflow:auto; background:rgba(0,0,0,0.18); border-radius:6px; padding:8px; font-size:11px; line-height:1.4; white-space:pre; margin:4px 0 0; }
+    .flowPhotoRow{ padding:4px 0; border-bottom:1px solid var(--line); }
+  </style>
+  <div class="panel">
+    <h3>🎬 Pełny flow na samplu</h3>
+    <div class="mut small">Odpala CAŁY produkcyjny pipeline (struktura → enrich → zdjęcia poglądowe → ★ lokal) na wybranych migawkach — dokładnie jak skan w apce, tylko in-process. Podgląd kompletu danych per pozycja + zdjęcia. Domyślnie z cache (tanie iteracje); „świeżo" liczy realny koszt/jakość.</div>
+    <div style="margin-top:10px; display:flex; gap:14px; flex-wrap:wrap; align-items:center">
+      <label class="small">Skan <select id="flowScanModel"></select></label>
+      <label class="small">Enrich <select id="flowEnrichModel"></select></label>
+      <label class="small">Weryfikacja zdjęć <select id="flowVerifyModel"></select></label>
+      <label class="small"><input type="checkbox" id="flowWithPhotos" checked> zdjęcia poglądowe</label>
+      <label class="small"><input type="checkbox" id="flowWithVenue"> ★ lokal</label>
+      <label class="small"><input type="checkbox" id="flowFresh"> świeżo (bez cache)</label>
+    </div>
+    <div style="margin-top:10px"><b>Sample</b> <span class="mut small">(zaznacz 1+)</span>
+      <span style="float:right"><span class="chip" onclick="flowSelectAll(true)">zaznacz wszystkie</span> <span class="chip" onclick="flowSelectAll(false)">wyczyść</span></span>
+    </div>
+    <div id="flowSamples" style="margin-top:6px"></div>
+    <button id="flowRunBtn" onclick="flowRunSelected()" style="margin-top:12px">▶ Odpal flow</button>
+  </div>
+  <div id="flowResults"></div>
+</div><!-- /tab-flow -->
 
 <div id="tab-logs" class="tabpane scrollpane" style="display:none">
   <div class="panel">
@@ -224,7 +267,7 @@
       <button id="archToggleBtn" onclick="toggleSampleArchive()" style="padding:3px 8px; font-size:12px"></button>
     </div>
     <div class="mut small" style="margin:4px 0 8px">Migawki w bibliotece labu — miniatura, nazwa, lokal/kuchnia, zapisany skan. Najnowsze na górze. Wejście do archiwum opcjonalne.</div>
-    <input type="text" id="sampleQuery" placeholder="🔍 szukaj sampla (nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderLocalSamples()" />
+    <input type="text" id="sampleQuery" placeholder="🔍 szukaj sampla (id, nazwa, lokal, kuchnia)…" style="width:100%; margin-bottom:8px; box-sizing:border-box" oninput="renderLocalSamples()" />
     <div id="localSamplesList"></div>
   </div>
   <div class="panel">
@@ -415,6 +458,135 @@ async function loadState() {
   renderModels(); renderOps(); renderCaptures(); renderMap(); renderSimSelects();
   if(document.getElementById('localSamplesList')) renderLocalSamples(); // zakładka Sample też aktualna
 }
+
+// ── 🎬 PEŁNY FLOW: odpala produkcyjny pipeline (struktura→enrich→zdjęcia→★) na wybranych samplach ──
+let FLOW_SEL = new Set();
+function renderFlow(){
+  if(!STATE){ loadState().then(renderFlow); return; }
+  const opts = STATE.models.map(m=>`<option value="${m.id}">${esc(m.label)}</option>`).join('');
+  [['flowScanModel','claude-sonnet-4-6'],['flowEnrichModel','claude-haiku-4-5'],['flowVerifyModel','claude-sonnet-4-6']].forEach(([id,def])=>{
+    const el=document.getElementById(id); if(!el) return;
+    if(!el.options.length){ el.innerHTML=opts; if(MODELS_HAS(def)) el.value=def; }
+  });
+  renderFlowSamples();
+}
+function flowName(id){ const c=(STATE&&STATE.captures||[]).find(x=>x.id===id); return c ? (c.name || (c.result&&c.result.restaurantName) || ('sample '+String(id).slice(0,8))) : String(id); }
+function renderFlowSamples(){
+  const caps=(STATE&&STATE.captures||[]).filter(c=>!c.archived).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  document.getElementById('flowSamples').innerHTML = caps.length ? caps.map(c=>{
+    const name=c.name || (c.result&&c.result.restaurantName) || ('sample '+String(c.id).slice(0,8));
+    const sub=[c.images+' zdj', c.locationHint, c.result&&c.result.cuisine].filter(Boolean).map(esc).join(' · ');
+    return `<label class="flowSample ${FLOW_SEL.has(c.id)?'on':''}"><input type="checkbox" ${FLOW_SEL.has(c.id)?'checked':''} onchange="flowToggle('${c.id}',this.checked)"> <b>${esc(name)}</b> <span class="mut small">${sub}</span></label>`;
+  }).join('') : '<div class="mut">brak migawek — wgraj sample w zakładce 📦 Sample</div>';
+}
+function flowToggle(id,on){ if(on) FLOW_SEL.add(id); else FLOW_SEL.delete(id); renderFlowSamples(); }
+function flowSelectAll(on){ const caps=(STATE&&STATE.captures||[]).filter(c=>!c.archived); FLOW_SEL = on ? new Set(caps.map(c=>c.id)) : new Set(); renderFlowSamples(); }
+function flowVal(id){ const el=document.getElementById(id); return el?el.value:undefined; }
+async function flowRunSelected(){
+  const ids=[...FLOW_SEL];
+  if(!ids.length){ alert('Zaznacz przynajmniej jeden sample.'); return; }
+  const btn=document.getElementById('flowRunBtn'); btn.disabled=true; const lbl=btn.textContent; btn.textContent='⏳ Odpalam…';
+  document.getElementById('flowResults').innerHTML = ids.map(id=>`<div class="panel" id="flowR-${id}"><div class="mut">⏳ ${esc(flowName(id))} — w toku…</div></div>`).join('');
+  for(const id of ids){ await flowRunOne(id); }
+  btn.disabled=false; btn.textContent=lbl;
+}
+const FLOW_RUN = {};
+async function flowRunOne(id){
+  const box=document.getElementById('flowR-'+id);
+  const st = FLOW_RUN[id] = { start:null, stepByName:{}, photos:[], done:null, error:null };
+  const render = () => { if(box) box.innerHTML = flowRenderLive(id, st); };
+  render();
+  const body={ captureId:id, scanModel:flowVal('flowScanModel'), enrichModel:flowVal('flowEnrichModel'), verifyModel:flowVal('flowVerifyModel'),
+    withPhotos:document.getElementById('flowWithPhotos').checked, withVenue:document.getElementById('flowWithVenue').checked, fresh:document.getElementById('flowFresh').checked };
+  try {
+    const resp = await fetch('/api/flow-run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if(!resp.ok || !resp.body){ st.error='HTTP '+resp.status+' '+(await resp.text().catch(()=>'')).slice(0,200); render(); return; }
+    const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf='';
+    for(;;){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let nl;
+      while((nl = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0,nl).trim(); buf = buf.slice(nl+1);
+        if(!line) continue;
+        let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
+        if(ev.phase==='start') st.start=ev;
+        else if(ev.phase==='step') st.stepByName[ev.step]=ev; // done nadpisuje start (więcej danych)
+        else if(ev.phase==='photo') st.photos.push(ev);
+        else if(ev.phase==='done') st.done=ev;
+        else if(ev.phase==='error'){ st.error=ev.error; st.done=ev; }
+        if(ev.phase!=='ping') render();
+      }
+    }
+  } catch(e){ st.error=String(e); render(); }
+}
+const FLOW_STEP_ORDER=['struktura','enrich','zdjęcia','lokal'];
+function flowRenderLive(id, st){
+  const running = !st.done && !st.error;
+  const head=`<div class="flowHead"><b>${esc(flowName(id))}</b>${running?'<span class="mut small">⏳ w toku…</span>':`<button onclick="flowRunOne('${id}')">↻ powtórz</button>`}</div>`;
+  const start = st.start ? `<div class="mut small">${st.start.images} zdj · modele: skan ${esc(st.start.models.scan)} · enrich ${esc(st.start.models.enrich)} · weryf. ${esc(st.start.models.verify)}${st.start.cache?' · 🗄 cache':' · świeżo'}</div>` : '';
+  const stepsHtml = FLOW_STEP_ORDER.filter(n=>st.stepByName[n]).map(n=>{
+    const s=st.stepByName[n], dn=s.status==='done';
+    const meta = dn ? `${s.ms}ms · ${fmtUsd(s.cost)}${s.model?' · '+esc(s.model):''}${s.cached?' · 🗄':''}${s.items!=null?' · '+s.items+' poz':''}${s.withPhotos!=null?' · 📷'+s.withPhotos:''}${s.tokens?` · ${fmtTokk(s.tokens.in)}→${fmtTokk(s.tokens.out)} tok`:''}` : 'w toku…';
+    return `<div class="flowStep ${dn?'done':'run'}"><b>${dn?'✓':'⏳'} ${esc(s.step)}</b> <span class="mut small">${meta}</span>${typeof s.sent==='string'?`<div class="mut small">↗ ${esc(s.sent)}</div>`:''}</div>`;
+  }).join('');
+  if(st.error) return head+start+stepsHtml+`<div class="mut" style="color:#f88">❌ ${esc(st.error)}</div>`;
+  if(!st.done){
+    const ph = st.photos.length ? `<div class="mut small">📷 zdjęcia spływają: ${st.photos.length} dań…</div>` : '';
+    return head+start+stepsHtml+ph;
+  }
+  const r=st.done;
+  const venue = r.venue ? (r.venue.error?`<span class="mut small">★ ${esc(r.venue.error)}</span>`:`<span class="chip">★ ${esc(r.venue.name)} · ${r.venue.matches} dopas. · Google:${r.venue.googlePhotos} TA:${r.venue.taPhotos}</span>`):'';
+  const items=(r.perItem||[]).map(flowItemCard).join('');
+  return head+start
+    +`<div class="mut small" style="margin:4px 0">${esc(r.restaurantName||'—')} · ${esc(r.cuisine||'—')} · ${r.items} poz · ${r.sections} sekcji · ${r.ms}ms · <b>${fmtUsd(r.cost)}</b></div>`
+    +stepsHtml
+    +(venue?`<div style="margin:6px 0">${venue}</div>`:'')
+    +flowJsonBlock('struct-'+id, '📐 Struktura menu (surowy JSON z vision — tożsamość, full_name, ceny)', r.structure)
+    +flowJsonBlock('menu-'+id, '🍽 Finalne menu (JSON — po enrichu)', r.menu)
+    +flowDetailBlocks(id, st)
+    +`<div class="flowItems">${items}</div>`;
+}
+function flowJsonBlock(key, title, obj){
+  if(obj==null) return '';
+  const pid='fjson-'+key;
+  return `<details class="flowDetails"><summary>${title}</summary><div style="text-align:right;margin:4px 0"><button onclick="copyText(document.getElementById('${pid}').textContent)">📋 kopiuj JSON</button></div><pre class="flowJson" id="${pid}">${esc(JSON.stringify(obj,null,2))}</pre></details>`;
+}
+function flowDetailBlocks(id, st){
+  let h='';
+  const enrichSent = st.stepByName['enrich'] && st.stepByName['enrich'].sent;
+  if(Array.isArray(enrichSent) && enrichSent.length)
+    h+=`<details class="flowDetails"><summary>📝 Enrich — co poszło do modelu (${enrichSent.length} dań, po full_name)</summary><div class="flowJson small">${enrichSent.map(esc).join('<br>')}</div></details>`;
+  const photoDetail = (st.stepByName['zdjęcia'] && st.stepByName['zdjęcia'].detail) || st.photos;
+  if(Array.isArray(photoDetail) && photoDetail.length){
+    const rows = photoDetail.map(d=>{
+      const searched=(d.searched||[]).map(s=>`<div class="mut small" style="margin-left:10px">• ${esc(s.provider)}${s.query?' — „'+esc(s.query)+'"':''} → ${(s.urls||[]).length} url</div>`).join('');
+      return `<div class="flowPhotoRow"><b>${esc(d.dish)}</b> <span class="mut small">🔎 ${esc(d.photoQuery||'')} → ${d.results} zdj${d.cached?' · 🗄':''}</span>${searched}</div>`;
+    }).join('');
+    h+=`<details class="flowDetails"><summary>🔎 Zdjęcia — zapytania wyszukiwania per danie (${photoDetail.length})</summary>${rows}</details>`;
+  }
+  const venue = st.stepByName['lokal'] && st.stepByName['lokal'].venue;
+  if(venue && !venue.error)
+    h+=`<details class="flowDetails"><summary>★ Lokal — szczegóły rozpoznania</summary><pre class="flowJson">${esc(JSON.stringify(venue,null,2))}</pre></details>`;
+  return h;
+}
+function flowItemCard(it){
+  const d=it.dietary||{}; const diet=[d.vegetarian?'🥕':'',d.vegan?'🌱':'',d.gluten_free?'🌾':''].filter(Boolean).join(' ');
+  const photos=(it.photos||[]).filter(p=>p.url).map(p=>`<img src="${esc(p.url)}" class="flowThumb ${p.fromVenue?'venue':''}" title="${esc(p.source||'')}${p.score!=null?' · '+Number(p.score).toFixed(2):''}${p.fromVenue?' · ★ z lokalu':''}" loading="lazy">`).join('');
+  return `<div class="flowItem">
+    <div class="flowItemHead"><b>${esc(it.translated||it.original)}</b><span class="mut small">${it.price?esc(String(it.price))+' '+esc(it.currency||''):''}</span></div>
+    <div class="mut small">id ${esc(String(it.id))} · ${esc(it.sectionT||it.section||'')}</div>
+    <div class="small"><span class="mut">original:</span> ${esc(it.original)} · <span class="mut">full_name:</span> <b>${esc(it.fullName||'')}</b></div>
+    ${it.fullDescription?`<div class="small mut">+ ${esc(it.fullDescription)}</div>`:''}
+    ${it.description?`<div class="small">${esc(it.description)}</div>`:''}
+    ${(diet||it.spice)?`<div class="small">${diet}${it.spice?' '+'🌶'.repeat(it.spice):''}</div>`:''}
+    ${it.ingredients&&it.ingredients.length?`<div class="small mut">składniki: ${esc(it.ingredients.join(', '))}</div>`:''}
+    ${it.allergens&&it.allergens.length?`<div class="small mut">alergeny: ${esc(it.allergens.join(', '))}</div>`:''}
+    <div class="small mut">🔎 ${esc(it.photoQuery||'—')}${it.photoQueryLocal&&it.photoQueryLocal!==it.photoQuery?' / '+esc(it.photoQueryLocal):''}${it.branded?' · 📦':''}</div>
+    <div class="flowThumbs">${photos||'<span class="mut small">— brak zdjęć —</span>'}</div>
+  </div>`;
+}
 function MODELS_HAS(id){ return STATE.models.some(m=>m.id===id); }
 async function refreshState(btn){
   btn.disabled=true; const t=btn.textContent; btn.textContent='↻ odświeżam…';
@@ -460,7 +632,7 @@ async function togglePrompts(){
 // Dopasowanie sampla do frazy (nazwa / lokal / kuchnia / nazwa instancji). Wspólne dla obu list.
 function matchCapture(c, q){
   if(!q) return true;
-  const hay=[c.name, c.locationHint, c.result&&c.result.restaurantName, c.result&&c.result.cuisine, c.installId, c.installId&&INST_NAMES[c.installId]].filter(Boolean).join(' ').toLowerCase();
+  const hay=[c.id, c.sig, c.name, c.locationHint, c.result&&c.result.restaurantName, c.result&&c.result.cuisine, c.installId, c.installId&&INST_NAMES[c.installId]].filter(Boolean).join(' ').toLowerCase();
   return hay.includes(q.toLowerCase());
 }
 function visibleCaptures(){
@@ -829,6 +1001,54 @@ async function simScan(force){
   }catch(e){ document.getElementById('simInfo').textContent='błąd: '+e.message; }
   finally{ btn.disabled=false; btn2.disabled=false; }
 }
+async function simOnepass(){
+  const id=[...SELECTED][0];
+  if(!id) return alert('Zaznacz JEDEN sample.');
+  const btn=document.getElementById('simOnepassBtn'); btn.disabled=true;
+  const out=document.getElementById('simOnepassOut');
+  const model=document.getElementById('simScanModel').value;
+  out.innerHTML=`<div class="mut small" style="margin-top:8px">🧪 puszczam OBA tory (${esc(model)}) — 1-fazowy oraz 2-fazowy… (to 3 wywołania vision, chwilę trwa)</div>`;
+  try{
+    const r=await api('/api/sim-onepass',{captureId:id, model});
+    if(r.error) throw new Error(r.error);
+    const o=r.onepass, t=r.twopass;
+    const usd=v=>'$'+(v||0).toFixed(4);
+    const oCost=o.usage?.costUsd||0, tCost=t.usage?.costUsd||0;
+    const cheaper = oCost<tCost ? '1-fazowy' : '2-fazowy';
+    const savePct = tCost>0 ? Math.round((1-oCost/tCost)*100) : 0;
+    const metric=(label,a,b,fmt)=>`<tr><td style="color:var(--mut)">${label}</td><td style="text-align:right"><b>${fmt(a)}</b></td><td style="text-align:right"><b>${fmt(b)}</b></td></tr>`;
+    const num=v=>String(v??'—');
+    // Zestawienie pozycji po nazwie oryginalnej (różnice photo_query/tłumaczenia zaznaczone).
+    const byO=its=>{const m={};(its||[]).forEach(it=>m[it.original]=it);return m;};
+    const oi=byO(o.items), ti=byO(t.items);
+    const origs=[...new Set([...(o.items||[]).map(i=>i.original),...(t.items||[]).map(i=>i.original)])];
+    const cell=it=> it? `<div><b>${esc(it.translated||'—')}</b>${it.course?` <span class="badge venue">${esc(it.course)}</span>`:''}</div><div class="mut small">🔎 ${esc(it.photoQuery||'—')}</div><div class="mut small" style="opacity:.85">${esc(trunc(it.description||'—',90))}</div>` : '<span class="mut small">— brak —</span>';
+    const rows=origs.map(orig=>{ const a=oi[orig], b=ti[orig];
+      const diffPQ = a&&b&&(a.photoQuery||'')!==(b.photoQuery||''); const diffTr=a&&b&&(a.translated||'')!==(b.translated||'');
+      return `<tr style="border-top:1px solid rgba(255,255,255,.07)"><td style="vertical-align:top; padding:5px 6px; max-width:160px"><b>${esc(trunc(orig,40))}</b>${diffPQ||diffTr?`<div class="mut small" style="color:#e8c170">${[diffTr?'≠tłum':'',diffPQ?'≠foto':''].filter(Boolean).join(' ')}</div>`:''}</td><td style="vertical-align:top; padding:5px 6px; ${diffPQ||diffTr?'background:rgba(232,193,112,.06)':''}">${cell(a)}</td><td style="vertical-align:top; padding:5px 6px; ${diffPQ||diffTr?'background:rgba(232,193,112,.06)':''}">${cell(b)}</td></tr>`;
+    }).join('');
+    out.innerHTML=`<div class="step" style="margin-top:8px; border-color:var(--acc)">
+      <div class="hd"><b>🧪 Jednofazowo vs dwufazowo</b> <span class="mut small">${esc(r.model)}</span>
+        <span class="pill ${savePct>=0?'ok':'no'}">1-fazowy ${savePct>=0?'tańszy o '+savePct+'%':'droższy o '+(-savePct)+'%'}</span></div>
+      <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:12px">
+        <thead><tr><th></th><th style="text-align:right">1-fazowy (scan+enrich razem)</th><th style="text-align:right">2-fazowy (osobno)</th></tr></thead>
+        <tbody>
+        ${metric('koszt', oCost, tCost, usd)}
+        ${metric('czas', o.ms, t.ms, v=>(v||0)+'ms')}
+        ${metric('pozycje', o.itemCount, t.itemCount, num)}
+        ${metric('sekcje', o.sectionCount, t.sectionCount, num)}
+        ${metric('adnotacje', o.noteCount, t.noteCount, num)}
+        ${metric('tokeny in/out', o.usage, t.usage, u=>fmtTokk?(fmtTokk(u?.inputTokens||0)+'/'+fmtTokk(u?.outputTokens||0)):((u?.inputTokens||0)+'/'+(u?.outputTokens||0)))}
+        </tbody>
+      </table>
+      <div class="mut small" style="margin-top:6px">Pozycje (po nazwie oryginalnej; <span style="color:#e8c170">żółte = różnica</span> w tłumaczeniu/photo_query). Tańszy: <b>${cheaper}</b>.</div>
+      <div style="max-height:520px; overflow:auto; margin-top:4px"><table style="width:100%; border-collapse:collapse; font-size:12px">
+        <thead><tr><th style="text-align:left; padding:4px 6px">oryginał</th><th style="text-align:left; padding:4px 6px">1-fazowy</th><th style="text-align:left; padding:4px 6px">2-fazowy</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+    </div>`;
+  }catch(e){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(e.message); }
+  finally{ btn.disabled=false; }
+}
 function renderSimVenue(){
   const el=document.getElementById('simVenueBox'); const v=SIM?.venue;
   if(!v){ el.innerHTML = SIM_VENUE ? '<div class="mut small" style="margin-top:8px">lokal: nie znaleziono w Places</div>' : ''; return; }
@@ -837,8 +1057,12 @@ function renderSimVenue(){
     : '<span class="badge pass">nazwa OK</span>';
   el.innerHTML=`<div class="step"><div class="hd"><b>📍 lokal (Places):</b> ${esc(v.name||'—')} ${certBadge} ${v.website?`<a href="${esc(v.website)}" target="_blank" rel="noopener" class="small">${esc((''+v.website).replace(/^https?:\/\//,''))}</a>`:'<span class="mut small">brak strony www</span>'}</div>
     <div class="mut small" style="margin-top:4px">${esc(v.address||'')} · Google: ${v.photoNames.length} zdj · TripAdvisor: ${v.taPhotos.length} zdj${v.nameVerified===false?' · <span class="mut">Tier 0 użyje ostrożnej instrukcji</span>':''}</div>
-    <button style="margin-top:6px" onclick="simVenue()" ${(v.photoNames.length+v.taPhotos.length)?'':'disabled'}>Tier 0 — dopasuj zdjęcia lokalu do dań</button>
-    <div id="simVenueOut"></div></div>`;
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px">
+      <button onclick="simVenue()" ${(v.photoNames.length+v.taPhotos.length)?'':'disabled'}>Tier 0 — dopasuj zdjęcia lokalu do dań</button>
+      <button onclick="simVenueWide()" title="EKSPERYMENT: zbierz JEDNĄ szeroką pulę (Serper: strona www + portale, plus Google/TA) i przypisz do dań jednym przejściem vision — zamiast szukać per danie">🧪 Szeroka pula → dania</button>
+    </div>
+    <div id="simVenueOut"></div>
+    <div id="simVenueWideOut"></div></div>`;
 }
 async function simVenue(){
   if(!SIM?.venue) return;
@@ -852,6 +1076,49 @@ async function simVenue(){
     return `<div class="ct">${thumb}<div class="cap2"><b>${esc(trunc(m.dish,22))}</b><br>${m.source} · ${m.confidence.toFixed(2)}${m.caption?'<br>'+esc(trunc(m.caption,30)):''}</div></div>`;
   }).join('');
   out.innerHTML=`<div class="mut small" style="margin-top:6px"><b>${r.matches.length}</b> dopasowań / pula ${r.pool} · $${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms</div><div class="cands">${ms||'<span class="mut small">brak dopasowań</span>'}</div>`;
+}
+const SRC_LABEL={site:'🌐 strona',portal:'💬 portal',google:'📍 Google',tripadvisor:'🟢 TripAdvisor'};
+function poolCard(r){
+  const thumb = r.url
+    ? `<img src="${esc(r.url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=.15">`
+    : `<div style="width:74px;height:74px;border:1px dashed var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--mut)">Google</div>`;
+  const cat = (r.category==='food'||r.category==='drink')?'':`<span class="badge" title="kategoria">${esc(r.category)}</span>`;
+  const flags=[
+    r.confidence!=null?`<span class="badge ${r.confidence>=0.5?'pass':'fail'}">${r.confidence.toFixed(2)}</span>`:'',
+    cat, r.stockOrAi?'<span class="badge fail" title="stock/AI/render">stock</span>':'',
+    r.nameInUrl?'<span class="badge venue" title="nazwa lokalu w URL">nazwa✓</span>':'',
+  ].filter(Boolean).join(' ');
+  let host=r.domain||''; try{ if(r.contextUrl) host=new URL(r.contextUrl).hostname.replace(/^www\./,''); }catch{}
+  const link=r.contextUrl?`<a href="${esc(r.contextUrl)}" target="_blank" rel="noopener">${esc(trunc(host,16))}</a>`:esc(trunc(host,16));
+  return `<div class="ct">${thumb}<div class="cap2"><span class="mut small">${SRC_LABEL[r.source]||r.source}</span> ${flags}<br>${link}</div></div>`;
+}
+async function simVenueWide(){
+  if(!SIM?.venue) return;
+  const out=document.getElementById('simVenueWideOut');
+  out.innerHTML='<div class="mut small" style="margin-top:8px">🧪 zbieram szeroką pulę z lokalu i dopasowuję jednym przejściem vision…</div>';
+  const dishes=SIM.items.map(it=>it.original).filter(Boolean);
+  const certain = SIM.venue.nameVerified !== false;
+  const r=await api('/api/sim-venue-wide',{dishes, cuisine:SIM.cuisine, name:SIM.restaurantName||SIM.venue.name, website:SIM.venue.website, city:SIM.venue.city, photoNames:SIM.venue.photoNames, taPhotos:SIM.venue.taPhotos, model:document.getElementById('simVenueModel').value, certain, captureId:SIM.captureId});
+  if(r.error){ out.innerHTML='<span class="badge fail">błąd</span> '+esc(r.error); return; }
+  const accepted=(r.results||[]).filter(x=>(x.category==='food'||x.category==='drink')&&x.realFood&&!x.stockOrAi&&x.dish&&x.confidence>=0.5);
+  const rest=(r.results||[]).filter(x=>!accepted.includes(x));
+  const groups={}; accepted.forEach(x=>{(groups[x.dish]=groups[x.dish]||[]).push(x);});
+  const groupHtml=Object.keys(groups).sort((a,b)=>groups[b].length-groups[a].length).map(d=>
+    `<div class="step"><div class="hd"><b>${esc(trunc(d,40))}</b> <span class="pill ok">${groups[d].length} zdj</span></div><div class="cands">${groups[d].map(poolCard).join('')}</div></div>`).join('');
+  const pc=r.poolCounts||{};
+  const qHtml=(r.queries||[]).map(q=>`<div class="mut small">• ${esc(q.label)}: <span style="font-family:ui-monospace,monospace">${esc(trunc(q.query,70))}</span> → ${q.returned}</div>`).join('');
+  out.innerHTML=`
+    <div class="step" style="margin-top:8px;border-color:var(--acc)">
+      <div class="hd"><b>🧪 Szeroka pula → dania</b>
+        <span class="pill ${r.acceptedCount?'ok':'no'}">${r.acceptedCount} trafień</span>
+        <span class="pill ${r.dishesCovered?'ok':'no'}">${r.dishesCovered}/${r.dishesTotal} dań pokrytych</span>
+        <span class="mut small">$${(r.usage?.costUsd||0).toFixed(4)} · ${r.ms}ms</span>
+      </div>
+      <div class="mut small" style="margin-top:4px">pula ${pc.total} (pobrano ${pc.fetched}) = 🌐 strona ${pc.site} · 💬 portale ${pc.portal} · 📍 Google ${pc.google} · 🟢 TA ${pc.tripadvisor}</div>
+      <div style="margin-top:4px">${qHtml}</div>
+    </div>
+    ${groupHtml||'<div class="mut small">brak zaakceptowanych dopasowań</div>'}
+    ${rest.length?`<div class="step"><div class="hd"><b>Niedopasowane / odrzucone</b> <span class="pill no">${rest.length}</span></div><div class="cands">${rest.map(poolCard).join('')}</div></div>`:''}`;
 }
 function renderSimItems(){
   const items=SIM?.items||[];
@@ -945,11 +1212,12 @@ let COST_PERIOD='all', COST_LIMIT=10000, COST_GROUPS=[], EGRESS_RATE=0.1, CURREN
 function setCostLimit(v){ COST_LIMIT=+v||3000; loadCostLog(); }
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','logs','cache','samples','errors','instances','prices','config','services','deploy','stats'].forEach(t=>{
+  ['lab','flow','logs','cache','samples','errors','instances','prices','config','services','deploy','stats'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
-  if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
+  if(name==='flow'){ renderFlow(); }
+  else if(name==='logs'){ renderCostPeriod(); loadCostLog(); }
   else if(name==='prices'){ loadPrices(); }
   else if(name==='config'){ loadConfig(); }
   else if(name==='services'){ loadServices(); }
@@ -1061,15 +1329,30 @@ async function loadCacheSize(){
 // Rozbicie klucza cache na czytelne części. Klucz = `typ:wersja:część1|część2|…` (każda część znormalizowana:
 // bez akcentów, lowercase). CAŁA ta linia to dokładny klucz wyszukiwania. ∅ = pusta część (np. brak opisu).
 function labelCacheParts(kind, parts){
+  // MODEL nie jest już częścią żadnego klucza — pokazujemy go z metadanej `model` przy wpisie (niżej).
   const L={
-    'item-enrich': parts[0]==='§sect' ? [['marker','§sect (tłum. nazwy SEKCJI)'],['nazwa sekcji',parts[1]],['język',parts[2]],['model',parts[3]]]
-                 : parts[0]==='§note' ? [['marker','§note (tłum. ADNOTACJI)'],['tekst',parts[1]],['język',parts[2]],['model',parts[3]]]
-                 : [['danie',parts[0]],['opis z menu',parts[1]],['kuchnia',parts[2]],['lokalizacja',parts[3]],['język',parts[4]],['model',parts[5]]],
-    'dish-info': [['danie',parts[0]],['opis',parts[1]],['kuchnia',parts[2]],['region+kraj',parts[3]],['język',parts[4]],['model',parts[5]]],
-    'repr-photos': [['termin (kanoniczna nazwa)',parts[0]],['kuchnia',parts[1]],['weryfikacja',parts[2]],['źródła',parts[3]],['liczba',parts[4]],['zakres',parts[5]]],
-    'vision-url': [['termin',parts[0]],['URL zdjęcia',parts.slice(1).join(':')]],
+    'item-enrich': parts[0]==='§sect' ? [['marker','§sect (tłum. nazwy SEKCJI)'],['nazwa sekcji',parts[1]],['język',parts[2]]]
+                 : parts[0]==='§note' ? [['marker','§note (tłum. ADNOTACJI)'],['tekst',parts[1]],['język',parts[2]]]
+                 : [['danie',parts[0]],['opis z menu',parts[1]],['kuchnia',parts[2]],['lokalizacja',parts[3]],['język',parts[4]]],
+    'dish-info': [['danie',parts[0]],['kuchnia',parts[1]],['kraj',parts[2]],['region',parts[3]],['język',parts[4]]],
+    'repr-photos': [['termin (kanoniczna nazwa)',parts[0]],['weryfikacja',parts[1]]],
+    'vision-url': [['termin',parts[0]],['URL zdjęcia',parts.slice(1).join('|')]],
+    'menu-structure': parts.length>1
+      ? [['hash zdjęć (źródło)',parts[0]],['znane sekcje (kontekst)',parts.slice(1).join('|')]]
+      : [['hash zdjęć (źródło)',parts[0]]],
+    'venue-match': [['hash zdjęć lokalu',parts[0]],['hash dań',parts[1]],['kuchnia',parts[2]],['pewność lokalu (c=pewny / u=zgadnięty)',parts[3]]],
+    'bad-photo': [['hash zdjęcia',parts[0]]],
   };
   return L[kind] || parts.map((p,i)=>['część '+(i+1), p]);
+}
+// Linia czasu wpisu: kiedy utworzono/odświeżono, ile żyje (TTL rodzaju = expires−created), kiedy wygaśnie.
+function cacheTimeLine(row){
+  const fmt=s=>esc(String(s).replace('T',' '));
+  const segs=[];
+  if(row.createdAt) segs.push('utworzono '+fmt(row.createdAt));
+  if(row.createdAt&&row.expiresAt){ const d=Math.round((new Date(row.expiresAt)-new Date(row.createdAt))/86400000); if(isFinite(d)) segs.push('żyje <b>'+d+'</b> dni (TTL rodzaju)'); }
+  if(row.expiresAt) segs.push('wygasa '+fmt(row.expiresAt));
+  return segs.length?`<div class="mut small">${segs.join(' · ')}</div>`:'';
 }
 function cacheKeyInfo(key){
   const i1=key.indexOf(':'), i2=key.indexOf(':',i1+1);
@@ -1091,7 +1374,8 @@ async function loadCacheBrowse(){
       <div style="display:flex; justify-content:space-between; gap:8px"><b>${esc(CACHE_LABELS[row.kind]||row.kind)}</b> <span class="mut small">trafień ${row.hits}</span></div>
       <div class="mut" style="font-size:11px; word-break:break-all">${esc(row.key)}</div>
       ${cacheKeyInfo(row.key)}
-      ${row.expiresAt?`<div class="mut small">wygasa ${esc(String(row.expiresAt).replace('T',' '))}</div>`:''}
+      ${(row.model||row.lang)?`<div class="mut small">${row.model?`🧠 model: <b>${esc(row.model)}</b>`:''}${row.model&&row.lang?' · ':''}${row.lang?`język: ${esc(row.lang)}`:''} <span class="mut">(metadane — nie część klucza)</span></div>`:''}
+      ${cacheTimeLine(row)}
       <div id="cacheR-${i}"></div>
     </div>`).join('') : '<div class="mut small" style="margin-top:6px">brak wpisów (pasujących do filtra)</div>';
 }
@@ -1111,9 +1395,9 @@ function toggleCacheRow(i){
   el.innerHTML=inner;
 }
 // ===== CONFIG RUNTIME (modele per krok + włączanie/wyłączanie kroków) =====
-let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={};
-const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań']];
-const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper web (generyk typu dania)'],['photoSerperSite','Wyszukiwanie zdjęć — Serper z lokalu: strona www (site:domena)'],['photoSerperPortal','Wyszukiwanie zdjęć — Serper z lokalu: portale/social'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA, vision)'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
+let CONFIG={}, CONFIG_MODELS=[], CONFIG_DEFAULTS={}, CONFIG_TTL_DEFAULTS={};
+const CFG_MODEL_STEPS=[['peek','Peek (szybki podgląd zdjęcia)'],['scan','Skan struktury menu (vision)'],['enrich','Enrich (tłumaczenia + krótkie opisy)'],['verify','Weryfikacja zdjęć (vision)'],['dishInfo','Długie opisy dań'],['venuePool','Szeroka pula z lokalu → dania (vision)']];
+const CFG_TOGGLES=[['photoSerper','Wyszukiwanie zdjęć — Serper web (generyk typu dania + kuchnia)'],['photoSerperPlain','Wyszukiwanie zdjęć — Serper web PROSTE (sam termin, bez kuchni) — EKSPERYMENT'],['photoSerperSite','Wyszukiwanie zdjęć — Serper z lokalu: strona www (site:domena)'],['photoSerperPortal','Wyszukiwanie zdjęć — Serper z lokalu: portale/social'],['photoWikimedia','Wyszukiwanie zdjęć — Wikimedia'],['photoOpenverse','Wyszukiwanie zdjęć — Openverse'],['photoVenue','Zdjęcia z lokalu — Tier 0 (Google/TA, vision)'],['photoVenuePool','Zdjęcia z lokalu — SZEROKA PULA (Serper site:+portale + Google + TA → dania, 1× vision). Zamiast/obok kroków „z lokalu" powyżej. Model: „Szeroka pula"'],['verifyPhotos','Weryfikacja AI zdjęć (wył. → każde zdjęcie 0.9)'],['descriptions','Długie opisy dań (wył. → zwraca „DISABLED")']];
 async function loadConfig(btn){
   if(btn) btn.disabled=true;
   try{
@@ -1121,12 +1405,12 @@ async function loadConfig(btn){
     if(!res.ok) throw new Error('serwer LAB zwrócił '+res.status+' dla /api/runtime-config — ZRESTARTUJ lab (Ctrl+C → npm run lab); endpoint jest nowy');
     const r=await res.json();
     if(r.error) throw new Error(r.error);
-    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; CONFIG_DEFAULTS=r.defaults||{}; renderConfig();
+    CONFIG=r.config||{}; CONFIG_MODELS=r.models||[]; CONFIG_DEFAULTS=r.defaults||{}; CONFIG_TTL_DEFAULTS=r.ttlDefaults||{}; renderConfig();
   }catch(e){ document.getElementById('configBox').textContent='błąd: '+e.message; }
   finally{ if(btn) btn.disabled=false; }
 }
 function renderConfig(){
-  const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{}, cr=CONFIG.cacheRead||{};
+  const m=CONFIG.models||{}, s=CONFIG.steps||{}, a=CONFIG.app||{}, cr=CONFIG.cacheRead||{}, ct=CONFIG.cacheTtl||{};
   const opts=(step,sel)=>{
     const defId=CONFIG_DEFAULTS[step]; const defMd=CONFIG_MODELS.find(md=>md.id===defId);
     const defLabel=defMd?defMd.label:(defId||'?');
@@ -1135,10 +1419,12 @@ function renderConfig(){
   const modelRows=CFG_MODEL_STEPS.map(([k,lab])=>`<div style="display:flex; gap:8px; align-items:center; margin:3px 0"><span style="width:300px">${esc(lab)}</span><select id="cfgM-${k}" style="flex:1; max-width:340px; padding:3px">${opts(k,m[k]||'')}</select></div>`).join('');
   const toggleRows=CFG_TOGGLES.map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgS-${k}" ${s[k]!==false?'checked':''}><span>${esc(lab)}</span></label>`).join('');
   const cacheRows=Object.entries(CACHE_LABELS).map(([k,lab])=>`<label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgC-${k}" ${cr[k]!==false?'checked':''}><span>${esc(lab)} <span class="mut small">(${esc(k)})</span></span></label>`).join('');
+  const ttlRows=Object.entries(CACHE_LABELS).map(([k,lab])=>{const def=CONFIG_TTL_DEFAULTS[k]; const v=ct[k]; return `<div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span style="width:280px">${esc(lab)} <span class="mut small">(${esc(k)})</span></span><input type="number" id="cfgT-${k}" min="0" step="1" value="${v?Number(v):''}" placeholder="${def!=null?def:''}" style="width:90px; padding:3px"><span class="mut small">dni${def!=null?` · domyślnie ${def}`:''}</span></div>`;}).join('');
   document.getElementById('configBox').innerHTML=`
     <div style="color:var(--fg)"><h4 style="margin:6px 0">Modele per krok <span class="mut small">(puste = domyślny serwera)</span></h4>${modelRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Włączone kroki <span class="mut small">(odznacz = wyłącz krok)</span></h4>${toggleRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Cache — odczyt <span class="mut small">(odznacz = ZAWSZE miss → regeneruje, ale dalej zapisuje)</span></h4>${cacheRows}</div>
+    <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Cache — żywotność (TTL, dni) <span class="mut small">(puste = domyślny rodzaju; dotyczy NOWYCH/odświeżanych wpisów)</span></h4>${ttlRows}</div>
     <div style="color:var(--fg); margin-top:14px"><h4 style="margin:6px 0">Zachowania apki <span class="mut small">(apka czyta na starcie)</span></h4>
       <label style="display:flex; gap:8px; align-items:center; margin:4px 0; cursor:pointer"><input type="checkbox" id="cfgA-autoDescriptions" ${a.autoDescriptions===true?'checked':''}><span>Długie opisy dań OD RAZU po skanie (odznacz = dopiero na kliknięcie usera)</span></label>
       <div style="display:flex; gap:8px; align-items:center; margin:4px 0"><span>Limit dań do auto-dociągania zdjęć</span><input type="number" id="cfgA-autoLimit" min="0" step="1" value="${Number(a.autoLimit)||0}" style="width:90px; padding:3px"><span class="mut small">0 = wszystkie (domyślnie)</span></div>
@@ -1150,8 +1436,10 @@ async function saveConfig(btn){
   for(const [k] of CFG_TOGGLES){ steps[k]=document.getElementById('cfgS-'+k).checked; }
   const cacheRead={};
   for(const k of Object.keys(CACHE_LABELS)){ const el=document.getElementById('cfgC-'+k); if(el) cacheRead[k]=el.checked; }
+  const cacheTtl={};
+  for(const k of Object.keys(CACHE_LABELS)){ const el=document.getElementById('cfgT-'+k); if(el){ const n=parseInt(el.value,10); if(Number.isFinite(n)&&n>0) cacheTtl[k]=n; } }
   const app={ autoDescriptions: document.getElementById('cfgA-autoDescriptions').checked, autoLimit: parseInt(document.getElementById('cfgA-autoLimit').value,10)||0 };
-  const config={models,steps,cacheRead,app}; const info=document.getElementById('configInfo');
+  const config={models,steps,cacheRead,cacheTtl,app}; const info=document.getElementById('configInfo');
   if(btn) btn.disabled=true; info.textContent='zapisuję…'; info.style.color='';
   try{
     const res=await fetch('/api/runtime-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config})});
@@ -1405,14 +1693,14 @@ function renderStatsSessions(){
       const thumb=(u,c,gid,idx)=>{ const sc=!!c; const fv=sc&&c.fv, passed=sc&&c.p, fin=sc&&c.fin;
         const border=!sc?'#555':fv?'#f1c40f':passed?'#7fd6a0':'#b3261e';
         const badge=!sc?'—':(c.s!=null?Math.round(c.s*100):'?');
-        const title=!sc?'nie oceniony (poza pulą weryfikacji)':`ocena ${c.s!=null?Math.round(c.s*100)+'%':'?'} · ${fv?'z lokalu':passed?'trafione':'odrzucone'}${fin?' · W FINALE ⭐':''}`;
+        const title=!sc?'nie oceniony (poza pulą weryfikacji)':`${c.dish?'danie: '+c.dish+' · ':''}ocena ${c.s!=null?Math.round(c.s*100)+'%':'?'} · ${fv?'z lokalu':passed?'trafione':'odrzucone'}${fin?' · W FINALE ⭐':''}`;
         return `<div onclick="openPhotoGallery(${gid},${idx})" title="${esc(title)}" style="position:relative; display:inline-block; line-height:0; cursor:pointer"><img src="${esc(u)}" loading="lazy" onerror="this.style.opacity=0.12;this.style.background='#222'" style="width:50px; height:38px; object-fit:cover; border-radius:4px; border:2px solid ${border}; ${sc&&!passed?'opacity:0.5':''}"><span style="position:absolute; bottom:1px; right:1px; background:rgba(0,0,0,0.78); color:#fff; font-size:9px; font-weight:800; padding:0 2px; border-radius:3px">${badge}</span>${fin?'<span style="position:absolute; top:0; left:1px; font-size:10px">⭐</span>':''}</div>`; };
       const rows=flow.slice(0,300).map(e=>{ cum+=(e.totalCost||0);
         const d=(e.meta&&e.meta.data)||{}; const dish=d.dish||(e.meta&&e.meta.dish)||''; const cands=d.cands||[]; const searched=d.searched||[]; const searches=d.searches||[];
         const cmap={}; cands.forEach(c=>{ cmap[c.u]=c; });
         const hasMore=cands.length||searched.length||searches.length;
         const main=`<div style="display:flex; justify-content:space-between; gap:8px; padding:2px 0; ${hasMore?'':'border-bottom:1px solid rgba(255,255,255,0.05);'} font-size:11px">
-          <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}${d.cached?' · <span style="color:#7fd6a0">🗄 z cache</span>':''}${d.errors?` · <span style="color:#ff8a80">❌ błąd API${d.errDetail?': '+esc(String(d.errDetail).slice(0,70)):''}</span>`:''}</span>
+          <span class="mut">${new Date(e.ts).toLocaleTimeString()} · ${esc(OP_LABEL[e.op]||e.op)}${dish?` · ${esc(String(dish)).slice(0,28)}`:''}${d.pool?` · <span style="color:#e88a5a">szeroka pula ${d.poolSize||0}→${d.matches||0}★ (${d.dishesCovered||0}/${d.dishes||0} dań)</span>`:''}${d.cached?' · <span style="color:#7fd6a0">🗄 z cache</span>':''}${d.errors?` · <span style="color:#ff8a80">❌ błąd API${d.errDetail?': '+esc(String(d.errDetail).slice(0,70)):''}</span>`:''}</span>
           <span style="white-space:nowrap">+${fmtUsd(e.totalCost)} &nbsp;<b style="color:var(--acc)">Σ ${fmtUsd(cum)}</b></span></div>`;
         let strips='';
         if(searches.length){ strips=`<div style="padding:1px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05)">${searches.map(sp=>{ const us=sp.urls||[]; const gid=regPhotoGroup(us.map(u=>({u}))); return `<div class="mut" style="font-size:9px; margin-top:3px">🔎 ${esc(sp.provider||'')}${sp.query?` · pytanie: <span style="color:#9ad8ff">„${esc(sp.query)}"</span>`:''} — ${us.length} zwróconych (surowe, przed oceną):</div><div style="display:flex; gap:3px; flex-wrap:wrap; margin-top:1px">${us.map((u,idx)=>thumb(u,undefined,gid,idx)).join('')}</div>`; }).join('')}</div>`; }

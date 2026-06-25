@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Icon } from "./Icon";
 import { placePhotoUrl } from "./api";
 import { colors } from "./theme";
 import { Lightbox, type LightboxPhoto, type LightboxState } from "./Lightbox";
@@ -83,7 +84,7 @@ export function RestaurantCard({
           ) : null}
           {ta?.rating != null ? (
             <Text style={styles.taRating}>
-              🦉 {ta.rating.toFixed(1)}
+              <Icon name="owl" /> {ta.rating.toFixed(1)}
               {ta.reviews != null ? ` (${ta.reviews})` : ""} TripAdvisor
             </Text>
           ) : null}
@@ -132,22 +133,22 @@ export function RestaurantCard({
         <View style={styles.actions}>
           {r.mapsUri ? (
             <Pressable style={styles.action} onPress={() => Linking.openURL(r.mapsUri!)}>
-              <Text style={styles.actionText}>🗺️ Mapy</Text>
+              <Text style={styles.actionText}><Icon name="map" /> Mapy</Text>
             </Pressable>
           ) : null}
           {ta?.url ? (
             <Pressable style={styles.action} onPress={() => Linking.openURL(ta.url!)}>
-              <Text style={styles.actionText}>🦉 TripAdvisor</Text>
+              <Text style={styles.actionText}><Icon name="owl" /> TripAdvisor</Text>
             </Pressable>
           ) : null}
           {r.phone ? (
             <Pressable style={styles.action} onPress={() => Linking.openURL(`tel:${r.phone}`)}>
-              <Text style={styles.actionText}>📞 Zadzwoń</Text>
+              <Text style={styles.actionText}><Icon name="phone" /> Zadzwoń</Text>
             </Pressable>
           ) : null}
           {r.website ? (
             <Pressable style={styles.action} onPress={() => Linking.openURL(r.website!)}>
-              <Text style={styles.actionText}>🌐 Strona</Text>
+              <Text style={styles.actionText}><Icon name="web" /> Strona</Text>
             </Pressable>
           ) : null}
         </View>

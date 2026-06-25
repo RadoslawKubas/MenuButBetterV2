@@ -15,6 +15,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Icon } from "./Icon";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Location from "expo-location";
@@ -64,10 +65,10 @@ function VenueMap({ center, scanLocation, selectedVenue, onCenterChange, webRef 
   map.on('moveend',send);
   window.recenter=function(la,ln){map.setView([la,ln],16);};
   // MIEJSCE SKANU (zawsze widoczne) — niebieskie kółko.
-  ${scanLocation ? `L.circleMarker([${scanLocation.lat},${scanLocation.lng}],{radius:8,color:'#2b6cb0',fillColor:'#5aa9e6',fillOpacity:0.95,weight:3}).addTo(map).bindTooltip('📷 miejsce skanu');` : ""}
+  ${scanLocation ? `L.circleMarker([${scanLocation.lat},${scanLocation.lng}],{radius:8,color:'#2b6cb0',fillColor:'#5aa9e6',fillOpacity:0.95,weight:3}).addTo(map).bindTooltip('miejsce skanu');` : ""}
   // WYBRANY LOKAL — pin (ustawiany po kliknięciu wyniku).
   var venueM=null;
-  window.setVenue=function(la,ln){ if(venueM){map.removeLayer(venueM);venueM=null;} if(la==null||ln==null)return; venueM=L.marker([la,ln]).addTo(map).bindTooltip('🏠 wybrany lokal',{permanent:true,direction:'top'}); map.setView([la,ln],16); };
+  window.setVenue=function(la,ln){ if(venueM){map.removeLayer(venueM);venueM=null;} if(la==null||ln==null)return; venueM=L.marker([la,ln]).addTo(map).bindTooltip('wybrany lokal',{permanent:true,direction:'top'}); map.setView([la,ln],16); };
 </script></body></html>`,
     // celowo bez zależności — przebudowa HTML zresetowałaby przesunięcie mapy (scanLocation jest stały)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,7 +96,7 @@ function VenueMap({ center, scanLocation, selectedVenue, onCenterChange, webRef 
       />
       {/* Pin na środku (RN, nad mapą) — środek mapy = punkt „Szukaj tutaj". */}
       <View pointerEvents="none" style={styles.centerPin}>
-        <Text style={styles.centerPinText}>📍</Text>
+        <Text style={styles.centerPinText}><Icon name="location" /></Text>
       </View>
     </View>
   );
@@ -206,15 +207,15 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
       <VenueMap center={center} scanLocation={initialLocation} selectedVenue={selected?.location ?? null} onCenterChange={setCenter} webRef={webRef} />
       <View style={styles.mapActions}>
         <Pressable style={[styles.mapBtn, styles.mapBtnPrimary]} onPress={() => searchAt(center)} disabled={loading}>
-          <Text style={styles.mapBtnPrimaryText}>🔍 Szukaj tutaj</Text>
+          <Text style={styles.mapBtnPrimaryText}><Icon name="search" /> Szukaj tutaj</Text>
         </Pressable>
         <Pressable style={styles.mapBtn} onPress={useMyLocation} disabled={gpsLoading}>
-          <Text style={styles.mapBtnText}>{gpsLoading ? "⏳ GPS…" : "📍 Moja lokalizacja"}</Text>
+          <Text style={styles.mapBtnText}>{gpsLoading ? "GPS…" : "Moja lokalizacja"}</Text>
         </Pressable>
       </View>
 
       <View style={styles.cuisineRow}>
-        <Text style={styles.cuisineLabel}>🍽 Kuchnia</Text>
+        <Text style={styles.cuisineLabel}><Icon name="food" /> Kuchnia</Text>
         <TextInput
           value={cuisineQ}
           onChangeText={setCuisineQ}
@@ -249,7 +250,7 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
           onSubmitEditing={searchText}
         />
         <Pressable style={styles.searchBtn} onPress={searchText}>
-          <Text style={styles.searchBtnText}>🔎</Text>
+          <Text style={styles.searchBtnText}><Icon name="searchAlt" /></Text>
         </Pressable>
       </View>
 
@@ -261,19 +262,19 @@ export function VenueSearchScreen({ initialLocation, cuisine, targetLang, onClos
         {results.map((r) => (
           <View key={r.placeId} style={[styles.card, selected?.placeId === r.placeId && styles.cardSelected]}>
             <Pressable style={{ flex: 1 }} onPress={() => setSelected(r)}>
-              <Text style={styles.cardName} numberOfLines={1}>{selected?.placeId === r.placeId ? "📍 " : ""}{r.name}</Text>
+              <Text style={styles.cardName} numberOfLines={1}>{selected?.placeId === r.placeId ? "" : ""}{r.name}</Text>
               {r.address ? <Text style={styles.cardAddr} numberOfLines={1}>{r.address}</Text> : null}
               <Text style={styles.cardMeta}>
-                {me && r.location ? <Text style={styles.cardDist}>📍 {fmtDist(distanceM(me, r.location))}</Text> : null}
+                {me && r.location ? <Text style={styles.cardDist}><Icon name="location" /> {fmtDist(distanceM(me, r.location))}</Text> : null}
                 {me && r.location ? " · " : ""}
-                {r.cuisine ? `🍽 ${r.cuisine} · ` : ""}
+                {r.cuisine ? `${r.cuisine} · ` : ""}
                 {r.rating != null ? `★ ${r.rating.toFixed(1)}${r.ratingCount != null ? ` (${r.ratingCount})` : ""}` : "bez ocen"}
                 {r.openNow != null ? ` · ${r.openNow ? "otwarte" : "zamknięte"}` : ""}
               </Text>
             </Pressable>
             <View style={styles.cardActions}>
               <Pressable style={styles.mapsLink} onPress={() => openInMaps(r)}>
-                <Text style={styles.mapsLinkText}>🗺 Maps</Text>
+                <Text style={styles.mapsLinkText}><Icon name="map" /> Maps</Text>
               </Pressable>
               <Pressable style={styles.pickBtn} onPress={() => onPick(r)}>
                 <Text style={styles.pickBtnText}>✓ Wybierz</Text>

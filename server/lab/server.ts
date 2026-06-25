@@ -11,6 +11,7 @@ import "dotenv/config";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { stream } from "hono/streaming";
 import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -18,11 +19,12 @@ import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
-import { extractMenu, STRUCTURE_SYSTEM, contextTextStructure, ENRICH_SYSTEM, type InputImage } from "../src/menu.ts";
+import { extractMenu, extractMenuOnePass, menuToStructure, enrichMenu, STRUCTURE_SYSTEM, ONEPASS_SYSTEM, contextTextStructure, ENRICH_SYSTEM, type InputImage } from "../src/menu.ts";
 import { quickPeek, SYSTEM as PEEK_SYSTEM, INSTRUCTION as PEEK_INSTRUCTION } from "../src/quickPeek.ts";
 import { describeDish, SYSTEM as DESCRIBE_SYSTEM } from "../src/dishInfo.ts";
 import { scoreDishPhotos, VERIFY_SYSTEM, verifyInstruction } from "../src/verifyPhotos.ts";
 import { matchVenuePhotos, VENUE_SYSTEM, venueInstruction } from "../src/venuePhotos.ts";
+import { harvestVenuePool, matchPoolToDishes, poolMatchAccepted, type PoolPhoto } from "../src/venueHarvest.ts";
 import { genericWebImages, restaurantImageQuery } from "../src/dishPhotos.ts";
 import { runDishPhotos } from "../src/dishPhotosPipeline.ts";
 import { findRestaurant } from "../src/places.ts";
@@ -32,7 +34,7 @@ import { MODELS, DEFAULT_MODEL, usesOpenAiApi, apiTag, type ModelId } from "../s
 import { SERVER_DEFAULT_MODELS } from "../src/runtimeConfig.ts";
 import { OTHER_RATES, aiPrice, otherRate as priceOtherRate, apiCallCost, type PriceOverrides } from "../src/pricing.ts";
 import { snapshot, cacheHitsSnapshot, modelSnapshot } from "../src/apiLog.ts";
-import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, type CacheKind } from "../src/cache.ts";
+import { cacheStats, cacheClear, cacheBrowse, cacheSize, initCache, TTL_DAYS, type CacheKind } from "../src/cache.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES = join(HERE, "..", "samples", "captures"); // stare eksporty (do auto-migracji)
@@ -752,10 +754,11 @@ app.get("/api/prompts", (c) => {
     peek: { system: PEEK_SYSTEM, user: PEEK_INSTRUCTION + "\n\n[+ 1 zdjęcie menu]" },
     scan: { system: STRUCTURE_SYSTEM, user: scanUser, note: "Przebieg 1 — STRUKTURA (vision, ze zdjęciami): nazwy/ceny/sekcje + kuchnia + venue_match" },
     enrich: { system: ENRICH_SYSTEM, user: enrichUser, note: "Przebieg 2 — WZBOGACANIE (tekstowo, bez obrazu): tłumaczenia + photo_query + krótki opis, partiami ~8 dań" },
+    onepass: { system: ONEPASS_SYSTEM, user: scanUser, note: "EKSPERYMENT — skan JEDNOFAZOWY (vision): struktura + tłumaczenia + opisy + photo_query w jednym wywołaniu (zamiast scan+enrich)" },
     describe: { system: DESCRIBE_SYSTEM, user: describeUser, note: "Długi opis (więcej info, on-tap, tekstowo, bez obrazu)" },
     verify: {
       system: VERIFY_SYSTEM,
-      user: verifyInstruction("{nazwa dania}", "{kuchnia}") + "\n\n[+ N zdjęć kandydatów, każde z etykietą porządkową]",
+      user: verifyInstruction("{nazwa dania}") + "\n\n[+ N zdjęć kandydatów, każde z etykietą porządkową]",
     },
     venuePhotos: {
       system: VENUE_SYSTEM,
@@ -1161,6 +1164,9 @@ app.post("/api/sim-scan", async (c) => {
       section: s.name,
       original: it.original,
       translated: it.translated,
+      fullName: it.full_name,
+      fullDescription: it.full_description,
+      portion: it.portion,
       photoQuery: it.photo_query,
       photoQueryLocal: it.photo_query_local,
       branded: it.branded,
@@ -1220,6 +1226,184 @@ app.post("/api/sim-scan-clear", async (c) => {
     saveMeta(all);
   }
   return c.json({ ok: true });
+});
+
+// ── PEŁNY FLOW na migawce: struktura→enrich→zdjęcia poglądowe→(★ lokal) — MIRROR produkcyjnego pipeline'u
+//    (runScanPipeline w http.ts), in-process. Zwraca menu z `id` + KOMPLET danych per pozycja do podglądu. ──
+function flowAssignIds(menu: { sections?: { items?: { id?: string }[] }[] }): void {
+  (menu.sections ?? []).forEach((sec, si) => (sec.items ?? []).forEach((it, ii) => { it.id = `s${si}-i${ii}`; }));
+}
+async function flowPool<T>(items: T[], limit: number, fn: (it: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const w = async () => { while (i < items.length) { const it = items[i++]!; await fn(it); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, w));
+}
+
+app.post("/api/flow-run", async (c) => {
+  const { captureId, scanModel, enrichModel, verifyModel, venueModel, withPhotos, withVenue, fresh } = await c.req.json<{
+    captureId: string; scanModel?: ModelId; enrichModel?: ModelId; verifyModel?: ModelId; venueModel?: ModelId; withPhotos?: boolean; withVenue?: boolean; fresh?: boolean;
+  }>();
+  const cap = loadMeta().find((x) => x.id === captureId);
+  if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  const images = allImageInputs(cap);
+  if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
+  const sModel = (scanModel && scanModel in MODELS ? scanModel : DEFAULT_MODEL) as ModelId;
+  const eModel = (enrichModel && enrichModel in MODELS ? enrichModel : sModel) as ModelId;
+  const vModel = (verifyModel && verifyModel in MODELS ? verifyModel : DEFAULT_MODEL) as ModelId;
+  const venModel = (venueModel && venueModel in MODELS ? venueModel : DEFAULT_MODEL) as ModelId;
+  const noCache = fresh === true; // domyślnie używamy cache (tanie iteracje); „świeżo" = realny koszt/jakość
+
+  // STREAM NDJSON: kroki na żywo (start/done + model + koszt + ms + szczegóły zapytań/wyników), a na końcu
+  // `done` z PEŁNYM JSON-em (struktura zwrócona przez vision + finalne wzbogacone menu + dane per pozycja).
+  return stream(c, async (st) => {
+    const emit = (o: unknown) => st.write(JSON.stringify(o) + "\n").catch(() => {});
+    const t0 = Date.now();
+    let cost = 0;
+    const steps: Record<string, unknown>[] = [];
+    const keepalive = setInterval(() => emit({ phase: "ping", elapsedMs: Date.now() - t0 }), 3000);
+    try {
+      await emit({ phase: "start", captureName: cap.name ?? null, images: images.length, models: { scan: sModel, enrich: eModel, verify: vModel, venue: venModel }, cache: !noCache });
+
+      // 1) STRUKTURA (vision, structureOnly) — nadajemy stabilne id (s{si}-i{ii}). To „surowy" odczyt z kart.
+      await emit({ phase: "step", step: "struktura", status: "start", model: sModel, sent: `${images.length} zdj → vision (odczyt struktury menu)` });
+      const tS = Date.now();
+      const sres = await extractMenu(images, { targetLang: "polski", locationHint: cap.locationHint, model: sModel, structureOnly: true, noCache });
+      cost += sres.usage.costUsd;
+      const structure = sres.menu;
+      flowAssignIds(structure);
+      const itemCount = structure.sections.reduce((n, s) => n + s.items.length, 0);
+      const sStep = { step: "struktura", model: sModel, ms: Date.now() - tS, cost: sres.usage.costUsd, sections: structure.sections.length, items: itemCount, cached: sres.cached, tokens: { in: sres.usage.inputTokens, out: sres.usage.outputTokens } };
+      steps.push(sStep);
+      await emit({ phase: "step", step: "struktura", status: "done", ...sStep, structure }); // PEŁNA struktura JSON
+
+      // 2) ENRICH (po id; menuToStructure niesie id). Pokazujemy CO leci do modelu (lista full_name).
+      const sentNames: string[] = [];
+      structure.sections.forEach((s) => s.items.forEach((it) => sentNames.push(it.full_name || it.original)));
+      await emit({ phase: "step", step: "enrich", status: "start", model: eModel, sent: `${sentNames.length} dań (po full_name) → ${eModel}`, items: sentNames });
+      const tE = Date.now();
+      const eres = await enrichMenu(menuToStructure(structure), { targetLang: "polski", locationHint: cap.locationHint, cuisineHint: structure.cuisine, noCache }, eModel);
+      cost += eres.usage.costUsd;
+      const menu = eres.menu;
+      const eStep = { step: "enrich", model: eModel, ms: Date.now() - tE, cost: eres.usage.costUsd, items: sentNames.length, tokens: { in: eres.usage.inputTokens, out: eres.usage.outputTokens } };
+      steps.push(eStep);
+      await emit({ phase: "step", step: "enrich", status: "done", ...eStep, sent: sentNames });
+
+      const flat: Record<string, unknown>[] = [];
+      menu.sections.forEach((s) => s.items.forEach((it) => flat.push(it as unknown as Record<string, unknown>)));
+
+      // 3) ZDJĘCIA POGLĄDOWE (po id, runDishPhotos representativeOnly, pula ≤4). Per danie: photo_query +
+      //    CO realnie wyszukano (provider + zapytanie + url-e). Emitowane NA ŻYWO (phase:"photo").
+      if (withPhotos !== false) {
+        const jobs = flat.filter((it) => it.photo_query);
+        await emit({ phase: "step", step: "zdjęcia", status: "start", model: vModel, sent: `${jobs.length} dań → szukanie zdjęć (photo_query) + weryfikacja ${vModel}` });
+        const tP = Date.now(); let pcost = 0; const photoDetail: Record<string, unknown>[] = [];
+        await flowPool(jobs, 4, async (it) => {
+          try {
+            const { photos, usage, debug } = await runDishPhotos({ dish: it.original as string, photoQuery: it.photo_query as string, photoQueryLocal: it.photo_query_local as string, cuisine: menu.cuisine, branded: it.branded as boolean, representativeOnly: true, num: 3, verifyModel: vModel });
+            pcost += usage.costUsd; it.photos = photos;
+            const d = { dish: it.original, photoQuery: it.photo_query, results: photos.length, cached: !!debug?.fromCache, searched: (debug?.searched ?? []).map((s) => ({ provider: s.provider, query: s.query, urls: s.urls.slice(0, 8) })) };
+            photoDetail.push(d);
+            await emit({ phase: "photo", ...d });
+          } catch { /* brak poglądowego dla dania */ }
+        });
+        cost += pcost;
+        const pStep = { step: "zdjęcia", model: vModel, ms: Date.now() - tP, cost: pcost, withPhotos: flat.filter((it) => Array.isArray(it.photos) && (it.photos as unknown[]).length).length, jobs: jobs.length };
+        steps.push(pStep);
+        await emit({ phase: "step", step: "zdjęcia", status: "done", ...pStep, detail: photoDetail });
+      }
+
+      // 4) ★ LOKAL (Tier 0: Google Places + TripAdvisor → matchVenuePhotos). Google bez publicznego URL pomijamy w podglądzie.
+      let venue: Record<string, unknown> | null = null;
+      if (withVenue && (menu.restaurant_name || cap.location)) {
+        await emit({ phase: "step", step: "lokal", status: "start", model: venModel, sent: `nazwa="${menu.restaurant_name || cap.name || "?"}" GPS=${cap.location?.lat ?? "-"},${cap.location?.lng ?? "-"} → Google Places + TripAdvisor` });
+        const tV = Date.now(); let vcost = 0;
+        try {
+          const rest = await findRestaurant({ name: menu.restaurant_name || cap.name || "", lat: cap.location?.lat, lng: cap.location?.lng }).catch(() => null);
+          if (rest) {
+            const ta = await findTripAdvisor({ name: rest.name, lat: rest.location?.lat, lng: rest.location?.lng }).catch(() => null);
+            const photoNames = rest.photoNames ?? [];
+            const taPhotos = (ta?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption }));
+            const uniqDishes = [...new Set(flat.map((it) => (it.full_name as string) || (it.original as string)))];
+            const certain = rest.nameVerified !== false && !rest.guessedByLocation;
+            const { matches, usage } = await matchVenuePhotos({ photoNames, taPhotos, dishes: uniqDishes, cuisine: menu.cuisine, model: venModel, certain });
+            vcost += usage.costUsd;
+            const byDish = new Map<string, Record<string, unknown>[]>();
+            for (const m of matches) {
+              const url = m.source === "google" ? "" : m.url;
+              if (!url) continue;
+              const arr = byDish.get(m.dish) ?? [];
+              if (arr.length >= 3) continue;
+              arr.push({ url, source: m.source, fromVenue: true, verified: true, score: m.confidence });
+              byDish.set(m.dish, arr);
+            }
+            flat.forEach((it) => { const ph = byDish.get((it.full_name as string) || (it.original as string)); if (ph?.length) it.photos = [...ph, ...((it.photos as unknown[]) || [])]; });
+            venue = { name: rest.name, address: rest.address, nameVerified: rest.nameVerified, googlePhotos: photoNames.length, taPhotos: taPhotos.length, matches: matches.length, dishesSent: uniqDishes.length };
+          } else { venue = { error: "nie znaleziono lokalu (Google Places)" }; }
+        } catch (e) { venue = { error: String((e as Error).message) }; }
+        const vStep = { step: "lokal", model: venModel, ms: Date.now() - tV, cost: vcost };
+        steps.push(vStep);
+        cost += vcost;
+        await emit({ phase: "step", step: "lokal", status: "done", ...vStep, venue });
+      }
+
+      // KOMPLET danych per pozycja.
+      const perItem: Record<string, unknown>[] = [];
+      menu.sections.forEach((s) => s.items.forEach((it) => {
+        const x = it as unknown as Record<string, unknown>;
+        perItem.push({
+          id: x.id, section: s.name, sectionT: s.name_translated, original: x.original, translated: x.translated, fullName: x.full_name, fullDescription: x.full_description, portion: x.portion,
+          photoQuery: x.photo_query, photoQueryLocal: x.photo_query_local, branded: x.branded, description: x.description, ingredients: x.ingredients, allergens: x.allergens,
+          category: x.category, dietary: x.dietary, spice: x.spice_level, price: x.price, currency: x.currency,
+          photos: ((x.photos as Record<string, unknown>[]) || []).map((p) => ({ url: p.url, source: p.source, fromVenue: !!p.fromVenue, verified: !!p.verified, score: p.score })),
+        });
+      }));
+      await emit({ phase: "done", ms: Date.now() - t0, cost, restaurantName: menu.restaurant_name, cuisine: menu.cuisine, sections: menu.sections.length, items: perItem.length, perItem, steps, venue, structure, menu });
+    } catch (e) {
+      await emit({ phase: "error", error: String((e as Error).message), steps, cost });
+    } finally {
+      clearInterval(keepalive);
+    }
+  });
+});
+
+// 1c) EKSPERYMENT: skan JEDNOFAZOWY vs DWUFAZOWY (struktura+enrich) — ten sam model, to samo menu.
+//     Cel: porównać jakość (tłumaczenia/opisy/photo_query) i koszt/czas 1 wywołania vs 2.
+app.post("/api/sim-onepass", async (c) => {
+  const { captureId, model } = await c.req.json<{ captureId: string; model?: ModelId }>();
+  const cap = loadMeta().find((x) => x.id === captureId);
+  if (!cap) return c.json({ error: "nie ma migawki" }, 404);
+  const images = allImageInputs(cap);
+  if (!images.length) return c.json({ error: "brak zdjęć" }, 400);
+  const m = (model && model in MODELS ? model : DEFAULT_MODEL) as ModelId;
+  const baseOpts = { targetLang: "polski", locationHint: cap.locationHint, noCache: true };
+  // Spłaszczony podgląd pozycji do oceny jakości (oryginał → tłumaczenie · photo_query · opis).
+  const summarize = (menu: any) => ({
+    restaurantName: menu.restaurant_name, cuisine: menu.cuisine,
+    sectionCount: (menu.sections ?? []).length,
+    itemCount: (menu.sections ?? []).reduce((n: number, s: any) => n + (s.items ?? []).length, 0),
+    noteCount: (menu.notes ?? []).length,
+    items: (menu.sections ?? []).flatMap((s: any) => (s.items ?? []).map((it: any) => ({
+      section: s.name, original: it.original, translated: it.translated, photoQuery: it.photo_query,
+      description: it.description, price: it.price, course: it.course ?? null, branded: !!it.branded,
+    }))),
+    notes: (menu.notes ?? []).map((n: any) => ({ text: n.text, translated: n.text_translated, kind: n.kind })),
+  });
+  try {
+    const t1 = Date.now();
+    const one = await withCostLog("sim-onepass", { model: m, captureId, lokal: cap.labScan?.menu?.restaurantName }, () => extractMenuOnePass(images, { ...baseOpts, model: m }, m));
+    const oneMs = Date.now() - t1;
+    const t2 = Date.now();
+    const two = await withCostLog("sim-twopass", { model: m, captureId, lokal: cap.labScan?.menu?.restaurantName }, () => extractMenu(images, { ...baseOpts, model: m, enrichModel: m }));
+    const twoMs = Date.now() - t2;
+    return c.json({
+      model: m,
+      onepass: { ms: oneMs, usage: one.usage, ...summarize(one.menu) },
+      twopass: { ms: twoMs, usage: two.usage, ...summarize(two.menu) },
+    });
+  } catch (e) {
+    console.error("sim-onepass error:", e);
+    return c.json({ error: (e as Error).message }, 500);
+  }
 });
 
 // 1b) Opis dania (rola „describe") — jak /dish-info w apce.
@@ -1304,6 +1488,64 @@ app.post("/api/sim-venue", async (c) => {
       }),
     );
     return c.json({ ms: Date.now() - t0, usage, pool: (b.photoNames?.length ?? 0) + (b.taPhotos?.length ?? 0), matches });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+// 4) EKSPERYMENT: SZEROKA pula z lokalu → dania w JEDNYM przejściu vision.
+//    Harvest (Serper: strona www + portale/social) + Google Places + TripAdvisor → matchPoolToDishes.
+//    Cel: porównać koszt/jakość z torem PER DANIE (runDishPhotos). Nie wpięte w apkę.
+app.post("/api/sim-venue-wide", async (c) => {
+  const b = await c.req.json<{
+    dishes: string[];
+    cuisine?: string;
+    name: string;
+    website?: string;
+    city?: string;
+    photoNames?: string[];
+    taPhotos?: { url: string; caption: string | null }[];
+    model?: string;
+    certain?: boolean;
+    perQuery?: number;
+    captureId?: string;
+  }>();
+  const dishes = (b.dishes ?? []).filter(Boolean);
+  if (!dishes.length) return c.json({ error: "brak dań" }, 400);
+  const t0 = Date.now();
+  try {
+    // Domena strony lokalu (gdy Places dał website i nie jest to profil społecznościowy).
+    let domain: string | undefined;
+    if (b.website?.trim()) {
+      try {
+        const host = new URL(b.website.trim()).hostname.replace(/^(www|m)\./, "").toLowerCase();
+        const SOCIAL = ["instagram.com", "facebook.com", "fb.com", "twitter.com", "x.com", "tiktok.com", "linktr.ee"];
+        if (!SOCIAL.includes(host)) domain = host;
+      } catch { /* zły URL */ }
+    }
+    const result = await withCostLog("sim-venue-wide", { model: b.model || "claude-sonnet-4-6", dishes: dishes.length, lokal: b.name, captureId: b.captureId }, async () => {
+      // 1) HARVEST z Serpera (strona www + portale/social).
+      const { photos: harvested, queries } = await harvestVenuePool({ domain, name: b.name, city: b.city, perQuery: b.perQuery ?? 12 });
+      // 2) Dorzuć Google Places + TripAdvisor (z migawki — mocny dowód „z lokalu").
+      const pool: PoolPhoto[] = [...harvested];
+      for (const n of (b.photoNames ?? []).slice(0, 10)) pool.push({ source: "google", photoName: n });
+      for (const p of (b.taPhotos ?? []).slice(0, 12)) pool.push({ source: "tripadvisor", url: p.url, caption: p.caption });
+      // 3) JEDNO przejście vision: przypisz pulę do dań.
+      const { results, usage, fetched } = await matchPoolToDishes({ pool, dishes, cuisine: b.cuisine, model: b.model, certain: b.certain !== false });
+      return { harvested, queries, pool, results, usage, fetched };
+    });
+    const accepted = result.results.filter(poolMatchAccepted);
+    const bySource = (s: string) => result.pool.filter((p) => p.source === s).length;
+    return c.json({
+      ms: Date.now() - t0,
+      usage: result.usage,
+      queries: result.queries,
+      poolCounts: { site: bySource("site"), portal: bySource("portal"), google: bySource("google"), tripadvisor: bySource("tripadvisor"), total: result.pool.length, fetched: result.fetched },
+      results: result.results,
+      acceptedCount: accepted.length,
+      dishesCovered: new Set(accepted.map((r) => r.dish)).size,
+      dishesTotal: dishes.length,
+    });
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500);
   }
@@ -1654,9 +1896,10 @@ app.get("/api/runtime-config", async (c) => {
     const j = (await r.json()) as { config?: unknown };
     const models = Object.entries(MODELS).map(([id, def]) => ({ id, label: def.label, provider: def.provider }));
     // defaults: domyślne SERWERA per krok (gdy config nie ustawia) — lab pokazuje je zamiast „z apki".
-    return c.json({ config: j.config ?? {}, models, defaults: SERVER_DEFAULT_MODELS });
+    // ttlDefaults: domyślne TTL (dni) per rodzaj cache — lab pokazuje jako placeholder przy nadpisaniach.
+    return c.json({ config: j.config ?? {}, models, defaults: SERVER_DEFAULT_MODELS, ttlDefaults: TTL_DAYS });
   } catch (e) {
-    return c.json({ error: (e as Error).message, config: {}, models: [], defaults: {} }, 502);
+    return c.json({ error: (e as Error).message, config: {}, models: [], defaults: {}, ttlDefaults: {} }, 502);
   }
 });
 app.post("/api/runtime-config", async (c) => {

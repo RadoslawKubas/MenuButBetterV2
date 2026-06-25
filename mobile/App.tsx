@@ -15,10 +15,9 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import {
   scanMenu,
-  enrichMenuOnServer,
   scanStart,
   scanUploadPhoto,
-  scanRun,
+  scanRunPipeline,
   setScanSession,
   setSessionCostHandler,
   type ScanPhase,
@@ -31,7 +30,6 @@ import {
   placePhotoUrl,
   reportError,
   registerInstall,
-  initForceFresh,
   fetchAppConfig,
   type VenueMatch,
   type PeekResult,
@@ -42,6 +40,8 @@ import {
   captureFromCamera,
   pickFromLibrary,
   prepareCameraPhoto,
+  setModelImageSpec,
+  prepareForPeek,
   MAX_IMAGES,
   SCAN_BATCH,
   type PreparedImage,
@@ -91,6 +91,7 @@ import { friendlyMessage } from "./src/appLog";
 import { RenameModal } from "./src/RenameModal";
 import { RestaurantCard } from "./src/RestaurantCard";
 import { colors } from "./src/theme";
+import { Icon } from "./src/Icon";
 import {
   DEFAULT_MODELS,
   MODEL_OPTIONS,
@@ -111,9 +112,8 @@ import {
 
 // Domyślny zasięg szukania lokalu „w pobliżu" (m). Można zwiększać „szerszym zasięgiem".
 const DEFAULT_NEARBY_RADIUS = 800;
-// Mały promień do listy „w pobliżu" wysyłanej do vision przy skanie (venue_match) — na błąd GPS, mała
-// lista = mniej szumu. Większy zasięg jest tylko w ręcznym „Znajdź inny".
-const VENUE_MATCH_RADIUS = 220;
+// Listę „w pobliżu" do vision (venue_match) liczy teraz SERWER z GPS (promień 220 m w http.ts) — apka jej
+// nie wysyła. Patrz scanRunPipeline / scanStart(location).
 // Ile zdjęć poglądowych TRZYMAĆ per danie. Serwer i tak WERYFIKUJE wizją ~9 kandydatów (cap = max(num·3,9)),
 // więc 3 zamiast 1 jest DARMOWE (ta sama weryfikacja) — tylko nie wyrzucamy reszty dobrych. Galeria dania
 // (InfoFooter) pokazuje je paskiem; wcześniej marnowaliśmy już zweryfikowane fotki.
@@ -180,11 +180,11 @@ function scanPhaseLabel(p: ScanPhase): { label: string; pct?: number } {
 function peekNote(p?: PeekResult): string | undefined {
   if (!p) return undefined;
   const parts: string[] = [];
-  if (p.bad || !p.readable) parts.push("⚠️ słaba jakość — model może nie odczytać");
-  else if (p.partial) parts.push("⚠️ jakość słaba — wynik może być niepełny");
-  if (p.isMenu === false) parts.push("📷 to chyba nie menu");
-  if (p.cuisine?.trim()) parts.push(`🍽 ${p.cuisine.trim()}`);
-  if (p.restaurantName?.trim()) parts.push(`🏠 ${p.restaurantName.trim()}`);
+  if (p.bad || !p.readable) parts.push("słaba jakość — model może nie odczytać");
+  else if (p.partial) parts.push("jakość słaba — wynik może być niepełny");
+  if (p.isMenu === false) parts.push("to chyba nie menu");
+  if (p.cuisine?.trim()) parts.push(`${p.cuisine.trim()}`);
+  if (p.restaurantName?.trim()) parts.push(`${p.restaurantName.trim()}`);
   return parts.length ? parts.join("  ·  ") : undefined;
 }
 
@@ -211,8 +211,13 @@ export default function App() {
   const [scanFoundName, setScanFoundName] = useState<string | null>(null);
   // Pozycje pojawiające się NA ŻYWO w trakcie skanu (mini-karty: nazwa, cena, opis, miniatura).
   const [scanItems, setScanItems] = useState<
-    { original: string; translated: string; branded: boolean; price: string | null; currency: string | null; description: string; photo?: string }[]
+    { id?: string; original: string; full_name: string; translated: string; branded: boolean; price: string | null; currency: string | null; description: string; photo?: string; enriched?: boolean }[]
   >([]);
+  // Licznik #2: ile dań ma UKOŃCZONY enrich (idempotentnie z rozmiaru bufora po id). #1 = scanItems.length, #3 = photoProg.
+  const [scanEnrichDone, setScanEnrichDone] = useState(0);
+  // Postęp KROKU ★ (zdjęcia z lokalu) — to jedno wywołanie wizji bez „per-danie", więc segment paska PEŁZNIE
+  // czasowo (0→~0.9), żeby pasek się ruszał, zamiast stać na 100% z napisem „kończę".
+  const [venueCreep, setVenueCreep] = useState(0);
   // Prefetch tanich zdjęć poglądowych podczas skanu — reużywane po skanie (bez ponownego szukania).
   const prefetchedPhotos = useRef<Map<string, DishPhotoLite[]>>(new Map());
   const [images, setImages] = useState<PreparedImage[]>([]);
@@ -236,7 +241,7 @@ export default function App() {
   const [peekingUris, setPeekingUris] = useState<string[]>([]); // które zdjęcia są AKTUALNIE analizowane (równolegle)
   // Zachowania auto-dociągania STEROWANE Z SERWERA (config runtime, dawne „Koszty/Limity"). Apka czyta na
   // starcie (/app-config). autoDescriptions: opisy od razu vs na klik; autoLimit: ile dań (0=wszystkie).
-  const [appCfg, setAppCfg] = useState<{ autoDescriptions: boolean; autoLimit: number }>({ autoDescriptions: false, autoLimit: 0 });
+  const [appCfg, setAppCfg] = useState<{ autoDescriptions: boolean; autoLimit: number; imageMaxEdge?: number; imageQuality?: number; peekImageMaxEdge?: number; peekImageQuality?: number }>({ autoDescriptions: false, autoLimit: 0 });
   const [showPricing, setShowPricing] = useState(false); // strona „Cennik"
   const [showVenueSearch, setShowVenueSearch] = useState(false); // osobny ekran „Znajdź lokal" (mapa + szukanie)
   const [sessionCost, setSessionCost] = useState(0); // LIVE koszt sesji (z nagłówka x-session-cost) — rośnie w trakcie
@@ -266,6 +271,7 @@ export default function App() {
   const structureMenuRef = useRef<Menu | null>(null); // zamrożona struktura do upgrade'u
   const freshVenueRef = useRef<RestaurantInfo | null>(null); // ostatni znaleziony lokal (dla finalizacji)
   const scanGenRef = useRef(0); // generacja skanu — rośnie z każdym runScan; odsiewa spóźnione callbacki starych skanów
+  const scanCancelRef = useRef<(() => void) | null>(null); // abort bieżącego pipeline'u (nowy skan/cancel → serwer staje)
   const replayCaptureIdRef = useRef<string | null>(null); // replay z migawki → REUŻYJ tej migawki (nie twórz nowej)
   const venueFinalizedRef = useRef(false); // czy lokal zapisany do skanu (raz na skan)
   const previewStartedRef = useRef(false); // czy ruszyło dociąganie TANICH poglądowych (★ z lokalu czeka na to)
@@ -311,7 +317,6 @@ export default function App() {
     });
     newSession(); // sesja od startu apki
     void registerInstall(); // GUID instalacji + rejestracja urządzenia/wersji + kolejka błędów offline
-    void initForceFresh(); // wczytaj debugowy tryb „bez cache" (jeśli włączony wcześniej)
     listScans().then(setScans).catch(() => {});
     listCaptures().then(setCaptures).catch(() => {});
     loadLangPref()
@@ -320,8 +325,23 @@ export default function App() {
       })
       .catch(() => {});
     loadPeekPref().then(setPeekEnabled).catch(() => {});
-    fetchAppConfig().then(setAppCfg).catch(() => {}); // zachowania auto-dociągania z serwera (config runtime)
+    fetchAppConfig().then((c) => {
+      setAppCfg(c); // zachowania auto-dociągania z serwera (config runtime)
+      // rozmiary zdjęć DO MODELI (serwer = źródło prawdy) — osobno skan i peek (różne modele)
+      setModelImageSpec({ imageMaxEdge: c.imageMaxEdge, imageQuality: c.imageQuality, peekImageMaxEdge: c.peekImageMaxEdge, peekImageQuality: c.peekImageQuality });
+    }).catch(() => {});
   }, []);
+
+  // KROK ★ „zdjęcia z lokalu" to ostatni etap (po enrich+zdjęciach) — JEDNO wywołanie wizji bez „per-danie".
+  // Pełznij jego segment paska czasowo (0→0.9), żeby pasek dalej się ruszał, a nie stał na 100% przy „kończę".
+  useEffect(() => {
+    const total = structureMenuRef.current ? structureMenuRef.current.sections.reduce((n, s) => n + s.items.length, 0) : 0;
+    const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
+    const venuePhase = status === "scanning" && structureReady && total > 0 && scanEnrichDone >= total && (pt === 0 || pd >= pt);
+    if (!venuePhase) { setVenueCreep((c) => (c === 0 ? c : 0)); return; }
+    const t = setInterval(() => setVenueCreep((c) => Math.min(0.9, c + 0.06)), 650);
+    return () => clearInterval(t);
+  }, [status, structureReady, scanEnrichDone, photoProg]);
 
   function togglePeek(on: boolean) {
     setPeekEnabled(on);
@@ -369,7 +389,10 @@ export default function App() {
   async function runPeek(img: PreparedImage) {
     setPeekingUris((p) => [...p, img.uri]);
     try {
-      const r = await quickPeek({ base64: img.base64, mediaType: img.mediaType }, models.peek, img.srcHash);
+      // PEEK idzie INNYM modelem niż skan → własny rozmiar (z /app-config). Kodujemy z ORYGINAŁU (hiResUri),
+      // bo peek może chcieć większy obraz niż scan; brak/awaria → fallback na base64 skanu.
+      const peekB64 = (await prepareForPeek(img.hiResUri ?? img.uri)) ?? img.base64;
+      const r = await quickPeek({ base64: peekB64, mediaType: img.mediaType }, models.peek, img.srcHash);
       setPeekInfo(r);
       setPeekByUri((prev) => ({ ...prev, [img.uri]: r })); // ocena dla tego konkretnego zdjęcia
       setHint((h) => (h.trim() ? h : r.restaurantName || h)); // nie nadpisuj, gdy user już coś wpisał
@@ -482,10 +505,12 @@ export default function App() {
     recordCapture?: boolean;
   }) {
     if (opts.images.length === 0) return;
+    scanCancelRef.current?.(); // przerwij ewentualny poprzedni pipeline (serwer staje, nie dolicza kosztu)
+    scanCancelRef.current = null;
     setError(null);
     setStatus("scanning");
     setBrowseEarly(false);
-    setPhotoProg(null); // nowy skan → wyzeruj postęp zdjęć
+    setPhotoProg(null); setScanEnrichDone(0); setVenueCreep(0); // nowy skan → wyzeruj liczniki (#3 + #2 + segment ★)
     setStructureReady(false);
     earlyVenueRef.current = false; // #2a: reset cyklu życia lokalu
     scanIdRef.current = null;
@@ -581,153 +606,28 @@ export default function App() {
       let scanId: string | null = null;
       setScanFromCache(false);
 
-      // PREFETCH zdjęć poglądowych NA ŻYWO: gdy model wypisze pozycję, od razu dociągamy dla niej
-      // tanie zdjęcie (Serper) — gotowe, zanim skan się skończy; potem reużyte (bez ponownego szukania).
+      // Mini-lista nazw na ekranie skanu (live ticker struktury). RESZTA (enrich/zdjęcia/★) dochodzi
+      // STRUMIENIEM z serwera po `id` — apka nie prowadzi już własnej kolejki enrich ani pompy zdjęć.
       setScanItems([]);
       setScanFoundName(null);
       const onScanItem = (stub: ScanItemStub) => {
-        // Nazwa do mini-listy (za darmo). Zdjęcia poglądowe dociąga POMPA, gdy rolling da photo_query
-        // (struktura strumieniuje nazwy bez photo_query — nie szukamy po surowej nazwie).
         setScanItems((prev) => [
           ...prev,
-          { original: stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
+          { id: stub.id, original: stub.original, full_name: stub.full_name || stub.original, translated: stub.translated, branded: stub.branded, price: stub.price, currency: stub.currency, description: stub.description },
         ]);
-        // Rolling enrich: danie do kolejki; flush co ~8, ALE dopiero gdy znamy kuchnię ze struktury
-        // (stabilny klucz cache). Do tego czasu kolejka rośnie — onMeta ją opróżni, gdy kuchnia dojdzie.
-        enrichQueue.push(stub);
-        if (cuisineReady && enrichQueue.length >= ENRICH_FLUSH) flushEnrich();
       };
-      // (martwe w dwufazowym — server structureOnly nie emituje enrich-item; zostaje dla zgodności sygnatury)
-      const onEnrichItem = (stub: ScanItemStub) => {
-        setScanItems((prev) => prev.map((x) => (x.original === stub.original
-          ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description }
-          : x)));
-      };
-      // ENRICH STRUMIENIOWY (rolling po ~8 dań): dania spływają ze STRUKTURY (onScanItem) → kolejka →
-      // flush paczkami do /enrich. Startuje WCZEŚNIE (po ustaleniu kuchni z onMeta/peeku) i nakłada się
-      // na trwającą strukturę, ale robi ~N/8 wywołań zamiast jednego na danie. Patch W MIEJSCU po nazwie.
-      // Spójność klucza cache: ta sama kuchnia (scanCuisine) + locationHint + menu_description (ze strumienia)
-      // co finałowy enrich → finał trafia w cache, nic się nie marnuje.
-      const enrichJobs: Promise<void>[] = [];
-      const enrichedAcc = new Map<string, MenuItem>(); // original → wzbogacona pozycja (wyniki rollingu)
-      // Usage enrichu kumulujemy LOKALNIE — rolling leci w trakcie struktury, gdy scanId jeszcze NIE
-      // istnieje (powstaje przy scaleniu partii). Doliczymy do skanu raz, w finale (#3: fix kosztu).
-      let enrichUsage: Usage = ZERO_USAGE;
-      let scanCuisine = pickPeekCuisine() || ""; // kuchnia do enrichu — peek; nadpisze ją struktura (onMeta)
-      // Kuchnia ze STRUKTURY (onMeta) jest DETERMINISTYCZNA (przy re-skanie struktura z cache → ta sama
-      // kuchnia). Peek to osobne, niestabilne wywołanie. Dla STABILNEGO klucza cache enrichu (kuchnia jest
-      // jego częścią) NIE flushujemy enrichu, póki nie znamy kuchni ze struktury — inaczej wczesne partie
-      // szły z pustą/peek kuchnią, klucz różnił się co skan i cache nie trafiał. Patrz [[menubutbetter-cache]].
-      let cuisineReady = false;
-      let scanReadName = ""; // ostatnia nazwa lokalu ze streamu (fallback, gdy venue_match nie trafi)
-      let nearbyCands: RestaurantInfo[] = []; // kandydaci „w pobliżu" (do vision: venue_match)
-      // POGLĄDOWE W TRAKCIE: gdy rolling da photo_query, od razu dociągamy tanie poglądowe (Serper/Wiki),
-      // żeby zdjęcia pojawiały się WCZEŚNIE (jak dawny prefetch), a nie w finale. attachPhotosByName jest
-      // no-op gdy pozycji jeszcze nie ma w menu (w trakcie struktury) → trzymamy w previewAcc i dokładamy
-      // przy structureReady/compose. previewStartedRef → ★ z lokalu dopiero po poglądowych.
-      const previewAcc = new Map<string, DishPhotoLite[]>();
-      const pfQueue: { original: string; photoQuery: string }[] = [];
-      let pfActive = 0;
-      let pfEnqueued = 0;
-      const pumpPreview = () => {
-        while (pfActive < 4 && pfQueue.length > 0) {
-          const job = pfQueue.shift()!;
-          pfActive++;
-          void (async () => {
-            try {
-              const { photos } = await fetchDishPhotos(job.original, undefined, {
-                representativeOnly: true, num: REPR_PER_DISH, photoQuery: job.photoQuery, cuisine: scanCuisine, verifyModel: opts.models.verify, 
-              });
-              if (photos.length > 0) {
-                const cached = await cachePhotos(photos);
-                previewAcc.set(job.original, cached);
-                previewStartedRef.current = true;
-                // Mini-karta na ekranie skanu: pokaż miniaturę OD RAZU (w fazie struktury menu jest null,
-                // więc setMenu niżej to no-op — bez tego zdjęcia widać dopiero po „Otwórz menu").
-                setScanItems((prev) => prev.map((x) => (x.original === job.original && !x.photo ? { ...x, photo: cached[0]?.url } : x)));
-                setMenu((prev) => (prev ? attachPhotosByName(prev, job.original, cached) : prev));
-                maybeUpgradeVenue();
-              }
-            } catch {
-              /* ciche — brak poglądowego dla tego dania */
-            } finally {
-              pfActive--;
-              if (myGen === scanGenRef.current) setPhotoProg((p) => (p ? { done: p.done + 1, total: p.total } : p));
-              pumpPreview();
-              // Gdy pompa skończyła (brak aktywnych i kolejka pusta) → zapisz menu z dociągniętymi poglądowymi,
-              // a gdy enrich TEŻ gotowy → dopiero TERAZ status „done" (pasek liczył zdjęcia, znika na końcu).
-              if (pfActive === 0 && pfQueue.length === 0) {
-                if (scanIdRef.current) setMenu((prev) => { if (prev && scanIdRef.current) void updateScanMenu(scanIdRef.current, prev); return prev; });
-                if (myGen === scanGenRef.current) setPhotoProg(null); // pompa skończona → pasek zdjęć znika
-              }
-            }
-          })();
-        }
-      };
-      const enrichQueue: ScanItemStub[] = [];
-      const ENRICH_FLUSH = 8;
-      const stubToItem = (s: ScanItemStub): MenuItem => ({
-        original: s.original, translated: s.original, source_text: s.original,
-        menu_description: s.description || "", description: "",
-        ingredients: [], allergens: [], category: "other",
-        dietary: { vegetarian: false, vegan: false, gluten_free: false }, spice_level: 0,
-        price: s.price, currency: s.currency,
-      });
-      const flushEnrich = () => {
-        if (enrichQueue.length === 0) return;
-        const batch = enrichQueue.splice(0, enrichQueue.length);
-        const partial: Menu = {
-          restaurant_name: null, restaurant_address: null, restaurant_language: "",
-          cuisine: scanCuisine,
-          sections: [{ name: "", name_translated: "", items: batch.map(stubToItem) }],
-          notes: [],
-        };
-        enrichJobs.push((async () => {
-          try {
-            const onEnrich = (stub: ScanItemStub) => {
-              setMenu((prev) => (prev ? patchEnrichByName(prev, stub) : prev));
-              setScanItems((prev) => prev.map((x) => (x.original === stub.original ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description } : x)));
-            };
-            const { menu: enriched, usage } = await enrichMenuOnServer(
-              partial,
-              { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-              undefined,
-              onEnrich,
-            );
-            // Zbierz wyniki LOKALNIE — rolling w trakcie struktury nie mógł zapatchować menu (pozycji
-            // jeszcze w nim nie było); po wszystkich partiach złożymy menu z tego, bez redundantnego finału.
-            enriched.sections.forEach((s) => s.items.forEach((it) => {
-              enrichedAcc.set(it.original, { ...it, enriched: true });
-              // od razu kolejkuj tanie poglądowe (limit z „Kosztów"); apply pojawi się gdy pozycja jest w menu
-              if (it.photo_query && (appCfg.autoLimit <= 0 || pfEnqueued < appCfg.autoLimit)) {
-                pfEnqueued++;
-                if (myGen === scanGenRef.current) setPhotoProg((p) => ({ done: p?.done ?? 0, total: (p?.total ?? 0) + 1 }));
-                pfQueue.push({ original: it.original, photoQuery: it.photo_query });
-                pumpPreview();
-              }
-            }));
-            setMenu((prev) => (prev ? applyEnrich(prev, enriched) : prev));
-            enrichUsage = addUsage(enrichUsage, usage); // #3: kumuluj (scanId może jeszcze nie istnieć)
-          } catch {
-            // paczka enrich padła — pozycje zostają z oryginałem; finałowy enrich i tak dopina
-          }
-        })());
-      };
+      let scanCuisine = pickPeekCuisine() || ""; // kuchnia (peek; nadpisze ją meta ze struktury) — kontekst karty
 
       // === ARCHITEKTURA B: sesja — zdjęcia wysyłamy POJEDYNCZO (odporne, retry per zdjęcie, pasek postępu),
       // serwer buforuje, tnie PO ROZMIARZE na partie modelu i streamuje strukturę (onScanItem → rolling). ===
       setScanPhase({ label: "Wysyłam zdjęcia…" });
-      // Lokale „w pobliżu" (mały promień) liczymy RÓWNOLEGLE z uploadem — vision dostanie ich nazwy+kuchnię
-      // i może wskazać lokal (venue_match). Wymaga GPS; ciche niepowodzenie = brak listy (działa jak dotąd).
-      const nearbyPromise: Promise<RestaurantInfo[]> = location
-        ? fetchRestaurant({ forceNearby: true, location, targetLang: opts.targetLang, radius: VENUE_MATCH_RADIUS })
-            .then((res) => res.candidates ?? [])
-            .catch(() => [])
-        : Promise.resolve([]);
+      // Lokale „w pobliżu" (venue_match) liczy teraz SERWER z GPS przekazanego w scanStart — apka nie robi już
+      // osobnego /restaurant?forceNearby ani nie odsyła listy (koniec ping-ponga, mniej kodu po stronie apki).
       const sessionId = await scanStart({
         targetLang: opts.targetLang,
         restaurantHint: opts.hint.trim() || undefined,
         locationHint,
+        location, // serwer rozpozna lokal w pipeline (★ + karta) — bez osobnego lookupu apki
         cuisineHint: pickPeekCuisine(),
         model: opts.models.scan,
         enrichModel: opts.models.enrich,
@@ -762,200 +662,119 @@ export default function App() {
         }
         setScanProgress({ done: i + 1, total: ordered.length });
       }
-      // Skan: serwer streamuje strukturę; onScanItem napędza rolling enrich, onMeta daje nazwę/kuchnię (+#2a).
+      // Skan: serwer prowadzi CAŁY pipeline (struktura→enrich→zdjęcia poglądowe→★) i streamuje zdarzenia po `id`.
+      // Apka tylko RENDERUJE: onStructure buduje menu, reszta łata pozycje po id — zero scalania po nazwie,
+      // zero odsyłania menu. cancel() (nowy skan/odejście) przerywa serwer (abort) i nie dolicza kosztu.
       setScanPhase({ label: "Czytam menu…" });
-      nearbyCands = await nearbyPromise; // gotowe po uploadzie — bez opóźniania startu skanu
-      const ran = await scanRun(
-        sessionId,
-        (p) => setScanPhase(scanPhaseLabel(p)),
-        onScanItem,
-        (m) => {
-          if (myGen !== scanGenRef.current) return; // spóźniony meta STAREGO skanu — nie dotykaj bieżącego
-          if (m.cuisine && m.cuisine.trim()) {
-            scanCuisine = m.cuisine.trim();
-            // Kuchnia ze struktury znana → odblokuj rolling enrich i opróżnij to, co czekało.
-            if (!cuisineReady) { cuisineReady = true; flushEnrich(); }
-          }
 
-          // venue_match (przychodzi PO sparsowaniu struktury): vision wskazało lokal z „w pobliżu". Ma
-          // PIERWSZEŃSTWO nad zgadywaniem po nazwie. by='name' → pewny; by='cuisine' → zgadnięty (Tier 0
-          // rygorystyczny). Brak dopasowania → fallback po odczytanej nazwie/GPS.
-          if (m.venueMatch !== undefined) {
-            if (earlyVenueRef.current) return;
-            earlyVenueRef.current = true;
-            const cand = m.venueMatch ? nearbyCands[m.venueMatch.index] : undefined;
-            if (cand) {
-              setScanFoundName(cand.name);
-              const venue: RestaurantInfo = m.venueMatch!.by === "cuisine"
-                ? { ...cand, guessedByLocation: true, nameVerified: false }
-                : { ...cand, guessedByLocation: false, nameVerified: true };
-              const minimal: Menu = { restaurant_name: cand.name, restaurant_address: cand.address ?? null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
-              void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true, preResolved: venue });
-            } else if (scanReadName || location) {
-              const minimal: Menu = { restaurant_name: scanReadName || null, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
-              void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
-            }
-            return;
-          }
+      // Rolling NA ŻYWO: serwer emituje enrich-item i photo PO `id` JUŻ w trakcie czytania (przed `structure`).
+      // Buforujemy je po id — i nakładamy na menu, gdy struktura się złoży (onStructure). Liczniki idempotentne
+      // (warm + finał emitują 2×, kluczowanie po id NIE podwaja).
+      const photosById = new Map<string, DishPhotoLite[]>(); // id → zdjęcia poglądowe (#3 done = rozmiar)
+      const enrichById = new Map<string, ScanItemStub>();    // id → wzbogacona pozycja (#2 = rozmiar)
+      const photoExpectIds = new Set<string>();              // id z photo_query (#3 total)
 
-          // Zdarzenie nazwy (streaming). Z kandydatami CZEKAMY na venue_match (lepszy sygnał) — pokaż samą
-          // nazwę. Bez kandydatów (brak GPS) — wczesny lookup po nazwie, jak dotąd.
-          if (!m.restaurantName) return;
-          setScanFoundName(m.restaurantName);
-          scanReadName = m.restaurantName;
-          if (nearbyCands.length === 0 && !earlyVenueRef.current) {
-            earlyVenueRef.current = true;
-            const minimal: Menu = { restaurant_name: m.restaurantName, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine || pickPeekCuisine() || "", sections: [], notes: [] };
-            void lookupRestaurant(minimal, location, scanIdRef.current, opts.targetLang, applyEarlyVenue, { skipUpgrade: true });
-          }
-        },
-        nearbyCands.map((c) => ({ name: c.name, cuisine: c.cuisine ?? null })),
-      );
-      merged = ran.menu;
-      if (ran.cached) setScanFromCache(true); // cała struktura z cache → „bez kosztu modelu"
-      if (opts.hint.trim()) merged.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
-      {
+      // FAZA A (struktura gotowa): zapis skanu, pokaż menu, wczesne przejście do listy. Reszta dochodzi po id.
+      const onStructure = async (structureMenu: Menu) => {
+        if (myGen !== scanGenRef.current) return;
+        if (opts.hint.trim()) structureMenu.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
+        setScanProgress(null);
         const saved = await saveScan({
-          menu: merged,
-          targetLang: opts.targetLang,
-          model: opts.models.scan,
-          models: opts.models,
-          location,
-          locationSource,
-          useExifLocation: opts.useExifLocation,
-          useDeviceLocation: opts.useDeviceLocation,
-          usage: ran.usage,
-          sessionId: sessionIdRef.current,
+          menu: structureMenu, targetLang: opts.targetLang, model: opts.models.scan, models: opts.models,
+          location, locationSource, useExifLocation: opts.useExifLocation, useDeviceLocation: opts.useDeviceLocation,
+          usage: ZERO_USAGE, sessionId: sessionIdRef.current, // koszt CAŁEGO skanu dolicza się w finale (done.usage)
         });
-        scanId = saved.id;
-        scanIdRef.current = saved.id;
-        activeCostScanRef.current = saved.id; // od teraz live koszt sesji utrwalaj do TEGO skanu
-        setFreshScanId(saved.id);
-        setScans(await listScans());
-      }
-
-      // === FAZA A GOTOWA: struktura wszystkich stron złożona i ZAMROŻONA (kolejność/grupy się nie zmienią) ===
-      setScanProgress(null);
-      const structureMenu = merged as Menu;
-      // Dołącz poglądowe dociągnięte JUŻ w trakcie struktury (rolling dał photo_query, pompa pobrała,
-      // ale apply był no-op bo pozycji nie było w menu) — teraz pozycje są, więc je wstaw.
-      const withPreviews = (m: Menu): Menu => {
-        if (previewAcc.size === 0) return m;
-        let out = m;
-        for (const [orig, ph] of previewAcc) out = attachPhotosByName(out, orig, ph);
-        return out;
+        if (myGen !== scanGenRef.current) return;
+        scanId = saved.id; scanIdRef.current = saved.id; activeCostScanRef.current = saved.id;
+        setFreshScanId(saved.id); setScans(await listScans());
+        // Nałóż to, co rolling przysłał JUŻ PRZED strukturą (enrich + zdjęcia po id) — pozycje od razu opisane/ze
+        // zdjęciami, bez „od zera". Po strukturze kolejne enrich-item/photo łatają menu na bieżąco (menu != null).
+        let m = structureMenu;
+        enrichById.forEach((stub) => { m = patchEnrichById(m, stub); });
+        photosById.forEach((photos, id) => { m = attachPhotosById(m, id, photos, false); });
+        setMenu(m);
+        if (scanId) void updateScanMenu(scanId, m);
+        setStructureReady(true); setBrowseEarly(true); // struktura zamrożona → auto-przejście do listy
+        structureFrozenRef.current = true; structureMenuRef.current = m;
+        // Karta lokalu dojdzie zdarzeniem `venue` (serwer). Kontekst do RĘCZNEJ zmiany lokalu ustawiamy już
+        // teraz (przycisk „Zły lokal?"); onVenue uzupełni bieżący lokal + kandydatów.
+        setRestaurantCtx({ menu: structureMenu, location, scanId: scanId!, lang: opts.targetLang, apply: applyEarlyVenue, applyMenu: setMenu, current: freshVenueRef.current, candidates: [] });
+        if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
+        if (scanId) {
+          try { const sp = persistScanImages(scanId, ordered); if (sp.length > 0) void setScanSourcePhotos(scanId, sp); }
+          catch { /* zapis zdjęć źródłowych best-effort — nie blokuje skanu */ }
+        }
       };
-      setMenu(withPreviews(structureMenu));
-      if (scanId) void updateScanMenu(scanId, structureMenu);
-      setStructureReady(true); // struktura kompletna i zamrożona
-      setBrowseEarly(true); // AUTO: skoro można już przejść do listy, przechodzimy — bez przycisku; enrich
-      //                       (tłumaczenia/opisy/zdjęcia) dochodzi w miejscu już w widoku menu.
-      structureFrozenRef.current = true; // #2a: od teraz wolno robić upgrade ★ (struktura niezmienna)
-      structureMenuRef.current = structureMenu;
-      scanIdRef.current = scanId!;
 
-      // Powiąż migawkę z zapisanym skanem → eksport dołączy WYNIK (do analizy „co źle").
-      if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
-
-      // Zapisz ZDJĘCIA ŹRÓDŁOWE (te, z których powstało menu) do podglądu w historii.
-      if (scanId) {
-        try {
-          const sp = persistScanImages(scanId, ordered);
-          if (sp.length > 0) void setScanSourcePhotos(scanId, sp);
-        } catch {
-          /* zapis zdjęć źródłowych best-effort — nie blokuje skanu */
-        }
+      const ctrl = scanRunPipeline(
+        sessionId,
+        {
+          onProgress: (p) => { if (myGen === scanGenRef.current) setScanPhase(scanPhaseLabel(p)); },
+          onItem: onScanItem, // mini-lista nazw na ekranie skanu (live ticker struktury)
+          onMeta: (m) => {
+            if (myGen !== scanGenRef.current) return;
+            if (m.cuisine && m.cuisine.trim()) scanCuisine = m.cuisine.trim();
+            if (m.restaurantName) setScanFoundName(m.restaurantName); // wstępna nazwa; karta = zdarzenie `venue`
+          },
+          onStructure,
+          onEnrichItem: (stub) => {
+            if (myGen !== scanGenRef.current || !stub.id) return;
+            enrichById.set(stub.id, stub); // bufor po id — nałoży się w onStructure (gdy enrich przyszedł przed strukturą)
+            if (stub.photoQuery) photoExpectIds.add(stub.id);
+            setMenu((prev) => (prev ? patchEnrichById(prev, stub) : prev)); // po strukturze: łata od razu; przed = no-op (bufor wyżej)
+            setScanItems((prev) => prev.map((x) => ((x.full_name || x.original) === (stub.full_name || stub.original) ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description, enriched: true } : x)));
+            // Liczniki #2 (wzbogacone) i #3-cel (ze spodziewanym zdjęciem) — z ROZMIARU zbiorów (idempotentne na powtórki).
+            setScanEnrichDone(enrichById.size);
+            setPhotoProg({ done: photosById.size, total: photoExpectIds.size });
+          },
+          onPhoto: async (id, photos) => {
+            if (myGen !== scanGenRef.current) return;
+            const cached = await cachePhotos(photos);
+            if (myGen !== scanGenRef.current) return;
+            previewStartedRef.current = true;
+            if (!photosById.has(id)) photosById.set(id, cached); // poglądowe — nie nadpisuj ewentualnego ★ (idempotentne na powtórki warm+finał)
+            setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, false) : prev)); // po strukturze łata; przed = bufor (photosById) nałoży onStructure
+            setScanItems((prev) => prev.map((x) => (x.id === id && !x.photo ? { ...x, photo: cached[0]?.url } : x))); // miniatura w tickerze już w trakcie czytania
+            setPhotoProg({ done: photosById.size, total: photoExpectIds.size }); // #3 z ROZMIARÓW zbiorów (idempotentne)
+          },
+          onVenuePhoto: async (id, photos) => {
+            if (myGen !== scanGenRef.current) return;
+            const cached = await cachePhotos(photos);
+            if (myGen !== scanGenRef.current) return;
+            photosById.set(id, mergePhotos(cached, photosById.get(id) ?? [])); // ★ z przodu, poglądowe zostają
+            setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, true) : prev));
+          },
+          onVenue: (restaurant, candidates) => {
+            if (myGen !== scanGenRef.current) return;
+            setScanFoundName(restaurant.name);
+            setFreshRestaurant(restaurant);
+            freshVenueRef.current = restaurant;
+            setRestaurantCtx((prev) => (prev
+              ? { ...prev, current: restaurant, candidates }
+              : { menu: structureMenuRef.current ?? { restaurant_name: restaurant.name, restaurant_address: restaurant.address ?? null, restaurant_language: "", cuisine: scanCuisine, sections: [], notes: [] }, location, scanId: scanIdRef.current ?? "", lang: opts.targetLang, apply: applyEarlyVenue, applyMenu: setMenu, current: restaurant, candidates }));
+            if (scanIdRef.current) void updateScanRestaurant(scanIdRef.current, restaurant);
+          },
+        },
+      );
+      scanCancelRef.current = ctrl.cancel;
+      const done = await ctrl.promise;
+      if (myGen !== scanGenRef.current) return; // nowy skan w międzyczasie — porzuć ten wynik
+      setScanFromCache(done.cached); // cała struktura z cache → „bez kosztu modelu"
+      // FINALIZACJA: autorytatywne, wzbogacone menu z serwera (done) + dociągnięte zdjęcia (po id).
+      const finalMenu = mergeDoneById(done.menu, photosById);
+      setMenu(finalMenu);
+      // NAJPIERW flip na „done" (zdejmuje spinnery enrich/zdjęcia) — DOPIERO POTEM odśwież listę skanów (async),
+      // żeby między setMenu a setStatus nie było renderu w stanie „scanning" z menu bez flag enriched.
+      setScanPhase(null);
+      setScanItems([]);
+      setPhotoProg(null); // pipeline (z fotkami) skończony → znika pasek „Pobieram zdjęcia…"
+      setStatus("done"); // pipeline gotowy → akcje mutujące odblokowane
+      if (scanIdRef.current) {
+        void updateScanMenu(scanIdRef.current, finalMenu);
+        void addScanUsage(scanIdRef.current, done.usage); // koszt całego skanu (struktura+enrich+zdjęcia) raz
+        if (appCfg.autoDescriptions) void fillDescriptions(finalMenu, scanIdRef.current, opts.targetLang, setMenu);
       }
-
-      // Lokal na ZAMROŻONEJ strukturze. #2a: kartę mógł już pokazać wczesny lookup (onMeta) — NIE resetujemy
-      // freshRestaurant. Kontekst karty (wybór/szukanie) z prawdziwym scanId + zamrożonym menu.
-      setRestaurantCtx({
-        menu: structureMenu,
-        location,
-        scanId: scanId!,
-        lang: opts.targetLang,
-        apply: applyEarlyVenue,
-        applyMenu: setMenu,
-        current: freshVenueRef.current,
-        candidates: [],
-      });
-      if (freshVenueRef.current) {
-        // wczesny lookup już znalazł lokal → domknij (zapis; ★ przez maybeUpgradeVenue gdy ruszą poglądowe)
-        void finalizeVenue(structureMenu, scanId!, freshVenueRef.current);
-      } else if (!earlyVenueRef.current && structureMenu.restaurant_name) {
-        // onMeta nie zgłosił nazwy w trakcie, ale jest w strukturze → read-only lookup (skipUpgrade),
-        // a ★ z lokalu pójdzie przez applyEarlyVenue→finalizeVenue→maybeUpgradeVenue (po poglądowych).
-        void lookupRestaurant(structureMenu, location, scanId!, opts.targetLang, applyEarlyVenue, { applyMenu: setMenu, skipUpgrade: true });
-      }
-      // (jeśli earlyVenueRef ustawiony, ale wynik jeszcze nie doszedł → applyEarlyVenue domknie sam, gdy wróci)
-
-      // === FAZA B: enrich leci ROLLING (po ~8 dań, ruszył już w trakcie struktury). Tu domykamy ostatnią
-      // paczkę, czekamy na rolling, robimy FINAŁOWY enrich na KOMPLETNEJ strukturze (tłumaczy SEKCJE,
-      // których rolling nie ruszał, i dopina pominięte) — dania z rollingu = trafienia cache → szybko. ===
-      void (async () => {
-        setScanPhase({ label: "Tłumaczę grupy…" });
-        // #2: NAJPIERW grupy + notatki (szkielet bez dań — szybko). Awaitujemy (mało elementów), żeby
-        // tłumaczenia sekcji weszły do finalMenu/zapisu; sekcje są cache'owane więc to tanie.
-        const sectTrans = new Map<string, string>();
-        const noteTrans = new Map<string, string>();
-        try {
-          const skeleton: Menu = { ...structureMenu, sections: structureMenu.sections.map((s) => ({ ...s, items: [] })) };
-          const { menu: skel, usage: skelUsage } = await enrichMenuOnServer(
-            skeleton,
-            { targetLang: opts.targetLang, locationHint, cuisineHint: scanCuisine || pickPeekCuisine(), model: opts.models.scan, enrichModel: opts.models.enrich },
-          );
-          skel.sections.forEach((s) => sectTrans.set(s.name, s.name_translated));
-          (skel.notes ?? []).forEach((n) => noteTrans.set(n.text, n.text_translated));
-          enrichUsage = addUsage(enrichUsage, skelUsage);
-          setMenu((prev) => (prev ? applyEnrich(prev, skel) : prev)); // pokaż przetłumaczone grupy od razu
-        } catch {
-          /* tłumaczenie grup padło — zostaną oryginalne nazwy sekcji */
-        }
-        setScanPhase({ label: "Tłumaczę i opisuję dania…" });
-        // Backstop: gdyby onMeta nie dało kuchni, weź ją z gotowej struktury (deterministyczna) — żeby
-        // ostatnia (i ewentualnie cała) partia poszła ze STABILNĄ kuchnią, nie z peek.
-        if (!cuisineReady && merged.cuisine) { scanCuisine = merged.cuisine; cuisineReady = true; }
-        flushEnrich(); // domknij ostatnią paczkę (<8 dań)
-        try {
-          await Promise.all(enrichJobs);
-        } catch {
-          /* część paczek mogła paść — finalizujemy z tym, co jest */
-        }
-        // Składamy menu z wyników ROLLINGU (enrichedAcc) + tłumaczeń sekcji — BEZ redundantnego finałowego
-        // enrichu (to on powodował „32/32 a wciąż mieli": re-streamował to samo z cache i blokował „done").
-        const compose = (base: Menu): Menu => ({
-          ...base,
-          sections: base.sections.map((s) => ({
-            ...s,
-            name_translated: sectTrans.get(s.name) ?? s.name_translated,
-            items: s.items.map((it) => {
-              const e = enrichedAcc.get(it.original);
-              // zachowaj zdjęcia z żywego menu (★/poglądowe); inaczej dołóż poglądowe z pompy (previewAcc).
-              const photos = it.photos && it.photos.length > 0 ? it.photos : previewAcc.get(it.original) ?? e?.photos;
-              return e ? { ...e, photos, enriched: true } : photos ? { ...it, photos } : it;
-            }),
-          })),
-          notes: (base.notes ?? []).map((n) => ({ ...n, text_translated: noteTrans.get(n.text) ?? n.text_translated })),
-        });
-        const finalMenu = compose(structureMenu); // jawnie (z poglądowymi z pompy)
-        setMenu((prev) => (prev ? compose(prev) : finalMenu)); // na żywym menu — zachowaj dociągnięte zdjęcia
-        if (scanId) void addScanUsage(scanId, enrichUsage); // #3: dolicz CAŁY enrich raz
-        if (scanId) void updateScanMenu(scanId, finalMenu);
-        setScans(await listScans());
-        // (poglądowe lecą POMPĄ w trakcie rollingu — nie wołamy fillDishPhotos tutaj)
-        if (appCfg.autoDescriptions) void fillDescriptions(finalMenu, scanId!, opts.targetLang, setMenu);
-        // Poglądowe ruszyły → teraz wolno podmieniać ★ z lokalu (jeśli lokal już znaleziony; inaczej
-        // zrobi to finalizeVenue gdy lookup wróci). Dzięki temu tanie poglądowe pojawiają się PIERWSZE.
-        previewStartedRef.current = true;
-        maybeUpgradeVenue();
-        setScanPhase(null);
-        setScanItems([]);
-        // Enrich gotowy → „done" (akcje mutujące odblokowane). Pasek POSTĘPU ZDJĘĆ żyje dalej osobno (photoProg)
-        // i znika dopiero gdy pompa opróżni kolejkę — pasek liczy też wyszukiwanie zdjęć, ale nie blokuje akcji.
-        setStatus("done");
-      })();
-      // (Architektura B: padłe partie nie istnieją po stronie apki — serwer scala wewnętrznie; odporność
-      // jest na poziomie POJEDYNCZEGO uploadu zdjęcia, retry w scanUploadPhoto.)
+      setScans(await listScans());
     } catch (e) {
       reportError(e instanceof Error ? e.message : String(e), { stack: e instanceof Error ? e.stack : undefined, label: "scan", context: { images: opts.images.length, model: opts.models.scan } });
       setError(friendlyMessage(e instanceof Error ? e.message : undefined));
@@ -973,7 +792,8 @@ export default function App() {
     const sections = m.sections.map((s) => ({
       ...s,
       items: s.items.map((it) => {
-        if (it.original !== stub.original) return it;
+        // dopasowanie po full_name (tożsamość) — odporne na powtórzone `original` (dwa „Mango")
+        if ((it.full_name || it.original) !== (stub.full_name || stub.original)) return it;
         changed = true;
         return {
           ...it,
@@ -992,8 +812,9 @@ export default function App() {
   // /enrich do ŻYWEJ struktury — keyowane po NAZWIE (odporne na pozycje dodane w tle przez padłe partie),
   // zachowując już dociągnięte zdjęcia. Pozycje spoza enrichu (np. z padłej partii) zostają nietknięte.
   function applyEnrich(prev: Menu, enriched: Menu): Menu {
+    // KLUCZ = full_name (tożsamość) — odporny na powtórzone `original` (dwa „Mango": lunch curry vs drink lemoniada)
     const enrByName = new Map<string, Menu["sections"][number]["items"][number]>();
-    enriched.sections.forEach((s) => s.items.forEach((it) => enrByName.set(it.original, it)));
+    enriched.sections.forEach((s) => s.items.forEach((it) => enrByName.set(it.full_name || it.original, it)));
     const sectTrans = new Map<string, string>();
     enriched.sections.forEach((s) => sectTrans.set(s.name, s.name_translated));
     const noteTrans = new Map<string, string>();
@@ -1005,7 +826,7 @@ export default function App() {
         ...s,
         name_translated: sectTrans.get(s.name) ?? s.name_translated,
         items: s.items.map((it) => {
-          const e = enrByName.get(it.original);
+          const e = enrByName.get(it.full_name || it.original);
           if (!e) return it; // pozycja spoza enrichu (np. z padłej partii) — zostaw jak jest
           return { ...e, enriched: true, photos: it.photos && it.photos.length > 0 ? it.photos : e.photos };
         }),
@@ -1202,7 +1023,7 @@ export default function App() {
     if (!restaurantCtx) return;
     const name = restaurantCtx.menu.restaurant_name?.trim();
     if (!name) {
-      Alert.alert("Brak nazwy", "Najpierw wpisz nazwę lokalu (✏️ Zmień nazwę menu).");
+      Alert.alert("Brak nazwy", "Najpierw wpisz nazwę lokalu (Zmień nazwę menu).");
       return;
     }
     void lookupRestaurant(
@@ -1295,7 +1116,7 @@ export default function App() {
         {name ? (
           <Pressable style={styles.searchNearbyBtn} onPress={searchByName}>
             <Text style={styles.searchNearbyText} numberOfLines={1}>
-              🔎 Szukaj „{name}"
+              <Icon name="searchAlt" /> Szukaj „{name}"
             </Text>
           </Pressable>
         ) : null}
@@ -1305,7 +1126,7 @@ export default function App() {
             onPress={() => searchNearby(DEFAULT_NEARBY_RADIUS, true)}
           >
             <Text style={styles.searchNearbyText}>
-              {nearbyLoading ? "⏳ Szukam…" : "🔍 Lokal w pobliżu"}
+              {nearbyLoading ? "Szukam…" : "Lokal w pobliżu"}
             </Text>
           </Pressable>
         ) : null}
@@ -1416,12 +1237,66 @@ export default function App() {
 
   // Wstaw zdjęcia poglądowe (prefetch) do pozycji o danej nazwie — z guardem: nie nadpisuj, gdy
   // pozycja już ma zdjęcia (np. lepsze z dotknięcia). Reużywa prefetch, nie szukając ponownie.
-  function attachPhotosByName(m: Menu, original: string, photos: DishPhotoLite[]): Menu {
+  // Dopasowanie po `full_name` (tożsamość) — odporne na powtórzone `original` (dwa „Mango": lunch curry vs drink lemoniada).
+  // ── Wariant po STABILNYM id (pipeline serwerowy): apka aktualizuje DOKŁADNIE tę pozycję, którą wskazał
+  //    serwer — zero kluczowania po nazwie (odporne na powtórzone „Mango"), zero scalania po stronie apki. ──
+  /** Znajdź pozycję po `id`. O(n), ale menu są małe. */
+  function locById(m: Menu, id: string): { si: number; ii: number } | null {
+    for (let si = 0; si < m.sections.length; si++) {
+      const items = m.sections[si]!.items;
+      for (let ii = 0; ii < items.length; ii++) if (items[ii]!.id === id) return { si, ii };
+    }
+    return null;
+  }
+  /** Załataj pozycję wynikiem enrich (tłumaczenie/opis/photo_query/branded/cena) — po `id`. */
+  function patchEnrichById(m: Menu, stub: ScanItemStub): Menu {
+    if (!stub.id) return m;
+    const at = locById(m, stub.id);
+    if (!at) return m;
+    return patchItem(m, at.si, at.ii, {
+      translated: stub.translated || undefined,
+      description: stub.description || undefined,
+      photo_query: stub.photoQuery || undefined,
+      photo_query_local: stub.photoQueryLocal || undefined,
+      branded: stub.branded,
+      price: stub.price,
+      currency: stub.currency,
+      enriched: true,
+    });
+  }
+  /** Wstaw zdjęcia do pozycji po `id`. `venue` (★) → mergePhotos (z przodu, +photosUpgraded); poglądowe →
+   *  tylko gdy pozycja nie ma jeszcze zdjęć z lokalu (nie cofamy ★ poglądowymi). */
+  function attachPhotosById(m: Menu, id: string, photos: DishPhotoLite[], venue: boolean): Menu {
+    const at = locById(m, id);
+    if (!at) return m;
+    const cur = m.sections[at.si]?.items[at.ii];
+    if (venue) return patchItem(m, at.si, at.ii, { photos: mergePhotos(photos, cur?.photos ?? []), photosUpgraded: true });
+    if (cur?.photos && cur.photos.length > 0) return m; // już ma (★ lub wcześniejsze) — nie nadpisuj
+    return patchItem(m, at.si, at.ii, { photos });
+  }
+  /** Po `done`: autorytatywne, wzbogacone menu z serwera (PEŁNE pola: dietary/składniki/kategoria/…) +
+   *  dociągnięte lokalnie zdjęcia (z mapy po `id`). Zero zależności od stanu Reacta. */
+  function mergeDoneById(done: Menu, photosById: Map<string, DishPhotoLite[]>): Menu {
+    return {
+      ...done, // restaurant_name/cuisine/notes/sekcje (przetłumaczone) z autorytatywnego done
+      sections: done.sections.map((s) => ({
+        ...s,
+        items: s.items.map((it) => {
+          const ph = it.id ? photosById.get(it.id) : undefined;
+          // `enriched: true` — pozycje z done są WZBOGACONE; bez tego flagi giną i menu „wraca" do spinnerów
+          // „tłumaczę i opisuję…" (wygląda jak drugi przebieg enrichu od zera).
+          return { ...it, enriched: true, ...(ph && ph.length ? { photos: ph, photosUpgraded: ph.some((p) => p.fromVenue) || it.photosUpgraded } : {}) };
+        }),
+      })),
+    };
+  }
+
+  function attachPhotosByName(m: Menu, key: string, photos: DishPhotoLite[]): Menu {
     let changed = false;
     const sections = m.sections.map((s) => ({
       ...s,
       items: s.items.map((it) => {
-        if (changed || it.original !== original || (it.photos && it.photos.length > 0) || it.photosUpgraded) return it;
+        if (changed || (it.full_name || it.original) !== key || (it.photos && it.photos.length > 0) || it.photosUpgraded) return it;
         changed = true;
         return { ...it, photos };
       }),
@@ -1447,19 +1322,19 @@ export default function App() {
     const m = scan.models;
     return (
       <View style={styles.metaCard}>
-        <Text style={styles.metaTitle}>⚙️ Ustawienia tego menu</Text>
-        <Text style={styles.metaRow}>📅 {new Date(scan.createdAt).toLocaleString("pl-PL")}</Text>
-        <Text style={styles.metaRow}>🌐 Język: {scan.targetLang}</Text>
+        <Text style={styles.metaTitle}><Icon name="settings" /> Ustawienia tego menu</Text>
+        <Text style={styles.metaRow}><Icon name="calendar" /> {new Date(scan.createdAt).toLocaleString("pl-PL")}</Text>
+        <Text style={styles.metaRow}><Icon name="web" /> Język: {scan.targetLang}</Text>
         {m ? (
           <>
-            <Text style={styles.metaRow}>🔍 Skan menu: {modelLabel(m.scan)}</Text>
-            <Text style={styles.metaRow}>📝 Opisy dań: {modelLabel(m.describe)}</Text>
-            <Text style={styles.metaRow}>✅ Weryfikacja zdjęć: {modelLabel(m.verify)}</Text>
-            <Text style={styles.metaRow}>🏠 Zdjęcia z lokalu: {modelLabel(m.venue)}</Text>
+            <Text style={styles.metaRow}><Icon name="search" /> Skan menu: {modelLabel(m.scan)}</Text>
+            <Text style={styles.metaRow}><Icon name="note" /> Opisy dań: {modelLabel(m.describe)}</Text>
+            <Text style={styles.metaRow}><Icon name="check" /> Weryfikacja zdjęć: {modelLabel(m.verify)}</Text>
+            <Text style={styles.metaRow}><Icon name="venue" /> Zdjęcia z lokalu: {modelLabel(m.venue)}</Text>
           </>
         ) : (
           <Text style={styles.metaRow}>
-            🔍 Model skanu: {modelLabel(scan.model)} · (starszy zapis — bez pełnych ustawień)
+            <Icon name="search" /> Model skanu: {modelLabel(scan.model)} · (starszy zapis — bez pełnych ustawień)
           </Text>
         )}
         <Text style={styles.metaHint}>
@@ -1494,7 +1369,7 @@ export default function App() {
           <View style={styles.confirmBox}>
             {renderRestaurant(r)}
             <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
-              <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
+              <Text style={styles.wrongVenueText}><Icon name="search" /> Zły lokal? Znajdź inny →</Text>
             </Pressable>
           </View>
         ) : (
@@ -1511,29 +1386,29 @@ export default function App() {
         />
         {loc ? (
           <Text style={styles.geo}>
-            📍 {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)}
+            <Icon name="location" /> {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)}
             {ss?.locationSource === "exif" ? "  (ze zdjęcia)" : ss?.locationSource === "device" ? "  (Twoja pozycja przy skanie)" : ""}
           </Text>
         ) : ss ? (
-          <Text style={styles.geo}>📍 Bez zapisanej pozycji{ss.useExifLocation === false && ss.useDeviceLocation === false ? " (lokalizacja była wyłączona przy skanie)" : ""}</Text>
+          <Text style={styles.geo}><Icon name="location" /> Bez zapisanej pozycji{ss.useExifLocation === false && ss.useDeviceLocation === false ? " (lokalizacja była wyłączona przy skanie)" : ""}</Text>
         ) : null}
         {ss ? renderScanMeta(ss) : null}
         {ss?.sourcePhotos && ss.sourcePhotos.length > 0 ? (
           <Pressable style={styles.sourcePhotosBtn} onPress={() => setSourceLb({ photos: ss.sourcePhotos!.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })), index: 0 })}>
-            <Text style={styles.sourcePhotosText}>📷 Zdjęcia źródłowe menu ({ss.sourcePhotos.length})</Text>
+            <Text style={styles.sourcePhotosText}><Icon name="camera" /> Zdjęcia źródłowe menu ({ss.sourcePhotos.length})</Text>
           </Pressable>
         ) : null}
         {scanId ? (
           <>
             <Pressable style={[styles.button, styles.secondary, (dis || appending) && styles.disabled]} disabled={dis || appending} onPress={() => chooseAppendSource(scanId, m, args.targetLang, !!ss)}>
-              <Text style={styles.secondaryText}>{appending ? "⏳ Dokładam zdjęcia…" : "➕ Dodaj zdjęcia (uzupełnij menu)"}</Text>
+              <Text style={styles.secondaryText}>{appending ? "Dokładam zdjęcia…" : "Dodaj zdjęcia (uzupełnij menu)"}</Text>
             </Pressable>
             <Pressable style={[styles.button, styles.secondary, dis && styles.disabled]} disabled={dis} onPress={() => refreshScanPhotos(scanId, m, true, r)}>
-              <Text style={styles.secondaryText}>{r ? "🔄 Odśwież zdjęcia (doszukaj z lokalu)" : "🔄 Odśwież zdjęcia dań"}</Text>
+              <Text style={styles.secondaryText}>{r ? "Odśwież zdjęcia (doszukaj z lokalu)" : "Odśwież zdjęcia dań"}</Text>
             </Pressable>
             {ss ? (
               <Pressable style={[styles.button, styles.secondary, dis && styles.disabled]} disabled={dis} onPress={() => setRenameTarget(ss)}>
-                <Text style={styles.secondaryText}>✏️ Zmień nazwę menu</Text>
+                <Text style={styles.secondaryText}><Icon name="edit" /> Zmień nazwę menu</Text>
               </Pressable>
             ) : null}
             <Pressable style={[styles.button, styles.danger, dis && styles.disabled]} disabled={dis} onPress={() => removeSaved(scanId)}>
@@ -1572,7 +1447,7 @@ export default function App() {
       setInfoLoading((p) => new Set(p).add(key));
       try {
         const { info, usage } = await fetchDishInfo({
-          name: item.original,
+          name: item.full_name || item.original,
           description: item.description,
           restaurant: opts.menu.restaurant_name ?? undefined,
           cuisine: opts.menu.cuisine,
@@ -1784,9 +1659,11 @@ export default function App() {
     }));
     if (photoNames.length === 0 && taPhotos.length === 0) return;
 
+    // Lista dań do dopasowania = `full_name` (tożsamość): lepsze trafienie wizją (np. „mango curry" zamiast „mango")
+    // i odporność na powtórzone `original` (dwa „Mango"). Serwer echo'uje to w m.dish → mapujemy po tym samym.
     const dishes: string[] = [];
     baseMenu.sections.forEach((sec) =>
-      sec.items.forEach((it) => it?.original && dishes.push(it.original)),
+      sec.items.forEach((it) => it?.original && dishes.push(it.full_name || it.original)),
     );
     if (dishes.length === 0) return;
 
@@ -1800,10 +1677,15 @@ export default function App() {
       baseMenu.cuisine,
       modelsForScan(scanId).venue, // zdjęcia z lokalu — model zamrożony z tego menu
       certain,
+      // Do szerokiej puli (Serper site:+portale) — serwer użyje tylko gdy włączony krok photoVenuePool.
+      { name: restaurant.name, website: restaurant.website ?? undefined, city: restaurant.city ?? undefined },
     ).catch(() => ({ matches: [] as VenueMatch[], usage: ZERO_USAGE }));
 
     // Grupuj po daniu (najpewniejsze pierwsze; serwer już posortował), max 3 zdjęcia/danie.
     const byDish = new Map<string, DishPhotoLite[]>();
+    // Etykieta źródła (Tier 0: google/TA; szeroka pula: też strona lokalu/portale/sieć).
+    const srcLabel = (s: string): string =>
+      s === "tripadvisor" ? "TripAdvisor" : s === "google" ? "Google Maps" : s === "restaurant" ? "strona lokalu" : s === "social" ? "profil społecznościowy" : "z sieci";
     for (const m of matches) {
       const url = m.source === "google" && m.photoName ? placePhotoUrl(m.photoName, 1000) : m.url;
       if (!url) continue;
@@ -1812,19 +1694,20 @@ export default function App() {
       arr.push({
         url,
         source: m.source,
-        attribution: m.source === "tripadvisor" ? "TripAdvisor" : "Google Maps",
+        attribution: srcLabel(m.source),
         verified: true,
         fromVenue: true,
-        fromVenueReason: `Tier 0: zdjęcie z profilu lokalu (${m.source === "tripadvisor" ? "TripAdvisor" : "Google Maps"}) dopasowane wizją do dania (pewność ${m.confidence.toFixed(2)})`,
+        fromVenueReason: `Zdjęcie z lokalu (${srcLabel(m.source)}) dopasowane wizją do dania (pewność ${m.confidence.toFixed(2)})`,
       });
       byDish.set(m.dish, arr);
     }
 
-    // Indeks danie(oryginalna nazwa) → pozycja w menu.
+    // Indeks danie(full_name) → pozycja w menu — spójny z `dishes`/m.dish (odporny na powtórzone `original`).
     const loc = new Map<string, { si: number; ii: number }>();
     baseMenu.sections.forEach((sec, si) =>
       sec.items.forEach((it, ii) => {
-        if (it?.original && !loc.has(it.original)) loc.set(it.original, { si, ii });
+        const k = it?.full_name || it?.original;
+        if (k && !loc.has(k)) loc.set(k, { si, ii });
       }),
     );
 
@@ -1865,7 +1748,7 @@ export default function App() {
     const jobs: { si: number; ii: number; name: string; desc: string }[] = [];
     baseMenu.sections.forEach((sec, si) =>
       sec.items.forEach((it, ii) => {
-        if (it && !it.extraInfo) jobs.push({ si, ii, name: it.original, desc: it.description });
+        if (it && !it.extraInfo) jobs.push({ si, ii, name: it.full_name || it.original, desc: it.description });
       }),
     );
     if (appCfg.autoLimit > 0) jobs.length = Math.min(jobs.length, appCfg.autoLimit); // limit auto-dociągania
@@ -1973,14 +1856,14 @@ export default function App() {
   function chooseAppendSource(scanId: string, baseMenu: Menu, scanLang: string, isOpen: boolean) {
     Alert.alert("Dodaj zdjęcia do menu", "Skąd dołączyć kolejne strony / zdjęcia menu?", [
       {
-        text: "📷 Aparat",
+        text: "Aparat",
         onPress: async () => {
           const img = await captureFromCamera();
           if (img) await appendImages(scanId, baseMenu, scanLang, isOpen, [img]);
         },
       },
       {
-        text: "🖼 Galeria",
+        text: "Galeria",
         onPress: async () => {
           const imgs = await pickFromLibrary();
           if (imgs.length) await appendImages(scanId, baseMenu, scanLang, isOpen, imgs);
@@ -2045,9 +1928,14 @@ export default function App() {
     return [m.restaurant_name, restaurant?.city].filter(Boolean).join(" ") || undefined;
   }
 
+  // Lokalizacja do OPISU dania (klucz cache + kontekst regionalny): „miasto, region, kraj(EN)". Kraj po
+  // angielsku (countryEn) i region z Places dają KANONICZNY, stabilny klucz; serwer wytnie z tego miasto i
+  // zostawi „region, kraj" w kluczu. To NIE jest to, co widać na karcie lokalu (tam lokalny city+country).
   function locationFor(m: Menu, restaurant: RestaurantInfo | null | undefined): string | undefined {
     return (
-      [restaurant?.city, restaurant?.country].filter(Boolean).join(", ") ||
+      [restaurant?.city, restaurant?.region, restaurant?.countryEn ?? restaurant?.country]
+        .filter(Boolean)
+        .join(", ") ||
       m.restaurant_address ||
       undefined
     );
@@ -2126,7 +2014,7 @@ export default function App() {
               </Pressable>
             ) : (
               <Pressable onPress={() => setShowSettings(true)} hitSlop={8} style={styles.iconBtn}>
-                <Text style={styles.icon}>⚙️</Text>
+                <Icon name="settings" size={22} color={colors.accent} />
               </Pressable>
             )}
           </View>
@@ -2151,16 +2039,14 @@ export default function App() {
           {/* #3: cienka linia postępu w STAŁYM nagłówku — zawsze widoczna gdy enrich trwa, treść scrolluje
               pod nią. Znika gdy skan gotowy. */}
           {(status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total)) && menu && !(showDiag || showCaptures || showPricing || showSettings) ? (() => {
+            // Postęp ŁĄCZONY (te same segmenty co baner): czytanie+enrich+zdjęcia = 0–85%, krok ★ = ostatnie 15% (pełznie).
             const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
-            const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
-            const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
-            // Postęp ŁĄCZONY: enrich = pierwsza połowa paska, POBIERANIE ZDJĘĆ = druga (żeby pasek nie kończył
-            // się na samych tłumaczeniach). Bez zdjęć (autoPhotos off) enrich wypełnia całość. Połowę dla
-            // zdjęć rezerwujemy z góry wg ustawienia — bez cofania paska, gdy joby zdjęć dochodzą.
-            const expectPhotos = true;
+            const read = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
+            const enr = scanEnrichDone;
             const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
-            const enrichDn = structureReady && total > 0 && enriched >= total;
-            const pct = !expectPhotos ? (total > 0 ? Math.min(1, enriched / total) : 0) : !enrichDn ? (total > 0 ? Math.min(0.5, 0.5 * (enriched / total)) : 0) : (pt > 0 ? Math.min(1, 0.5 + 0.5 * (pd / pt)) : 1);
+            const dishFrac = read > 0 ? 0.5 * Math.min(1, enr / read) + 0.5 * (pt > 0 ? Math.min(1, pd / pt) : 0) : 0;
+            const venueActive = structureReady && read > 0 && enr >= read && (pt === 0 || pd >= pt);
+            const pct = Math.min(1, 0.85 * dishFrac + (venueActive ? 0.15 * venueCreep : 0));
             return (
               <View style={styles.topProgress}>
                 <View style={[styles.topProgressFill, { width: `${Math.round(pct * 100)}%` }]} />
@@ -2228,17 +2114,17 @@ export default function App() {
                   {/* 1) ZDJĘCIA — główna akcja na górze. Pusto → wyraźny drop-zone. */}
                   {images.length === 0 ? (
                     <View style={styles.dropZone}>
-                      <Text style={styles.dropGlyph}>🍽️</Text>
+                      <Icon name="food" size={42} color={colors.accent} style={{ marginBottom: 8 }} />
                       <Text style={styles.dropTitle}>Dodaj zdjęcia menu</Text>
                       <Text style={styles.dropSub}>
                         Kilka stron i okładka — połączę je w jedno przetłumaczone menu, które zapiszę w historii.
                       </Text>
                       <View style={styles.addRow}>
                         <Pressable style={styles.addBtn} onPress={openCamera}>
-                          <Text style={styles.addBtnText}>📷  Aparat</Text>
+                          <Text style={styles.addBtnText}><Icon name="camera" color={colors.accent} />  Aparat</Text>
                         </Pressable>
                         <Pressable style={styles.addBtn} onPress={addFromLibrary}>
-                          <Text style={styles.addBtnText}>🖼️  Galeria</Text>
+                          <Text style={styles.addBtnText}><Icon name="gallery" color={colors.accent} />  Galeria</Text>
                         </Pressable>
                       </View>
                     </View>
@@ -2257,11 +2143,11 @@ export default function App() {
                             <Text style={styles.thumbIndex}>{i + 1}</Text>
                             {peekByUri[img.uri]?.bad ? (
                               <View style={styles.thumbBad}>
-                                <Text style={styles.thumbBadText}>⚠️ słaba jakość</Text>
+                                <Text style={styles.thumbBadText}><Icon name="warn" /> słaba jakość</Text>
                               </View>
                             ) : peekByUri[img.uri]?.partial ? (
                               <View style={styles.thumbPartial}>
-                                <Text style={styles.thumbBadText}>⚠️ niepełne</Text>
+                                <Text style={styles.thumbBadText}><Icon name="warn" /> niepełne</Text>
                               </View>
                             ) : null}
                           </View>
@@ -2273,14 +2159,14 @@ export default function App() {
                           onPress={openCamera}
                           disabled={images.length >= MAX_IMAGES}
                         >
-                          <Text style={styles.addBtnText}>📷  Aparat</Text>
+                          <Text style={styles.addBtnText}><Icon name="camera" color={colors.accent} />  Aparat</Text>
                         </Pressable>
                         <Pressable
                           style={[styles.addBtn, images.length >= MAX_IMAGES && styles.disabled]}
                           onPress={addFromLibrary}
                           disabled={images.length >= MAX_IMAGES}
                         >
-                          <Text style={styles.addBtnText}>🖼️  Galeria</Text>
+                          <Text style={styles.addBtnText}><Icon name="gallery" color={colors.accent} />  Galeria</Text>
                         </Pressable>
                       </View>
                     </>
@@ -2302,9 +2188,9 @@ export default function App() {
                   {/* 3) OPCJE — zwijane (lokal + lokalizacja), domyślnie schowane. */}
                   <Pressable style={styles.optionsHead} onPress={() => setShowOptions((v) => !v)}>
                     <Text style={styles.optionsHeadText} numberOfLines={1}>
-                      ⚙️ Opcje skanu
+                      <Icon name="settings" /> Opcje skanu
                       {hint.trim() ? ` · ${hint.trim()}` : ""}
-                      {useExifLocation || useDeviceLocation ? " · 📍 lokalizacja wł." : " · 📍 wył."}
+                      {useExifLocation || useDeviceLocation ? " · lokalizacja wł." : " · wył."}
                     </Text>
                     <Text style={styles.optionsChevron}>{showOptions ? "▾" : "›"}</Text>
                   </Pressable>
@@ -2321,12 +2207,12 @@ export default function App() {
                       <Text style={styles.label}>Lokalizacja (pomaga namierzyć lokal)</Text>
                       {replayLocation ? (
                         <Text style={styles.replayLocNote}>
-                          🔁 Replay z migawki — lokalizacja wymuszona z próbki: {replayLocation.locationHint || replayLocation.locationSource || "zapisana"} (poniższe przełączniki pominięte)
+                          <Icon name="refresh" /> Replay z migawki — lokalizacja wymuszona z próbki: {replayLocation.locationHint || replayLocation.locationSource || "zapisana"} (poniższe przełączniki pominięte)
                         </Text>
                       ) : null}
                       <View style={styles.switchRow}>
                         <View style={styles.switchTextWrap}>
-                          <Text style={styles.switchTitle}>📷 Z EXIF zdjęć</Text>
+                          <Text style={styles.switchTitle}><Icon name="camera" /> Z EXIF zdjęć</Text>
                           <Text style={styles.switchSub}>
                             Współrzędne zaszyte w zdjęciu (jeśli zrobione na miejscu). Działa też później.
                           </Text>
@@ -2335,7 +2221,7 @@ export default function App() {
                       </View>
                       <View style={styles.switchRow}>
                         <View style={styles.switchTextWrap}>
-                          <Text style={styles.switchTitle}>📍 Moja lokalizacja</Text>
+                          <Text style={styles.switchTitle}><Icon name="location" /> Moja lokalizacja</Text>
                           <Text style={styles.switchSub}>
                             Pozycja GPS telefonu — pomaga ustalić kraj/miasto, też gdy nie jesteś w lokalu.
                           </Text>
@@ -2348,7 +2234,7 @@ export default function App() {
                   {/* 4) Modele + język — szybki link do Ustawień (czytelne etykiety). */}
                   <Pressable style={styles.modelsLink} onPress={() => setShowSettings(true)}>
                     <Text style={styles.modelsLinkText}>
-                      ⚙️ Modele:{" "}
+                      <Icon name="settings" /> Modele:{" "}
                       {new Set(Object.values(models)).size === 1
                         ? modelLabel(models.scan)
                         : `różne (skan ${modelLabel(models.scan)})`}{" "}
@@ -2410,22 +2296,22 @@ export default function App() {
                     </>
                   ) : null}
                   {scanFoundName && !(freshRestaurant || restaurantLoading) ? (
-                    <Text style={styles.scanFoundName}>🏠 Znaleziono lokal: {scanFoundName}</Text>
+                    <Text style={styles.scanFoundName}><Icon name="venue" color={colors.accent} /> Znaleziono lokal: {scanFoundName}</Text>
                   ) : null}
                   {/* #2a: karta lokalu NAD listą dań — zakładamy, że trafiony; „Znajdź inny" → osobny ekran. */}
                   {freshRestaurant || restaurantLoading ? (
                     <View style={styles.scanReadyBox}>
-                      <Text style={styles.scanReadyVenueHdr}>📍 Lokal</Text>
+                      <Text style={styles.scanReadyVenueHdr}><Icon name="location" color={colors.muted} /> Lokal</Text>
                       {renderRestaurant(freshRestaurant)}
                       <Pressable style={styles.wrongVenueBtn} onPress={() => setShowVenueSearch(true)}>
-                        <Text style={styles.wrongVenueText}>🔍 Zły lokal? Znajdź inny →</Text>
+                        <Text style={styles.wrongVenueText}><Icon name="search" color={colors.accent} /> Zły lokal? Znajdź inny →</Text>
                       </Pressable>
                     </View>
                   ) : null}
                   {scanItems.length > 0 ? (
                     <>
                       <Text style={styles.scanItemsHdr}>
-                        📖 {scanItems.length} pozycji · 📝 {scanItems.filter((x) => x.description && x.description.trim()).length} opisów · 🖼 {scanItems.filter((x) => x.photo).length} zdjęć
+                        <Icon name="book" color={colors.muted} /> {scanItems.length} odczytane · <Icon name="note" color={colors.muted} /> {scanEnrichDone} opisane · <Icon name="image" color={colors.muted} /> {photoProg?.done ?? 0}/{photoProg?.total ?? 0} ze zdjęciem
                       </Text>
                       <ScrollView style={styles.scanItemsBox} contentContainerStyle={{ paddingVertical: 4 }}>
                         {scanItems.map((it, i) => (
@@ -2434,7 +2320,7 @@ export default function App() {
                               <Image source={{ uri: resolveCachedUri(it.photo) ?? it.photo }} style={styles.scanCardThumb} />
                             ) : (
                               <View style={[styles.scanCardThumb, styles.scanItemThumbEmpty]}>
-                                {it.branded ? <Text style={{ fontSize: 18 }}>🏷</Text> : <ActivityIndicator size="small" color={colors.muted} />}
+                                {it.branded ? <Icon name="tag" size={18} color={colors.muted} /> : <ActivityIndicator size="small" color={colors.muted} />}
                               </View>
                             )}
                             <View style={styles.scanCardBody}>
@@ -2474,7 +2360,7 @@ export default function App() {
               {(status === "done" || (status === "scanning" && browseEarly)) && menu ? (
                 <View>
                   {sessionCost > 0 ? (
-                    <Text style={styles.sessionCost}>💰 Koszt sesji: ${sessionCost < 0.01 ? sessionCost.toFixed(4) : sessionCost.toFixed(2)}{status === "scanning" ? " · rośnie…" : ""}</Text>
+                    <Text style={styles.sessionCost}><Icon name="cost" color={colors.muted} /> Koszt sesji: ${sessionCost < 0.01 ? sessionCost.toFixed(4) : sessionCost.toFixed(2)}{status === "scanning" ? " · rośnie…" : ""}</Text>
                   ) : null}
                   {status === "scanning" || (status === "done" && photoProg && photoProg.done < photoProg.total) ? (
                     // Przeglądanie w trakcie skanu: baner z paskiem postępu DAŃ. Total rośnie w trakcie
@@ -2482,29 +2368,31 @@ export default function App() {
                     // dopełnia się z każdym wzbogaconym daniem. Po enrichu (status „done") pasek żyje dalej
                     // dla POBIERANIA ZDJĘĆ i znika dopiero gdy pompa skończy — bez blokowania akcji menu.
                     (() => {
+                      // 3 NIEZALEŻNE LICZNIKI (główna treść). Wszystkie rosną NA ŻYWO (rolling z serwera, po `id`):
                       const menuTotal = menu.sections.reduce((n, s) => n + s.items.length, 0);
-                      const total = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length);
-                      const enriched = menu.sections.reduce((n, s) => n + s.items.reduce((m, it) => m + (it.enriched ? 1 : 0), 0), 0);
-                      // Łączony postęp: enrich (0–50%) + POBIERANIE ZDJĘĆ (50–100%). Bez zdjęć (autoPhotos off)
-                      // enrich wypełnia całość. Pasek pełny i baner znika dopiero gdy pompa zdjęć skończy.
-                      const expectPhotos = true;
-                      const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0;
-                      const enrichDn = structureReady && total > 0 && enriched >= total;
-                      const inPhoto = expectPhotos && enrichDn && pt > 0 && pd < pt;
-                      const pct = !expectPhotos ? (total > 0 ? Math.min(1, enriched / total) : 0) : !enrichDn ? (total > 0 ? Math.min(0.5, 0.5 * (enriched / total)) : 0) : (pt > 0 ? Math.min(1, 0.5 + 0.5 * (pd / pt)) : 1);
+                      const read = structureReady ? menuTotal : Math.max(menuTotal, scanItems.length); // #1 odczytane
+                      const enr = scanEnrichDone; // #2 z UKOŃCZONYM enrich (rozmiar bufora po id — idempotentne na powtórki)
+                      const pt = photoProg?.total ?? 0, pd = photoProg?.done ?? 0; // #3 zdjęcia: done/total
+                      // Krótka podpowiedź fazy (szczegół niosą liczniki). Monotonicznie: Czytam → Opisuję → Zdjęcia → Kończę.
+                      const phaseHint =
+                        !structureReady ? (scanProgress ? `Czytam menu · strony ${scanProgress.done}/${scanProgress.total}…` : "Czytam i tłumaczę menu…")
+                          : enr < read ? "Opisuję dania…"
+                            : (pt > 0 && pd < pt) ? "Dociągam zdjęcia…"
+                              : "Dopasowuję zdjęcia z lokalu ★…";
+                      // Pasek: czytanie+enrich+zdjęcia wypełniają 0–85%, ostatnie 15% to krok ★ (pełznie czasowo) →
+                      // pasek rusza się też wtedy i nie stoi na 100% z napisem o kończeniu.
+                      const dishFrac = read > 0 ? 0.5 * Math.min(1, enr / read) + 0.5 * (pt > 0 ? Math.min(1, pd / pt) : 0) : 0;
+                      const venueActive = structureReady && read > 0 && enr >= read && (pt === 0 || pd >= pt);
+                      const pct = Math.min(1, 0.85 * dishFrac + (venueActive ? 0.15 * venueCreep : 0));
                       return (
                         <View style={styles.scanBanner}>
                           <ActivityIndicator size="small" color={colors.accent} />
                           <View style={{ flex: 1, marginLeft: 10 }}>
-                            <Text style={styles.scanBannerTitle}>
-                              {inPhoto ? `⏳ Pobieram zdjęcia ${pd}/${pt}…` : structureReady ? `⏳ Tłumaczę dania ${enriched}/${total}…` : scanProgress ? `⏳ Czytam strony ${scanProgress.done}/${scanProgress.total} · ${total} dań…` : `⏳ Czytam menu · ${total} dań…`}
-                            </Text>
+                            <Text style={styles.scanBannerTitle}><Icon name="book" color={colors.accent} /> {read} odczytane · <Icon name="note" color={colors.accent} /> {enr} z opisem · <Icon name="image" color={colors.accent} /> {pd}/{pt} ze zdjęciem</Text>
                             <View style={styles.progressTrack}>
                               <View style={[styles.progressFill, { width: `${Math.round(pct * 100)}%` }]} />
                             </View>
-                            <Text style={styles.scanBannerSub} numberOfLines={1}>
-                              {inPhoto ? "Dania gotowe — dociągam zdjęcia." : structureReady ? "Struktura gotowa — reszta dochodzi w miejscu." : "Liczba dań jeszcze rośnie…"}{scanFoundName ? ` · 🏠 ${scanFoundName}` : ""}
-                            </Text>
+                            <Text style={styles.scanBannerSub} numberOfLines={1}>{phaseHint}{scanFoundName ? ` · ${scanFoundName}` : ""}</Text>
                           </View>
                         </View>
                       );
@@ -2516,7 +2404,7 @@ export default function App() {
                     </View>
                   )}
                   {scanFromCache ? (
-                    <Text style={styles.cacheNote}>🗄 Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
+                    <Text style={styles.cacheNote}><Icon name="cache" color={colors.muted} /> Odczytane z cache (ten sam plik) — bez kosztu modelu.</Text>
                   ) : null}
                   {/* TEN SAM render co historia — karta lokalu, menu i WSZYSTKIE akcje; w trakcie skanu akcje
                       mutujące są disabled (odblokują się po odczycie). */}

@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { MENU_SCHEMA, STRUCTURE_SCHEMA, ENRICH_SCHEMA, DISH_CATEGORIES, type Menu, type MenuItem, type MenuStructure, type StructItem, type DishCategory } from "./schema.ts";
+import { MENU_SCHEMA, STRUCTURE_SCHEMA, ENRICH_SCHEMA, ONEPASS_SCHEMA, DISH_CATEGORIES, NOTE_KINDS, type Menu, type MenuItem, type MenuNote, type MenuStructure, type StructItem, type DishCategory, type NoteKind } from "./schema.ts";
 import { usageFrom, usageFromOpenAI, logUsage, ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 import { track, recordUsage, recordBytes } from "./apiLog.ts";
-import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, isOpenAiReasoning, apiTag, type ModelId } from "./models.ts";
+import { MODELS, DEFAULT_MODEL, isModelId, usesOpenAiApi, isOpenAiReasoning, supportsTemperature, apiTag, type ModelId } from "./models.ts";
 import { getClientForModel } from "./openaiClient.ts";
 import { cacheGet, cacheSet, cacheKey } from "./cache.ts";
+import { langCode } from "./lang.ts";
 
 // Rejestr modeli + walidator współdzielone z resztą serwera (re-eksport z models.ts).
 export { MODELS, DEFAULT_MODEL, isModelId, type ModelId };
@@ -74,6 +75,9 @@ export interface ExtractOptions {
   noCache?: boolean;
   /** Tylko STRUKTURA (vision) — bez enrichu. Zwraca Menu z oryginalnymi nazwami; enrich robi /enrich. */
   structureOnly?: boolean;
+  /** Prefiks stabilnego `id` pozycji (np. „b0-") — nadawany NA ŻYWO w streamie (onItem) i w finalnym Menu po
+   *  tym samym porządku dokumentu (rolling enrich może wzbogacać po `id` zanim struktura jest scalona). */
+  idPrefix?: string;
   /** Nazwy sekcji/grup ze WCZEŚNIEJSZYCH stron (gdy menu dzielone na partie) — ciągłość grup między
    *  kartkami: strona bez nagłówka kontynuuje znaną sekcję zamiast tworzyć „(bez tytułu)". */
   knownSections?: string[];
@@ -84,7 +88,17 @@ export interface ExtractOptions {
 
 /** Pozycja wyłuskana ze strumienia — do podglądu (mini-karty) i wczesnego dociągania zdjęć. */
 export interface ScanItemStub {
+  /** Stabilne id RENDEROWE (pipeline) — ustawiane przy emisji enrich-item po scaleniu struktury; przy
+   *  „live" tickerze struktury jeszcze nieznane (undefined). Apka aktualizuje slot po nim. */
+  id?: string;
   original: string;
+  /** Kanoniczna nazwa dania (EN, z kontekstem grupy) = TOŻSAMOŚĆ. Apka kluczuje po niej merge enrich (odporne na
+   *  powtórzone `original`, np. dwa „Mango": lunch=mango curry vs drink=mango lemonade). Pusty gdy brak. */
+  full_name: string;
+  /** Kanoniczny EN „dodatkowy opis" (istotne wyróżniki) ZE STRUKTURY — część KLUCZA cache enrichu (obok full_name).
+   *  Niesiony w strumieniu, by rolling enrich liczył pod TYM SAMYM kluczem co finał (inaczej fd="" → cache MISS →
+   *  finał liczy od nowa = podwójny koszt). "" gdy brak wyróżników. */
+  fullDescription?: string;
   translated: string;
   photoQuery: string;
   photoQueryLocal: string;
@@ -97,7 +111,7 @@ export interface ScanItemStub {
 // Wyłuskuje KOMPLETNE pozycje z (jeszcze niepełnego) strumienia JSON: znajduje obiekty `{…}`
 // zawierające "original" i parsuje je gdy domknięte (świadome stringów/escape/zagnieżdżeń).
 // Daje pełne pola (nazwa, cena…). Emituje tylko NOWE (po liczniku).
-function emitNewItems(text: string, state: { emitted: number }, onItem: (i: ScanItemStub) => void): void {
+function emitNewItems(text: string, state: { emitted: number }, onItem: (i: ScanItemStub) => void, idPrefix?: string): void {
   let found = 0;
   let i = 0;
   while (true) {
@@ -128,7 +142,11 @@ function emitNewItems(text: string, state: { emitted: number }, onItem: (i: Scan
         const o = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
         if (typeof o.original === "string") {
           onItem({
+            // id = porządek dokumentu (0-based); ten SAM schemat nadaje finalne Menu → rolling enrich trafia w slot.
+            id: idPrefix ? `${idPrefix}${found - 1}` : undefined,
             original: o.original,
+            full_name: typeof o.full_name === "string" && o.full_name ? o.full_name : o.original,
+            fullDescription: typeof o.full_description === "string" ? o.full_description : "",
             translated: typeof o.translated === "string" ? o.translated : o.original,
             photoQuery: typeof o.photo_query === "string" ? o.photo_query : "",
             photoQueryLocal: typeof o.photo_query_local === "string" ? o.photo_query_local : "",
@@ -157,8 +175,9 @@ export const SYSTEM = [
   "jak pojawiają się na stronach, i nie duplikuj powtórzonych nagłówków ani pozycji.",
   "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje.",
   "",
-  "NAJPIERW ustal kontekst i zapisz go w polu `cuisine`: rodzaj kuchni (np. indyjska,",
-  "hiszpańska, włoska) oraz — na własny użytek — kraj i miasto lokalu (z nazw dań,",
+  "NAJPIERW ustal kontekst i zapisz go w polu `cuisine`: rodzaj kuchni jako KRÓTKI, KANONICZNY",
+  "termin PO ANGIELSKU, małymi literami (np. 'indian', 'spanish', 'italian', 'fusion', 'sushi') —",
+  "tak jak typy Google; ORAZ — na własny użytek — kraj i miasto lokalu (z nazw dań,",
   "języka menu, adresu i szyldu). Wszystkie opisy MUSZĄ pasować do tego kontekstu.",
   "Jeśli w treści podano `Lokalizacja lokalu (GPS)`, traktuj ją jako WIARYGODNE miejsce",
   "lokalu (kraj/miasto) — użyj jej do kontekstu i interpretacji lokalnych/regionalnych nazw",
@@ -175,10 +194,11 @@ export const SYSTEM = [
   "podawaj tylko składniki pewne lub typowe dla tego dania; nie zgaduj egzotycznych.",
   "Alergeny i flagi dietetyczne szacuj zachowawczo.",
   "",
-  "Dla pola `photo_query` podaj KANONICZNĄ nazwę dania do szukania zdjęć — najlepiej rozpoznawalną",
-  "nazwę potrawy w jej własnej kuchni (zromanizowaną), z dopisanym typem/kuchnią dla jednoznaczności",
-  "(np. 'mango chicken curry indian', 'pad thai noodles', 'patatas bravas'). Opisz CZYM danie jest,",
-  "nie markową/lokalną nazwą z menu — to poprawia trafianie w zdjęcie przy szukaniu ogólnym.",
+  "Dla pola `photo_query` podaj KANONICZNĄ, ROZPOZNAWALNĄ nazwę dania do szukania zdjęć (zromanizowaną) —",
+  "MINIMUM słów (zwykle 2–3), tak jak LUDZIE WYSZUKUJĄ to danie, z typem dania dla jednoznaczności (np.",
+  "'mango chicken curry', 'pad thai noodles', 'patatas bravas', 'acai bowl', 'frappe coffee'). NIE rozwlekaj",
+  "składnikami ('… with fruits and granola') ani kuchnią/narodowością ('indian', 'brunch cafe') — krótka,",
+  "celna nazwa trafia LEPIEJ (też w wyszukiwarki tytułowe jak Wikimedia). Nie używaj markowej/lokalnej nazwy z menu.",
   "Dla pola `photo_query_local` podaj nazwę dania do szukania zdjęć W JĘZYKU KRAJU, w którym jest",
   "lokal (kraj z lokalizacji/kontekstu) — tak jak ludzie szukają tego dania w tym kraju. Gdy język",
   "menu = język kraju, zwykle = original; gdy menu jest w innym języku (np. po angielsku, a lokal",
@@ -198,87 +218,89 @@ export const SYSTEM = [
 // PRZEBIEG 1 — VISION, TYLKO STRUKTURA (transkrypcja tego, co widać; bez tłumaczeń i bez
 // generowania opisów — to robi przebieg 2). Mały output = taniej/szybciej/mniej ucięć.
 export const STRUCTURE_SYSTEM = [
-  "Jesteś precyzyjnym transkryptorem menu restauracji.",
-  "Otrzymasz jedno lub WIELE zdjęć — kolejne strony/fragmenty TEGO SAMEGO menu (czasem okładkę",
-  "albo zdjęcie lokalu). Odczytaj TYLKO to, co realnie widać.",
-  "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje, w kolejności jak na stronach; nie duplikuj",
-  "powtórzonych nagłówków ani pozycji.",
-  "Zdjęcia często NACHODZĄ na siebie — ten sam fragment menu bywa na kilku ujęciach (duża tablica/ściana/",
-  "karta fotografowana po kawałku, kilka zdjęć tej samej strony). Złóż wszystko w JEDNĄ całość i NIE",
-  "duplikuj: to samo danie z różnych zdjęć = JEDEN wpis. Gdy różne ujęcia pokazują RÓŻNE informacje o tym",
-  "samym daniu (na jednym widać cenę, na innym opis/składniki) — POŁĄCZ je w jeden, PEŁNY wpis (uzupełnij",
-  "braki z lepszego ujęcia).",
-  "MENU WIELOJĘZYCZNE / kilka wersji językowych tego samego dania (kolumny obok siebie lub osobne karty):",
-  "również JEDEN wpis na danie — `original` w języku ORYGINAŁU menu (kraju lokalu), a z pozostałych języków",
-  "UZUPEŁNIJ braki (gdy w jednym opis ucięty/nieczytelny — weź go z drugiego). NIE twórz osobnych pozycji",
-  "dla tłumaczeń tego samego dania.",
-  "Dla każdej pozycji podaj `original` (nazwa DOKŁADNIE jak na",
-  "menu), cenę i walutę (gdy widać; inaczej null) oraz `menu_description` = opis NADRUKOWANY na menu",
-  "pod/obok pozycji (transkrypcja słowo w słowo). Gdy danie nie ma opisu na menu — pusty string.",
-  "Podaj też `source_text` = przepisany FRAGMENT karty dla tej pozycji (pełna linijka/blok jak na",
-  "menu: nazwa + ewentualny opis + cena), słowo w słowo — żeby pokazać użytkownikowi skąd pochodzi.",
-  "WARIANTY/ROZMIARY: gdy pozycja ma kilka cen (mała/duża, kieliszek/butelka, 0,3/0,5 l) — to JEDNA pozycja;",
-  "wypełnij `variants` (lista {label, price}, np. label='mała' price='8', label='duża' price='12') i ustaw",
-  "`price`=null. NIE rozbijaj na osobne dania dla samych rozmiarów. Dodatki/opcje 'do wyboru' i dopłaty",
-  "('+2 ekstra ser') → do `menu_description` tej pozycji, nie jako osobne dania.",
-  "NIE tłumacz, NIE generuj opisów, NIE zgaduj składników — to zrobi osobny krok.",
-  "Ustal `cuisine` (rodzaj kuchni), `restaurant_language` (ISO 639-1) oraz `restaurant_name`/`restaurant_address`.",
-  "Wśród zdjęć MOŻE być fasada/szyld/witryna lokalu, wizytówka, pieczątka, paragon, okładka, nagłówek lub",
-  "stopka — KONIECZNIE odczytaj z nich NAZWĘ lokalu (i adres), nawet gdy dane zdjęcie nie zawiera dań.",
-  "Nazwa lokalu to cenna informacja — szukaj jej wszędzie. Ze zdjęcia z zewnątrz NIE twórz pozycji menu",
-  "(zostaw `sections` puste dla niego), ale ZWRÓĆ z niego `restaurant_name`/`restaurant_address` i `readable=true`",
-  "(to przydatne zdjęcie). `readable=false` ustaw TYLKO gdy zdjęcie jest zbyt słabej jakości, by odczytać",
-  "COKOLWIEK (mocno rozmazane/ciemne/ucięte) albo zupełnie przypadkowe (bez menu, bez nazwy, bez treści).",
-  "WAŻNE: teksty, które NIE są daniami (czas oczekiwania, dopłaty: taras/serwis/cover, VAT/podatek,",
-  "napiwek, godziny otwarcia, minimalne zamówienie, 'ceny zawierają/nie zawierają', ogólne uwagi o",
-  "alergenach) NIE mogą trafić jako pozycje (dania). Wydziel je do tablicy `notes`: `text` (oryginał),",
-  "`scope` ('menu' = całe menu, 'section' = konkretna sekcja), `section_index` (indeks sekcji od 0 gdy",
-  "scope='section', inaczej null) i `kind` (set/included/wait/fee/tax/tip/hours/info). Gdy brak adnotacji — `notes` puste.",
-  "ZESTAWY / MENU DNIA (np. 'Menú del día', lunch, zestaw obiadowy): gdy zestaw ma DANIA DO WYBORU, a wyborów",
-  "jest sporo i to PEŁNOPRAWNE potrawy — daj je jako ZWYKŁE POZYCJE (każda osobny wpis: dostanie opis i",
-  "zdjęcie) w JEDNEJ sekcji zestawu (np. 'Menu dnia'). Każdą pozycję otaguj polem `course` = grupa wyboru",
-  "('1. danie'/'2. danie'/'deser'); `price`=null (w cenie zestawu); gdy dany wybór ma DOPŁATĘ — wpisz ją do",
-  "`surcharge` (np. '+2 €'). Cenę zestawu i zasady (po jednym z grupy, co wliczone, np. lampka wina) zapisz",
-  "jako adnotację `kind='set'` przy tej sekcji. Zestaw bez wyboru (1-2 stałe pozycje) — wystarczy adnotacja.",
-  "OGRANICZENIA CZASOWE: gdy sekcja/menu obowiązuje tylko w określone dni/godziny (menu dnia w tygodniu,",
-  "brunch weekendowy, karta sezonowa/świąteczna) — zapisz KRÓTKO w polu `availability` tej sekcji (np.",
-  "'pn-pt 13-16', 'weekend', 'sezonowo'); brak ograniczenia → null.",
-  "INFO DOTYCZĄCE CAŁEJ GRUPY dań (np. 'do każdego dania dodajemy sałatkę', 'w cenie pieczywo', 'ryż min.",
-  "dla 2 osób') — adnotacja przy TEJ sekcji (scope='section' + section_index), `kind='included'` gdy coś",
-  "dochodzi/jest wliczone, inaczej 'info'; dzięki temu pokażemy to pod nazwą grupy (tyczy wszystkich jej dań).",
-  "(Przypomnienie) `readable=false` ZAR0WNO dla zbyt słabej jakości (rozmazane/ciemne/ucięte), JAK i zupełnie",
-  "przypadkowych zdjęć bez menu I bez nazwy lokalu — wtedy `sections` puste. Samo 'to nie menu' to ZA MAŁO,",
-  "by dać readable=false: jeśli widać nazwę/szyld/wizytówkę → readable=true i zwróć `restaurant_name`.",
-  "Ustaw `low_quality=true`, gdy jakość jest SŁABA, ale częściowo dało się odczytać (np. widać nazwy działów,",
-  "lecz pozycje są za małe/rozmyte/ucięte i odczyt może być NIEPEŁNY lub niepewny) — mimo to wypisz wszystko,",
-  "co dało się odczytać. Przy wyraźnym, pełnym odczycie `low_quality=false`.",
-  "Nie wymyślaj pozycji, których nie ma na zdjęciach.",
+  // ROLA + WIERNY ODCZYT
+  "Jesteś precyzyjnym transkryptorem menu restauracji i tłumaczem. Dostajesz 1+ zdjęć TEGO SAMEGO menu (czasem też",
+  "okładkę/szyld/witrynę/wizytówkę/paragon). Odczytaj TYLKO to, co realnie widać — nie wymyślaj pozycji. Wypisz",
+  "WSZYSTKIE pozycje z podziałem na sekcje, w kolejności jak na stronach.",
+  "ŁĄCZENIE UJĘĆ: zdjęcia często nachodzą na siebie lub pokazują wersje wielojęzyczne — to samo danie z różnych",
+  "ujęć/języków = JEDEN wpis (uzupełnij braki z lepszego ujęcia, NIE duplikuj). `original` w języku oryginału menu.",
+  // SEDNO: DWA RODZAJE PÓL
+  "Każda pozycja ma DWA RODZAJE pól — NIE myl ich:",
+  "(A) WIERNE KARCIE — przepisujesz to, co widać, NIC nie dodajesz z głowy: `original` (nazwa DOKŁADNIE jak na menu),",
+  "`menu_description` (opis NADRUKOWANY pod/obok pozycji, słowo w słowo; '' gdy brak), `source_text` (cała linijka/blok",
+  "z karty), `price`/`currency` (gdy widać; inaczej null), oraz `full_description` = zwięzły ANGIELSKI skrót DODATKOWYCH",
+  "detali, które KARTA realnie podaje ponad nazwę (skład/dodatki/podanie/wariant: 'z boczkiem i jajkiem' → 'with bacon,",
+  "fried egg'; '350 ml' → '350ml'); '' gdy karta podaje samą nazwę. W polach (A) NIE dopisuj wiedzy ogólnej o daniu.",
+  "(B) USTALASZ SAM z wiedzy i KONTEKSTU — tu MASZ MYŚLEĆ, nie tylko przepisywać: `full_name`, `translated`, `cuisine`.",
+  // full_name — serce
+  "`full_name` = KANONICZNA, ANGIELSKA, KOMPLETNA nazwa = Twoja IDENTYFIKACJA, CZYM danie JEST. Ustal ją z KONTEKSTU:",
+  "nagłówka sekcji, dań OBOK (czego pozycja jest wariantem), kuchni lokalu, wspólnych adnotacji sekcji (np. wybór białka",
+  "'paneer/kurczak/warzywa/ryba', 'do tego ryż i naan', cena lunchu). Skrótowa/niejednoznaczna nazwa bierze sens Z",
+  "KONTEKSTU, nie dosłownie: indyjskie 'Butter' → 'butter curry' (NIE masło/ghee), 'Mango' jako danie → 'mango curry'",
+  "(NIE owoc), 'Korma'/'Madras'/'Tikka Masala' → '… curry', 'Margherita' pod Pizze → 'margherita pizza', 'Kawa'+'z",
+  "mlekiem' → 'coffee with milk', 'Lassi'+'Mango' → 'mango lassi'. Gdy nazwa już pełna — podaj jej angielski kanon.",
+  "Zachowaj KOLEJNOŚĆ słów (znaczenie!). BEZ rozmiaru/ilości w full_name (np. '1 litr', '250 ml') — te idą do `portion`.",
+  // translated + cuisine
+  "`translated` = nazwa dania w JĘZYKU DOCELOWYM, KOMPLETNA i zrozumiała (oddaj sens z kontekstu, nie tłumacz dosłownie",
+  "samego skrótu). Przetłumacz też `name_translated` (sekcja), `text_translated` (adnotacja), `menu_description_translated`",
+  "(wierne tłumaczenie opisu z karty; '' gdy brak). `cuisine` = krótki, kanoniczny termin PO ANGIELSKU, małymi literami",
+  "(np. 'spanish'/'indian'/'sushi').",
+  // portion + warianty
+  "`portion` = rozmiar/gramatura/ilość DOKŁADNIE z karty ('250 ml', '200 g', '1 litr', '6 szt.'), z jednostką; '' gdy",
+  "karta nie podaje. WARIANTY (kilka cen: mała/duża, kieliszek/butelka, 0,3/0,5 l) = JEDNA pozycja: wypełnij `variants`",
+  "[{label, price}] i `price`=null; nie rozbijaj na osobne dania dla samych rozmiarów. Dodatki/dopłaty do wyboru",
+  "('+2 ekstra ser') → do `menu_description`, nie jako osobne dania.",
+  // zestawy
+  "ZESTAWY / MENU DNIA ('Menú del día', lunch, zestaw obiadowy): gdy zestaw ma DANIA DO WYBORU (pełnoprawne potrawy) —",
+  "każdy wybór jako OSOBNA pozycja w jednej sekcji zestawu, otaguj `course` ('1. danie'/'2. danie'/'deser'), `price`=null,",
+  "ew. `surcharge` ('+2 €'). Cenę i zasady zestawu (po jednym z grupy, co wliczone) → adnotacja `kind='set'` przy sekcji.",
+  "Zestaw bez wyboru (1-2 stałe pozycje) — wystarczy adnotacja.",
+  // notes + availability
+  "Teksty NIE-dania (czas oczekiwania, dopłaty/serwis/cover, VAT, napiwek, godziny, min. zamówienie, ogólne uwagi o",
+  "alergenach, info dla całej grupy typu 'do każdego dania sałatka'/'w cenie pieczywo') → tablica `notes`, NIGDY jako",
+  "pozycje: {`text`, `text_translated`, `scope` ('menu'|'section'), `section_index` (od 0 gdy 'section', inaczej null),",
+  "`kind` (set/included/wait/fee/tax/tip/hours/info)}. NIE wrzucaj tu nazwy/tytułu lokalu (→ `restaurant_name`). Brak adnotacji → `notes` puste. Ograniczenia czasowe sekcji",
+  "(menu dnia w tygodniu, brunch weekendowy, karta sezonowa) → KRÓTKO w `availability` sekcji ('pn-pt 13-16', 'weekend');",
+  "brak → null.",
+  // meta + readable
+  "META: `restaurant_name`/`restaurant_address` — szukaj też na okładce/szyldzie/witrynie/wizytówce/paragonie/stopce (ze",
+  "zdjęcia BEZ dań NIE twórz pozycji, `sections` puste dla niego, ale ZWRÓĆ nazwę/adres i `readable=true`).",
+  "KRÓTKI TYTUŁ u góry tablicy/karty NAD daniami to nazwa lokalu — NAWET tuż przy logo sponsora-napoju (Estrella Damm/Mahou/Coca-Cola) i NAWET gdy zawiera słowo kuchni (odręczne 'Tapas 23', 'Pizzeria Roma', 'Sushi Bar') — wpisz go do `restaurant_name`, NIE do `notes`; samo graficzne logo marki napoju to sponsoring, nie nazwa.",
+  "Jeśli nazwy lokalu nie wypisano WPROST, WYPROWADŹ ją z domeny/adresu www/e-maila/uchwytu social na karcie",
+  "(np. 'www.centrum.indiantaste.com.pl' → 'Indian Taste'; odetnij www/TLD i człony generyczne: centrum/restauracja/menu/sklep/online). To pole jest NIEZALEŻNE od listy 'w pobliżu' — podaj nazwę z karty NAWET gdy venue_match=null.",
+  "ALE NIE wyprowadzaj nazwy z platform/agregatorów dostaw ani z sieci social (pyszne.pl, ubereats, glovo, wolt, bolt, deliveroo, tripadvisor, facebook, instagram, google, linktr.ee) — to NIE jest nazwa lokalu; w razie wątpliwości daj null.",
+  "`restaurant_language` = ISO 639-1. `readable=false` TYLKO gdy nie da się odczytać NICZEGO (mocno rozmazane/ciemne/",
+  "ucięte) ANI nazwy lokalu — wtedy `sections` puste; samo 'to nie menu' to ZA MAŁO. `low_quality=true` gdy częściowo",
+  "czytelne, ale odczyt niepełny/niepewny (i tak wypisz, co się da); przy pełnym, wyraźnym odczycie `low_quality=false`.",
 ].join(" ");
 
-// PRZEBIEG 2 — TEKST, WSADOWO PO NAZWACH: tłumaczenie + photo_query/_local + branded + opis +
-// składniki/alergeny/kategoria/dieta/ostrość. Bez obrazu — z nazwy i kontekstu (kuchnia/kraj).
+// PRZEBIEG 2 — TEKST, WSADOWO. PO RE-ARCHITEKTURZE: enrich generuje WYŁĄCZNIE GENERYCZNĄ WIEDZĘ o daniu
+// (opis 'czym jest', składniki, alergeny, kategoria, dieta, ostrość, nazwa lokalna, branded) — NIC NIE TŁUMACZY
+// (tłumaczenia robi skan). Pozycja identyfikowana przez kanoniczną nazwę (`full_name`) → cache po niej.
 export const ENRICH_SYSTEM = [
-  "Jesteś ekspertem kulinarnym i tłumaczem. Dostajesz LISTĘ pozycji menu (sama nazwa + ewentualny",
-  "opis z karty + numer `index`), kontekst kuchni i kraju/miasta lokalu oraz język docelowy.",
-  "Dla KAŻDEJ pozycji zwróć wzbogacenie po jej `index` (i tłumaczenia nazw sekcji po `index`).",
-  "Wszystko MUSI pasować do podanej kuchni i regionu.",
-  "Tłumacz nazwy (pozycji i sekcji) na język docelowy.",
-  "Gdy pozycja ma OPIS Z KARTY (część po '|' w wejściu): przetłumacz go WIERNIE do `menu_description_translated`",
-  "(dokładnie, bez dodatków) i OPRZYJ na nim generowany `description`. Gdy opisu z karty nie ma — `menu_description_translated` to pusty string.",
-  "OPIS (`description`) pisz ZWIĘŹLE (1 zdanie, max 2) i RZECZOWO, z tego, co wynika z nazwy/opisu z karty i typowego przyrządzania",
-  "dania w TEJ kuchni/regionie. NIE upiększaj i NIE dodawaj nietypowych składników (np. NIE dodawaj awokado",
-  "do zwykłej zielonej sałatki w kuchni indyjskiej). Lepiej ogólnie i PRAWDZIWIE niż barwnie i zmyślnie.",
-  "W `ingredients` tylko składniki pewne/typowe; alergeny i flagi dietetyczne szacuj zachowawczo.",
-  "`photo_query`: KANONICZNA nazwa potrawy do zdjęć (zromanizowana) + typ/kuchnia dla jednoznaczności",
-  "(np. 'mango chicken curry indian', 'patatas bravas'). Opisz CZYM danie jest, nie markową nazwą z menu.",
-  "Celuj w GOTOWĄ, PODANĄ potrawę (jak na talerzu w lokalu), nie w surowe składniki, opakowanie ani przepis;",
-  "nie dodawaj słów typu 'recipe'/'ingredients'. Dla napojów: szklanka/kieliszek z napojem, nie samo logo.",
-  "`photo_query_local`: nazwa do zdjęć W JĘZYKU KRAJU lokalu (z kontekstu). Gdy język menu = język kraju,",
-  "zwykle = original; gdy się nie da — powtórz photo_query.",
-  "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda),",
-  "false dla potraw z kuchni.",
-  "Gdy dostaniesz ADNOTACJE menu (sekcja 'ADNOTACJE'), przetłumacz każdą na język docelowy i zwróć w",
-  "`notes` po jej `index` (zachowaj sens; krótko).",
+  "Jesteś ekspertem kulinarnym. Dostajesz LISTĘ dań (kanoniczna nazwa + ewentualne ISTOTNE WYRÓŻNIKI po '|' + numer `index`)",
+  "oraz kontekst kuchni i kraju. Dla KAŻDEJ pozycji zwróć GENERYCZNĄ wiedzę o tym typie dania po jej `index`.",
+  "NIE tłumacz nazw (to już zrobione). Wszystko MUSI pasować do podanej kuchni i regionu.",
+  "Gdy po '|' są ISTOTNE WYRÓŻNIKI (nietypowy skład/podanie TEGO wykonania) — UWZGLĘDNIJ je w `description` i `ingredients`,",
+  "żeby oddać co dane danie naprawdę zawiera (a nie sam ogólnik). Gdy ich brak — opisz typowe wykonanie dania.",
+  "`description`: ZWIĘŹLE (1 zdanie, max 2) i RZECZOWO wyjaśnij CZYM JEST danie — składniki, podanie, kontekst",
+  "kulinarny w TEJ kuchni/regionie. Pisz w JĘZYKU DOCELOWYM (podanym w prompcie). NIE upiększaj, NIE dodawaj",
+  "nietypowych składników (np. NIE dodawaj awokado do zwykłej zielonej sałatki). Lepiej ogólnie i PRAWDZIWIE.",
+  "W `ingredients` tylko składniki pewne/typowe (w języku docelowym).",
+  "`dietary` — przy NIEPEWNOŚCI odpowiadaj ZACHOWAWCZO (na korzyść BEZPIECZEŃSTWA gościa, NIE optymistycznie): oznaczaj",
+  "`true` TYLKO gdy danie typowo NA PEWNO spełnia warunek. Dwuznaczne białko (samo 'curry'/'korma'/'biryani'/'masala'/",
+  "'kebab'/'tikka' bez podanego mięsa LUB warzyw) → domyślnie wariant MIĘSNY: vegetarian=false, vegan=false. `vegan=true`",
+  "tylko bez nabiału/jaj/miodu (śmietana, masło, ghee, jogurt, ser, panir, miód, ryby/sos rybny → vegan=false). `gluten_free`",
+  "=false gdy typowo jest pszenica/gluten (naan, chlebki, makaron, panierka, sos sojowy, pieczywo, piwo).",
+  "`allergens` — w DRUGĄ stronę: wymień WSZYSTKIE prawdopodobne (lepiej OSTRZEC niż pominąć).",
+  "`category` z dozwolonej listy. `spice_level` 0–3 = TYPOWA ostrość dania w tej kuchni (nie domyślnie 0, gdy danie bywa ostre).",
+  "`photo_query`: NAJLEPSZY termin do wyszukania REPREZENTATYWNEGO zdjęcia tego dania (angielski, zromanizowany).",
+  "Zastanów się, jaki termin trafi PODOBNĄ, gotową potrawę: dość konkretny, by to było TO danie, ale NIE zawężaj",
+  "nadmiernie — BEZ rozmiarów/ilości ('1 litr', '250 ml') i bez długich list składników. Dla NAPOJÓW dodaj FORMĘ,",
+  "gdy poprawia trafienie ('bottle', 'glass', 'can') — butelka wygląda inaczej niż szklanka. Celuj w podaną porcję.",
+  "`photo_query_local`: nazwa dania do zdjęć W JĘZYKU KRAJU lokalu (jak ludzie tam szukają tej potrawy). Gdy się nie da",
+  "— powtórz nazwę kanoniczną. Celuj w GOTOWĄ, PODANĄ potrawę (jak na talerzu), nie w surowe składniki/opakowanie/przepis.",
+  "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda), false dla potraw.",
 ].join(" ");
 
 // Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
@@ -330,7 +352,7 @@ async function structureOpenAI(
       // usage w strumieniu (ostatni chunk). OpenAI i Gemini-compat to wspierają.
       stream_options: { include_usage: true },
       // Determinizm odczytu menu (wierniejsza transkrypcja + stabilny cache). Modele reasoning (gpt-5*) nie przyjmują temperature.
-      ...(isOpenAiReasoning(model) ? {} : { temperature: 0 }),
+      ...(supportsTemperature(model) ? { temperature: 0 } : {}),
     });
     let acc = "";
     let finish: string | null = null;
@@ -349,7 +371,7 @@ async function structureOpenAI(
             opts.onProgress({ chars: acc.length, items });
           }
         }
-        if (opts.onItem) emitNewItems(acc, itemState, opts.onItem);
+        if (opts.onItem) emitNewItems(acc, itemState, opts.onItem, opts.idPrefix);
       }
       if (choice?.finish_reason) finish = choice.finish_reason;
       if (chunk.usage) uRaw = chunk.usage;
@@ -393,15 +415,16 @@ function replayStructureItems(structure: MenuStructure, opts: ExtractOptions): v
   let n = 0;
   for (const s of structure.sections) for (const it of s.items) {
     n++;
-    opts.onItem?.({ original: it.original, translated: it.original, photoQuery: "", photoQueryLocal: "", branded: false, description: it.menu_description || "", price: it.price, currency: it.currency });
+    opts.onItem?.({ original: it.original, full_name: it.full_name || it.original, fullDescription: it.full_description || "", translated: it.translated || it.original, photoQuery: it.full_name || "", photoQueryLocal: "", branded: false, description: it.menu_description || "", price: it.price, currency: it.currency });
   }
   opts.onProgress?.({ chars: 0, items: n });
 }
 
-// Kontekst dla PRZEBIEGU 1 (struktura) — bez instrukcji tłumaczenia; lokalizacja/kuchnia pomagają
-// poprawnie odczytać lokalne nazwy dań.
+// Kontekst dla PRZEBIEGU 1 (struktura): język docelowy (skan tłumaczy treści z karty + tworzy full_name);
+// lokalizacja/kuchnia pomagają poprawnie odczytać i kanonizować lokalne nazwy dań.
 export function contextTextStructure(opts: ExtractOptions, n: number): string {
   return (
+    `Język docelowy tłumaczeń (translated/name_translated/text_translated/menu_description_translated): ${opts.targetLang}.\n` +
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
     // Kuchni z peeku CELOWO nie podajemy — model lepiej ustali ją sam z pełnego menu; słaby peek tylko mieszał.
@@ -441,7 +464,8 @@ export async function extractMenu(
   // klucz = nie cache'ujemy. knownSections (kolejne strony) → inny kontekst → dołącz do klucza.
   const sectCtx = opts.knownSections?.length ? opts.knownSections.join("|") : "";
   const baseKey = srcKey(images);
-  const sck = baseKey && (sectCtx ? cacheKey("menu-structure", baseKey, model, sectCtx) : cacheKey("menu-structure", baseKey, model));
+  // MODEL NIE w kluczu (osobna metadana). Klucz = srcHash [+ kontekst znanych sekcji].
+  const sck = baseKey && (sectCtx ? cacheKey("menu-structure", baseKey, sectCtx) : cacheKey("menu-structure", baseKey));
   const canCache = !opts.noCache && !!sck;
   let structure = canCache ? await cacheGet<MenuStructure>("menu-structure", sck as string, { op: "scan" }) : null;
   const structureFromCache = structure !== null; // hit → skan bez kosztu modelu
@@ -451,7 +475,7 @@ export async function extractMenu(
     const s = usesOpenAiApi(model) ? await structureOpenAI(images, opts, model) : await structureClaude(images, opts, model);
     structure = s.structure;
     total = addUsage(total, s.usage);
-    if (canCache) void cacheSet("menu-structure", sck as string, structure);
+    if (canCache) void cacheSet("menu-structure", sck as string, structure, { model });
   }
 
   // venue_match: który z „W POBLIŻU" wskazał model. Emituj RAZ po sparsowaniu (to obiekt — nie da się
@@ -468,7 +492,10 @@ export async function extractMenu(
   // TYLKO STRUKTURA (Faza A apki): zwróć Menu z oryginalnymi nazwami, bez enrichu. Pozycje już
   // wyemitowane przez onItem podczas struktury. Enrich (tłumaczenia/opisy) zrobi osobno /enrich.
   if (opts.structureOnly) {
-    return { menu: buildStructureMenu(structure), usage: total, readable, poorQuality, enriched: false, cached: structureFromCache };
+    const sm = buildStructureMenu(structure);
+    // Nadaj id w TYM SAMYM porządku dokumentu co stream (onItem) → rolling enrich/zdjęcia trafiają w slot po id.
+    if (opts.idPrefix) { let o = 0; sm.sections.forEach((sec) => sec.items.forEach((it) => { it.id = `${opts.idPrefix}${o++}`; })); }
+    return { menu: sm, usage: total, readable, poorQuality, enriched: false, cached: structureFromCache };
   }
 
   // PRZEBIEG 2 — WZBOGACANIE (tekst, z cache per pozycja) → pełne Menu.
@@ -494,7 +521,8 @@ async function structureClaude(
   const stream = client.messages.stream({
     model,
     max_tokens: maxTokens,
-    temperature: 0, // determinizm odczytu menu — wierniejsza transkrypcja + stabilny cache
+    // Determinizm odczytu menu — wierniejsza transkrypcja + stabilny cache. Opus 4.8 ma temperature ZDEPRECJONOWANE (400).
+    ...(supportsTemperature(model) ? { temperature: 0 } : {}),
     system: STRUCTURE_SYSTEM,
     messages: [{ role: "user", content }],
     output_config: { format: { type: "json_schema", schema: STRUCTURE_SCHEMA } },
@@ -517,7 +545,7 @@ async function structureClaude(
         const cm = snapshot.match(/"cuisine"\s*:\s*"([^"]+)"/); // kuchnia jest w JSON przed sekcjami/daniami
         if (cm && cm[1]!.trim()) { cuisineSent = true; opts.onMeta({ cuisine: cm[1] }); }
       }
-      if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem);
+      if (opts.onItem) emitNewItems(snapshot, itemState, opts.onItem, opts.idPrefix);
     });
   }
   const response = await track("claude", "scan-structure", () => stream.finalMessage());
@@ -540,14 +568,13 @@ async function structureClaude(
 
 
 // Wzbogacenie pojedynczej pozycji (wynik przebiegu 2) — cache'owane per pozycja.
+// PO RE-ARCHITEKTURZE: enrich = tylko GENERYCZNA wiedza o daniu (bez tłumaczeń — te robi skan).
 interface ItemEnrich {
   index: number;
-  translated: string;
+  /** Najlepszy termin do WYSZUKANIA reprezentatywnego zdjęcia (dobrany pod trafność, z formą dla napojów). */
   photo_query: string;
   photo_query_local: string;
   branded: boolean;
-  /** Wierne tłumaczenie opisu NADRUKOWANEGO na karcie (gdy był), inaczej "". */
-  menu_description_translated?: string;
   description: string;
   ingredients: string[];
   allergens: string[];
@@ -566,15 +593,20 @@ function countryOf(loc?: string): string | undefined {
 function assembleItem(it: StructItem, e: ItemEnrich | null): MenuItem {
   const category: DishCategory = e && (DISH_CATEGORIES as readonly string[]).includes(e.category) ? (e.category as DishCategory) : "other";
   const spice = (e && [0, 1, 2, 3].includes(e.spice_level) ? e.spice_level : 0) as 0 | 1 | 2 | 3;
+  const fullName = it.full_name || it.original; // tożsamość: kanoniczna EN nazwa (ze skanu)
   return {
+    id: it.id, // stabilne id renderowe (pipeline) — przenoszone ze struktury, undefined poza pipeline
     original: it.original,
-    translated: e?.translated || it.original,
+    translated: it.translated || it.original, // tłumaczenie robi SKAN
+    full_name: fullName,
+    full_description: it.full_description || "",
+    portion: it.portion || undefined,
     source_text: it.source_text || it.original,
-    photo_query: e?.photo_query || it.original,
-    photo_query_local: e?.photo_query_local || e?.photo_query || it.original,
+    photo_query: e?.photo_query || fullName, // termin do zdjęć: dobrany przez enrich (forma dla napojów), fallback = full_name
+    photo_query_local: e?.photo_query_local || e?.photo_query || fullName,
     branded: e?.branded ?? false,
     menu_description: it.menu_description || "",
-    menu_description_translated: e?.menu_description_translated || (it.menu_description && !e ? it.menu_description : ""),
+    menu_description_translated: it.menu_description_translated || "", // tłumaczenie opisu z karty robi SKAN
     description: e?.description || it.menu_description || "",
     ingredients: e?.ingredients ?? [],
     allergens: e?.allergens ?? [],
@@ -599,11 +631,11 @@ export function buildStructureMenu(structure: MenuStructure): Menu {
     cuisine: structure.cuisine,
     sections: structure.sections.map((s) => ({
       name: s.name,
-      name_translated: s.name,
+      name_translated: s.name_translated || s.name,
       availability: s.availability ?? undefined,
       items: s.items.map((it) => assembleItem(it, null)),
     })),
-    notes: (structure.notes ?? []).map((n) => ({ text: n.text, text_translated: n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
+    notes: (structure.notes ?? []).map((n) => ({ text: n.text, text_translated: n.text_translated || n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
   };
 }
 
@@ -616,74 +648,67 @@ export function menuToStructure(menu: Menu): MenuStructure {
     cuisine: menu.cuisine,
     sections: menu.sections.map((s) => ({
       name: s.name,
+      name_translated: s.name_translated ?? s.name,
       availability: s.availability ?? null,
-      items: s.items.map((it) => ({ original: it.original, menu_description: it.menu_description ?? "", source_text: it.source_text ?? "", price: it.price, currency: it.currency, variants: it.variants ?? [], course: it.course ?? null, surcharge: it.surcharge ?? null })),
+      items: s.items.map((it) => ({ id: it.id, original: it.original, translated: it.translated ?? it.original, full_name: it.full_name ?? it.original, full_description: it.full_description ?? "", portion: it.portion ?? "", menu_description: it.menu_description ?? "", menu_description_translated: it.menu_description_translated ?? "", source_text: it.source_text ?? "", price: it.price, currency: it.currency, variants: it.variants ?? [], course: it.course ?? null, surcharge: it.surcharge ?? null })),
     })),
-    notes: (menu.notes ?? []).map((n) => ({ text: n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
+    notes: (menu.notes ?? []).map((n) => ({ text: n.text, text_translated: n.text_translated ?? n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
     readable: true,
     low_quality: false,
   };
 }
 
-// Wyłuskuje KOMPLETNE obiekty wzbogacenia ze strumienia enrich (marker "photo_query") i emituje je
-// jako pozycje (mapując index→original) — apka uzupełnia mini-karty opisem i dociąga zdjęcie na żywo.
-function emitEnrichItems(text: string, state: { emitted: number }, items: { gi: number; original: string }[], onItem: (i: ScanItemStub) => void): void {
-  let found = 0;
-  let i = 0;
-  while (true) {
-    const k = text.indexOf('"photo_query"', i);
-    if (k < 0) break;
-    const start = text.lastIndexOf("{", k);
-    if (start < 0) { i = k + 13; continue; }
-    let depth = 0, inStr = false, esc = false, end = -1;
-    for (let p = start; p < text.length; p++) {
-      const ch = text[p]!;
-      if (esc) { esc = false; continue; }
-      if (ch === "\\") { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (ch === "{") depth++;
-      else if (ch === "}") { depth--; if (depth === 0) { end = p; break; } }
-    }
-    if (end < 0) break;
-    found++;
-    if (found > state.emitted) {
-      try {
-        const o = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-        if (typeof o.index === "number" && typeof o.photo_query === "string") {
-          // index = pozycja na liście wysłanej do modelu (gęsta), więc bierzemy wprost items[index].
-          const orig = items[o.index]?.original;
-          if (orig) {
-            onItem({
-              original: orig,
-              translated: typeof o.translated === "string" ? o.translated : orig,
-              photoQuery: o.photo_query,
-              photoQueryLocal: typeof o.photo_query_local === "string" ? o.photo_query_local : "",
-              branded: o.branded === true,
-              description: typeof o.description === "string" ? o.description : "",
-              price: null,
-              currency: null,
-            });
-            state.emitted = found;
-          }
+/** Klucz z OPISU Z KARTY: deaccent+lower, rozbicie na elementy listy (po przecinku/średniku/slashu) →
+ *  POSORTOWANE (opis składników to ZBIÓR — kolejność nieistotna, „ser, szynka" == „szynka, ser") → reużycie
+ *  cross-restauracja. Brak opisu → "" (pełne reużycie pozycji bez opisu). Prozę (bez przecinków) zostawia bez zmian. */
+function descSortKey(md: string): string {
+  const t = md.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  if (!t) return "";
+  return t.split(/[,;/]+/).map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean).sort().join(", ");
+}
+
+interface EnrichResult { items: ItemEnrich[]; usage: Usage }
+
+// Z (jeszcze niepełnego) strumienia JSON enrichu wyłuskuje KOMPLETNE obiekty z tablicy `items` i emituje
+// każdy OD RAZU po domknięciu (jak emitNewItems dla vision) → enrich-item lecą PO JEDNYM, nie partią. Świadome
+// stringów/escape/zagnieżdżeń (dietary to obiekt). Emituje tylko NOWE (po liczniku). Niepełne pomija (dołapie finał).
+function streamEnrichItems(text: string, state: { emitted: number }, onItem: (raw: ItemEnrich) => void): void {
+  const ak = text.indexOf('"items"');
+  if (ak < 0) return;
+  const br = text.indexOf("[", ak);
+  if (br < 0) return;
+  let count = 0, depth = 0, inStr = false, esc = false, objStart = -1;
+  for (let p = br + 1; p < text.length; p++) {
+    const ch = text[p]!;
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") { if (depth === 0) objStart = p; depth++; }
+    else if (ch === "}") {
+      if (depth > 0) depth--;
+      if (depth === 0 && objStart >= 0) {
+        count++;
+        if (count > state.emitted) {
+          try { const raw = JSON.parse(text.slice(objStart, p + 1)) as ItemEnrich; if (typeof raw.index === "number") { onItem(raw); state.emitted = count; } }
+          catch { /* obiekt jeszcze niedomknięty / niepełny — złapie się przy kolejnym snapshocie lub w bezpieczniku */ }
         }
-      } catch { /* niepełny fragment — doczyta się później */ }
-    }
-    i = end + 1;
+        objStart = -1;
+      }
+    } else if (ch === "]" && depth === 0) break; // koniec tablicy items
   }
 }
 
-interface EnrichResult { sections: { index: number; name_translated: string }[]; items: ItemEnrich[]; notes: { index: number; text_translated: string }[]; usage: Usage }
-
-/** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI) dla podanych sekcji, pozycji i adnotacji. */
+/** Jedno tekstowe wywołanie wzbogacające (Claude/OpenAI): dla podanych pozycji (identyfikowanych przez
+ *  `full_name` — kanoniczna EN) zwraca GENERYCZNĄ wiedzę o daniu. Tłumaczenia robi już skan — tu ich nie ma.
+ *  `onStreamItem` (Claude): woła per danie GDY TYLKO domknie się w strumieniu → emisja po jednym, nie partią. */
 async function enrichCall(
   model: ModelId,
   opts: ExtractOptions,
   cuisine: string,
   country: string | undefined,
-  sects: { idx: number; name: string }[],
-  items: { gi: number; original: string; menu_description: string }[],
-  notes: { idx: number; text: string }[] = [],
+  items: { gi: number; fullName: string; fd: string }[],
+  onStreamItem?: (raw: ItemEnrich) => void,
 ): Promise<EnrichResult> {
   const ctx =
     `Kuchnia: ${cuisine}.\n` +
@@ -692,12 +717,19 @@ async function enrichCall(
     (opts.restaurantHint ? `Lokal: ${opts.restaurantHint}.\n` : "") +
     `Język docelowy: ${opts.targetLang}.\n\n`;
   // INDEKS = pozycja na PODANEJ niżej liście (GĘSTE 0..N-1), NIE numer globalny. Mapowanie z powrotem na
-  // właściwe danie robi wywołujący przez needItems[index].gi — odporne, gdy model odda przesunięte indeksy
-  // (rzadkie gi przy re-skanie z częściowym cache potrafiły wpisać treść pod złe danie i zatruć cache).
-  const sectsTxt = sects.length ? "SEKCJE (index → nazwa) do przetłumaczenia:\n" + sects.map((s, i) => `[${i}] ${s.name}`).join("\n") + "\n\n" : "";
-  const itemsTxt = items.length ? "POZYCJE (index → nazwa | opis z menu) do wzbogacenia:\n" + items.map((it, i) => `[${i}] ${it.original}${it.menu_description ? ` | ${it.menu_description}` : ""}`).join("\n") : "";
-  const notesTxt = notes.length ? "\n\nADNOTACJE (index → tekst) do przetłumaczenia:\n" + notes.map((n, i) => `[${i}] ${n.text}`).join("\n") : "";
-  const userText = ctx + sectsTxt + itemsTxt + notesTxt + "\n\nZwróć enrich dla KAŻDEGO podanego indeksu (sekcji, pozycji i adnotacji), używając DOKŁADNIE tych samych numerów index z list powyżej.";
+  // właściwe danie robi wywołujący przez items[index].gi — odporne, gdy model odda przesunięte indeksy.
+  // Po „|" (gdy jest) idą ISTOTNE WYRÓŻNIKI dania (full_description, kanoniczny EN) — model ma je wykorzystać do trafniejszego opisu.
+  const itemsTxt = "POZYCJE (index → danie | istotne wyróżniki) do wzbogacenia o GENERYCZNĄ wiedzę:\n" + items.map((it, i) => `[${i}] ${it.fullName}${it.fd ? ` | ${it.fd}` : ""}`).join("\n");
+  const userText = ctx + itemsTxt +
+    "\n\nDla KAŻDEGO podanego indeksu zwróć wzbogacenie (opis CZYM JEST danie + składniki/alergeny/kategoria/dieta/ostrość + nazwa lokalna do zdjęć + branded), używając DOKŁADNIE tych samych numerów index z listy powyżej." +
+    // Przypomnienie dietary NA KOŃCU (recency) — słabsze modele (Haiku) bywały zbyt optymistyczne (dwuznaczne curry
+    // jako vegetarian=true). Egzekwujemy odpowiedź bezpieczną dla gościa, zgodną z regułami w systemie.
+    "\n\n⚠ DIETARY — przy niepewności odpowiadaj ZACHOWAWCZO (bezpiecznie dla gościa, NIE optymistycznie): dwuznaczne białko (np. 'curry'/'korma'/'biryani' bez podanego mięsa/warzyw) → vegetarian=false, vegan=false; nabiał/jaja/miód → vegan=false; pszenica (naan/makaron/panierka) → gluten_free=false. Alergeny wymieniaj SZEROKO. Nie zgaduj na korzyść 'wege/vegan/bezglutenowe'." +
+    // Egzekucja języka NA KOŃCU (recency) + po angielsku jako meta-dyrektywa — słabsze modele (Haiku) potrafiły
+    // zignorować „Język docelowy" i odpowiedzieć po polsku (językiem promptu) dla ES/ZH; ta klauzula to naprawia.
+    `\n\n⚠ OUTPUT LANGUAGE — write ALL \`description\` and \`ingredients\` values ONLY in ${opts.targetLang}. ` +
+    `Respond ONLY in ${opts.targetLang}, even though these instructions are written in Polish. ` +
+    `Do NOT use Polish or English unless ${opts.targetLang} IS Polish or English. (photo_query stays English.)`;
 
   if (usesOpenAiApi(model)) {
     const openai = getClientForModel(model);
@@ -712,37 +744,35 @@ async function enrichCall(
       response_format: { type: "json_schema", json_schema: { name: "enrich", strict: tag === "openai", schema: ENRICH_SCHEMA as unknown as Record<string, unknown> } },
     };
     if (isOpenAiReasoning(model)) params.reasoning_effort = "minimal";
-    else params.temperature = 0; // determinizm photo_query (modele reasoning nie przyjmują temperature)
+    else params.temperature = 0; // determinizm (modele reasoning nie przyjmują temperature)
     const resp = await track(tag, "enrich", () => openai.chat.completions.create(params));
     const usage = usageFromOpenAI(model, resp.usage);
     recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
     logUsage(`enrich pozycji=${items.length} (${tag})`, model, usage);
     const txt = resp.choices[0]?.message?.content;
     const parsed = txt ? (JSON.parse(txt) as Partial<EnrichResult>) : {};
-    return { sections: parsed.sections ?? [], items: parsed.items ?? [], notes: parsed.notes ?? [], usage };
+    return { items: parsed.items ?? [], usage };
   }
 
-  // Streaming — duże menu daje duże wyjście; non-stream przy wysokim max_tokens odpala guard SDK
-  // („Streaming is required…"). Strumień to omija (jak przebieg struktury).
+  // Streaming — duże menu daje duże wyjście; non-stream przy wysokim max_tokens odpala guard SDK. Strumień to omija.
   const stream = client.messages.stream({
     model,
     max_tokens: MODELS[model].maxOutput,
-    temperature: 0, // determinizm: ten sam danie → ten sam photo_query → stabilny klucz cache
+    // Determinizm: ten sam danie → ta sama wiedza → stabilny klucz cache. Opus 4.8: temperature zdeprecjonowane (400).
+    ...(supportsTemperature(model) ? { temperature: 0 } : {}),
     system: [{ type: "text", text: ENRICH_SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: userText }],
     output_config: { format: { type: "json_schema", schema: ENRICH_SCHEMA } },
   });
-  if (opts.onEnrichItem) {
-    const est = { emitted: 0 };
-    stream.on("text", (_d, snap) => emitEnrichItems(snap, est, items, opts.onEnrichItem!));
-  }
+  // PER-DANIE NA ŻYWO: parsuj strumień i emituj każde danie od razu po domknięciu (zamiast całą partią na końcu).
+  if (onStreamItem) { const seen = { emitted: 0 }; stream.on("text", (_d: string, snap: string) => streamEnrichItems(snap, seen, onStreamItem)); }
   const resp = await track("claude", "enrich", () => stream.finalMessage());
   const usage = usageFrom(model, resp.usage);
   recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
   logUsage(`enrich pozycji=${items.length}`, model, usage);
   const t = resp.content.find((b) => b.type === "text");
   const parsed = t && t.type === "text" ? (JSON.parse(t.text) as Partial<EnrichResult>) : {};
-  return { sections: parsed.sections ?? [], items: parsed.items ?? [], notes: parsed.notes ?? [], usage };
+  return { items: parsed.items ?? [], usage };
 }
 
 /**
@@ -751,100 +781,262 @@ async function enrichCall(
  * TYLKO niezcache'owane pozycje. Składa wynik z bezpiecznymi fallbackami.
  */
 export async function enrichMenu(structure: MenuStructure, opts: ExtractOptions, model: ModelId): Promise<{ menu: Menu; usage: Usage }> {
-  const targetLang = opts.targetLang;
   const cuisine = structure.cuisine;
   const country = countryOf(opts.locationHint);
-  // Klucz cache enrichu: lokalizacja na poziomie KRAJU (jak dish-info), nie miasta — to samo danie w całym
-  // kraju dzieli wpis → DUŻO więcej trafień. Model nadal dostaje pełny „miasto, kraj" (opts.locationHint)
-  // do jakości; regionalne specjały i tak różni sama NAZWA dania (np. „paella valenciana"). Fallback "".
+  // Klucz cache enrichu: lokalizacja na poziomie KRAJU (to samo danie w całym kraju dzieli wpis). Fallback "".
   const locKey = country || "";
+  const langKey = langCode(opts.targetLang);
 
-  const flat: { original: string; menu_description: string }[] = [];
-  for (const s of structure.sections) for (const it of s.items) flat.push({ original: it.original, menu_description: it.menu_description });
+  // Płaska lista pozycji. TOŻSAMOŚĆ = `full_name` (kanoniczna EN nazwa) + `full_description` (kanoniczny EN
+  // dodatkowy opis = istotne wyróżniki; "" gdy nic ważnego). Oba ZE SKANU → stabilne, dobrze reużywalne cross-menu.
+  const flat: { fullName: string; fd: string }[] = [];
+  const structByGi: StructItem[] = []; // równolegle do `flat` — do złożenia stuba enrich-item NA ŻYWO
+  for (const s of structure.sections) for (const it of s.items) { flat.push({ fullName: it.full_name || it.original, fd: it.full_description || "" }); structByGi.push(it); }
 
-  const notes = structure.notes ?? [];
-  const itemKey = (original: string, md: string) => cacheKey("item-enrich", original, md, cuisine, locKey, targetLang, model);
-  const sectKey = (name: string) => cacheKey("item-enrich", "§sect", name, targetLang, model);
-  const noteKey = (text: string) => cacheKey("item-enrich", "§note", text, targetLang, model);
+  // KLUCZ: full_name + full_description (kanoniczny EN; descSortKey: listę składników po przecinku SORTUJE, bo to
+  // zbiór → reużycie cross-restauracja; pusty gdy brak istotnych wyróżników = pełne reużycie) + kuchnia + kraj + język.
+  const itemKey = (fullName: string, fd: string) => cacheKey("item-enrich", fullName, descSortKey(fd), cuisine, locKey, langKey);
 
   const enrichByGi = new Array<ItemEnrich | null>(flat.length).fill(null);
-  const sectTrans = new Array<string | null>(structure.sections.length).fill(null);
-  const noteTrans = new Array<string | null>(notes.length).fill(null);
-  const needItems: { gi: number; original: string; menu_description: string }[] = [];
-  const needSects: { idx: number; name: string }[] = [];
-  const needNotes: { idx: number; text: string }[] = [];
-
+  // STRUMIEŃ NA ŻYWO: emituj enrich-item ZARAZ gdy pozycja gotowa (cache hit od razu, świeże po każdej partii) —
+  // a NIE wszystkie naraz w finale (to powodowało „0/27 wisi… nagle 27/27" + zdjęcia hurtem). Apka łata po `id`.
+  const emitEnrich = (gi: number) => {
+    if (!opts.onEnrichItem) return;
+    const mi = assembleItem(structByGi[gi]!, enrichByGi[gi] ?? null);
+    opts.onEnrichItem({ id: mi.id, original: mi.original, full_name: mi.full_name || mi.original, translated: mi.translated, photoQuery: mi.photo_query, photoQueryLocal: mi.photo_query_local, branded: mi.branded, description: mi.description, price: mi.price, currency: mi.currency });
+  };
+  const needItems: { gi: number; fullName: string; fd: string }[] = [];
   if (!opts.noCache) {
     await Promise.all(flat.map(async (f, gi) => {
-      const hit = await cacheGet<ItemEnrich>("item-enrich", itemKey(f.original, f.menu_description), { op: "enrich" });
-      if (hit) enrichByGi[gi] = hit; else needItems.push({ gi, original: f.original, menu_description: f.menu_description });
-    }));
-    await Promise.all(structure.sections.map(async (s, idx) => {
-      const hit = await cacheGet<string>("item-enrich", sectKey(s.name), { op: "enrich" });
-      if (hit != null) sectTrans[idx] = hit; else needSects.push({ idx, name: s.name });
-    }));
-    await Promise.all(notes.map(async (n, idx) => {
-      const hit = await cacheGet<string>("item-enrich", noteKey(n.text), { op: "enrich" });
-      if (hit != null) noteTrans[idx] = hit; else needNotes.push({ idx, text: n.text });
+      const hit = await cacheGet<ItemEnrich>("item-enrich", itemKey(f.fullName, f.fd), { op: "enrich" });
+      if (hit) enrichByGi[gi] = hit; else needItems.push({ gi, fullName: f.fullName, fd: f.fd });
     }));
   } else {
-    flat.forEach((f, gi) => needItems.push({ gi, original: f.original, menu_description: f.menu_description }));
-    structure.sections.forEach((s, idx) => needSects.push({ idx, name: s.name }));
-    notes.forEach((n, idx) => needNotes.push({ idx, text: n.text }));
+    flat.forEach((f, gi) => needItems.push({ gi, fullName: f.fullName, fd: f.fd }));
   }
-
-  // Pozycje z CACHE → wyemituj od razu (apka wypełnia karty), reszta dojdzie ze strumienia enrich.
-  if (opts.onEnrichItem) {
-    flat.forEach((f, gi) => {
-      const e = enrichByGi[gi];
-      if (e) opts.onEnrichItem!({ original: f.original, translated: e.translated || f.original, photoQuery: e.photo_query || "", photoQueryLocal: e.photo_query_local || "", branded: e.branded === true, description: e.description || "", price: null, currency: null });
-    });
-  }
+  // Pozycje z cache są gotowe OD RAZU → wypuść je natychmiast (apka widzi postęp od pierwszej chwili).
+  for (let gi = 0; gi < flat.length; gi++) if (enrichByGi[gi]) emitEnrich(gi);
 
   let usage = ZERO_USAGE;
-  if (needItems.length || needSects.length || needNotes.length) {
-    const r = await enrichCall(model, opts, cuisine, country, needSects, needItems, needNotes);
-    usage = r.usage;
-    // it.index/s.index/n.index = pozycja na liście WYSŁANEJ do modelu (need*), NIE numer globalny. Mapuj
-    // przez need*[index] na właściwe danie/sekcję/adnotację — niedopasowany indeks (poza zakresem) pomiń.
-    for (const s of r.sections) {
-      const tgt = needSects[s.index];
-      if (tgt) {
-        sectTrans[tgt.idx] = s.name_translated;
-        if (!opts.noCache) void cacheSet("item-enrich", sectKey(structure.sections[tgt.idx]!.name), s.name_translated, { lang: targetLang });
+  if (needItems.length) {
+    // BATCHOWANIE: całe duże menu w JEDNYM wywołaniu enrich = ogromny, wolny output (dziesiątki dań → kilka
+    // minut + ryzyko ucięcia na max_tokens). Tniemy na partie ~12 i puszczamy z ograniczoną współbieżnością —
+    // szybciej, bezpieczniej i deterministycznie (każda partia ma własny mały output). Cache per pozycja → reuse.
+    const ENRICH_BATCH = 12;
+    const chunks: { gi: number; fullName: string; fd: string }[][] = [];
+    for (let i = 0; i < needItems.length; i += ENRICH_BATCH) chunks.push(needItems.slice(i, i + ENRICH_BATCH));
+    const acc: Usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    let next = 0;
+    const worker = async () => {
+      while (next < chunks.length) {
+        const chunk = chunks[next++]!;
+        // emituj PO JEDNYM — gdy tylko danie domknie się w strumieniu (nie czekamy aż wróci cała partia 6).
+        const apply = (it: ItemEnrich) => {
+          const tgt = chunk[it.index];
+          if (tgt && enrichByGi[tgt.gi] == null) { // idempotentnie: stream vs bezpiecznik nie podwoją
+            enrichByGi[tgt.gi] = it;
+            if (!opts.noCache) void cacheSet("item-enrich", itemKey(tgt.fullName, tgt.fd), it, { lang: opts.targetLang, model });
+            emitEnrich(tgt.gi);
+          }
+        };
+        const r = await enrichCall(model, opts, cuisine, country, chunk, apply);
+        acc.inputTokens += r.usage.inputTokens; acc.outputTokens += r.usage.outputTokens; acc.costUsd += r.usage.costUsd;
+        // BEZPIECZNIK: cokolwiek strumień pominął (parse / model OpenAI bez per-item) — dolicz z autorytatywnego wyniku.
+        for (const it of r.items) apply(it);
       }
-    }
-    for (const it of r.items) {
-      const tgt = needItems[it.index];
-      if (tgt) {
-        enrichByGi[tgt.gi] = it;
-        if (!opts.noCache) void cacheSet("item-enrich", itemKey(flat[tgt.gi]!.original, flat[tgt.gi]!.menu_description), it, { lang: targetLang });
-      }
-    }
-    for (const n of r.notes) {
-      const tgt = needNotes[n.index];
-      if (tgt) {
-        noteTrans[tgt.idx] = n.text_translated;
-        if (!opts.noCache) void cacheSet("item-enrich", noteKey(notes[tgt.idx]!.text), n.text_translated, { lang: targetLang });
-      }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
+    usage = acc;
   }
 
+  // Tłumaczenia sekcji/notatek/nazw — JUŻ w strukturze (zrobił skan). Tu tylko składamy + dokładamy enrich.
   let gi = 0;
   const menu: Menu = {
     restaurant_name: structure.restaurant_name,
     restaurant_address: structure.restaurant_address,
     restaurant_language: structure.restaurant_language,
     cuisine: structure.cuisine,
-    sections: structure.sections.map((s, si) => ({
+    sections: structure.sections.map((s) => ({
       name: s.name,
-      name_translated: sectTrans[si] ?? s.name,
+      name_translated: s.name_translated || s.name,
       availability: s.availability ?? undefined,
+      // enrich-item już wyemitowane NA ŻYWO (cache hit od razu / świeże po partii) — tu tylko składamy menu.
       items: s.items.map((it) => assembleItem(it, enrichByGi[gi++] ?? null)),
     })),
-    notes: notes.map((n, i) => ({ text: n.text, text_translated: noteTrans[i] ?? n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
+    notes: (structure.notes ?? []).map((n) => ({ text: n.text, text_translated: n.text_translated || n.text, scope: n.scope, section_index: n.section_index, kind: n.kind })),
   };
   return { menu, usage };
+}
+
+// ===== EKSPERYMENT: SKAN JEDNOFAZOWY (struktura + enrich w JEDNYM wywołaniu vision) ===========
+// Hipoteza: model czytający menu może OD RAZU zwrócić tłumaczenia + krótkie opisy + photo_query itd.
+// (to, co dziś robi osobny enrich) — oszczędza 1 wywołanie i kontekst. Wpięte jako DODATKOWA możliwość
+// (extractMenuOnePass) + eksperyment w LABie do porównania z torem dwufazowym. Nie zmienia toru apki.
+export const ONEPASS_SYSTEM = [
+  "Jesteś precyzyjnym transkryptorem menu restauracji, a zarazem ekspertem kulinarnym i tłumaczem.",
+  "W JEDNYM przejściu ze zdjęć: (1) odczytaj STRUKTURĘ menu oraz (2) OD RAZU przetłumacz i wzbogać każdą pozycję.",
+  "— STRUKTURA —",
+  "Otrzymasz jedno lub WIELE zdjęć — strony/fragmenty TEGO SAMEGO menu (czasem okładka/fasada/szyld). Odczytaj TYLKO to, co realnie widać; nie wymyślaj pozycji.",
+  "Wyodrębnij WSZYSTKIE pozycje z podziałem na sekcje, w kolejności jak na stronach; NIE duplikuj powtórzonych nagłówków/pozycji. To samo danie z różnych ujęć = JEDEN wpis (połącz braki). Menu wielojęzyczne: jeden wpis, `original` w języku oryginału (kraju lokalu).",
+  "Dla pozycji: `original` (dokładnie jak na menu), `source_text` (przepisany fragment karty), `price`/`currency` (gdy widać, inaczej null), `menu_description` (opis NADRUKOWANY na karcie — transkrypcja; brak → pusty).",
+  "WARIANTY (mała/duża, kieliszek/butelka): JEDNA pozycja, wypełnij `variants` i `price`=null.",
+  "ZESTAWY/MENU DNIA z wyborem dań: każdy wybór jako osobna pozycja z `course` ('1. danie'/'2. danie'/'deser'), `price`=null, ew. `surcharge`; cenę/zasady zestawu jako adnotacja kind='set' przy sekcji. `availability` sekcji dla ograniczeń czasowych.",
+  "Teksty NIE-dania (czas oczekiwania, dopłaty, VAT, napiwek, godziny, wliczone dodatki) → `notes` (text, scope, section_index, kind), NIGDY jako pozycje.",
+  "Odczytaj `restaurant_name`/`restaurant_address` (też z okładki/szyldu/wizytówki). `cuisine` = KRÓTKI kanoniczny termin PO ANGIELSKU, małymi literami. `restaurant_language` = ISO 639-1. `readable=false` tylko gdy nic nie da się odczytać; `low_quality=true` przy słabej, częściowej czytelności. `venue_match` gdy w prompcie była lista W POBLIŻU.",
+  "— TŁUMACZENIE I WZBOGACENIE (równocześnie) —",
+  "Dla KAŻDEJ pozycji i sekcji przetłumacz nazwy na język docelowy (`translated`, `name_translated`) oraz adnotacje (`text_translated`). Wszystko MUSI pasować do ustalonej kuchni i regionu lokalu.",
+  "`menu_description_translated`: wierne tłumaczenie opisu z karty (gdy był), inaczej pusty. `description`: ZWIĘŹLE (1 zdanie, max 2), RZECZOWO czym jest danie — oprzyj na opisie z karty/typowym przyrządzaniu w tej kuchni; NIE upiększaj, nie dodawaj nietypowych składników.",
+  "`photo_query`: KANONICZNA, rozpoznawalna nazwa potrawy (zromanizowana), MINIMUM słów (2-3), jak ludzie wyszukują (np. 'patatas bravas', 'mango chicken curry', 'caesar salad') — opisz CZYM danie jest, nie markową/lokalną nazwą; nie rozwlekaj składnikami ani narodowością. `photo_query_local`: w języku kraju lokalu. `branded`: true dla markowych/paczkowanych (Coca-Cola, butelkowana woda).",
+  "`ingredients` tylko pewne/typowe; `allergens`, `dietary`, `spice_level` szacuj zachowawczo; `category` z dozwolonej listy.",
+].join(" ");
+
+/** Kontekst jednofazowy: lokal/lokalizacja/W POBLIŻU (jak struktura) + język docelowy (jak enrich). */
+function contextTextOnePass(opts: ExtractOptions, n: number): string {
+  return (
+    `Język docelowy (tłumaczenia/opisy): ${opts.targetLang}.\n` +
+    `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+    (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
+    (opts.nearbyVenues?.length
+      ? `W POBLIŻU (z GPS) są te lokale:\n` +
+        opts.nearbyVenues.map((v, i) => `  ${i}) ${v.name}${v.cuisine ? ` — ${v.cuisine}` : ""}`).join("\n") +
+        `\nJeśli to menu należy do JEDNEGO z nich — wskaż go w venue_match (by='name' z karty; by='cuisine' tylko gdy jednoznaczne). Brak → null.\n`
+      : "") +
+    `Połącz powyższe ${n} zdjęć w JEDNO menu: odczytaj strukturę ORAZ od razu przetłumacz i wzbogać pozycje.`
+  );
+}
+
+/** Normalizuje surową odpowiedź jednofazową do Menu (walidacja kategorii/ostrości/diety/notatek). */
+function onePassToMenu(parsed: Record<string, any>): { menu: Menu; readable: boolean; lowQuality: boolean } {
+  const cat = (c: unknown): DishCategory => ((DISH_CATEGORIES as readonly string[]).includes(c as string) ? (c as DishCategory) : "other");
+  const spice = (s: unknown): 0 | 1 | 2 | 3 => (([0, 1, 2, 3] as unknown[]).includes(s) ? (s as 0 | 1 | 2 | 3) : 0);
+  const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const menu: Menu = {
+    restaurant_name: parsed.restaurant_name ?? null,
+    restaurant_address: parsed.restaurant_address ?? null,
+    restaurant_language: parsed.restaurant_language ?? "",
+    cuisine: parsed.cuisine ?? "unknown",
+    sections: arr<Record<string, any>>(parsed.sections).map((s) => ({
+      name: s.name ?? "",
+      name_translated: s.name_translated || s.name || "",
+      availability: s.availability ?? undefined,
+      items: arr<Record<string, any>>(s.items).map((it): MenuItem => ({
+        original: it.original ?? "",
+        translated: it.translated || it.original || "",
+        full_name: it.full_name || it.original || "",
+        full_description: it.full_description || "",
+        portion: it.portion || undefined,
+        source_text: it.source_text || it.original || "",
+        menu_description: it.menu_description || "",
+        menu_description_translated: it.menu_description_translated || "",
+        photo_query: it.photo_query || it.full_name || it.original || "",
+        photo_query_local: it.photo_query_local || it.photo_query || it.full_name || it.original || "",
+        branded: it.branded === true,
+        description: it.description || it.menu_description || "",
+        ingredients: arr<string>(it.ingredients),
+        allergens: arr<string>(it.allergens),
+        category: cat(it.category),
+        dietary: it.dietary && typeof it.dietary === "object"
+          ? { vegetarian: !!it.dietary.vegetarian, vegan: !!it.dietary.vegan, gluten_free: !!it.dietary.gluten_free }
+          : { vegetarian: false, vegan: false, gluten_free: false },
+        spice_level: spice(it.spice_level),
+        price: it.price ?? null,
+        currency: it.currency ?? null,
+        variants: Array.isArray(it.variants) && it.variants.length ? it.variants : undefined,
+        course: it.course ?? undefined,
+        surcharge: it.surcharge ?? undefined,
+      })),
+    })),
+    notes: arr<Record<string, any>>(parsed.notes).map((n): MenuNote => ({
+      text: n.text ?? "",
+      text_translated: n.text_translated || n.text || "",
+      scope: n.scope === "section" ? "section" : "menu",
+      section_index: typeof n.section_index === "number" ? n.section_index : null,
+      kind: ((NOTE_KINDS as readonly string[]).includes(n.kind) ? n.kind : "info") as NoteKind,
+    })),
+  };
+  return { menu, readable: parsed.readable !== false, lowQuality: parsed.low_quality === true };
+}
+
+/**
+ * EKSPERYMENT: skan JEDNOFAZOWY — jedno wywołanie vision zwraca pełne Menu (struktura + tłumaczenia +
+ * opisy + photo_query). Odpowiednik extractMenu, ale bez osobnej fazy enrich. Bez cache (do porównań).
+ */
+export async function extractMenuOnePass(
+  images: InputImage[],
+  opts: ExtractOptions,
+  model: ModelId,
+): Promise<{ menu: Menu; usage: Usage; readable: boolean; poorQuality: boolean }> {
+  if (images.length === 0) throw new Error("Brak zdjęć do przetworzenia.");
+  const ctx = contextTextOnePass(opts, images.length);
+  let jsonText: string | null = null;
+  let usage: Usage = ZERO_USAGE;
+
+  if (usesOpenAiApi(model)) {
+    const openai = getClientForModel(model);
+    const tag = apiTag(model);
+    const parts: import("openai").OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
+    images.forEach((img, i) => {
+      parts.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
+      parts.push({ type: "image_url", image_url: { url: `data:${img.mediaType};base64,${img.base64}` } });
+    });
+    parts.push({ type: "text", text: ctx });
+    const { text, usageRaw } = await track(tag, "scan-onepass", async () => {
+      const stream = await openai.chat.completions.create({
+        model,
+        max_completion_tokens: MODELS[model].maxOutput,
+        messages: [{ role: "system", content: ONEPASS_SYSTEM }, { role: "user", content: parts }],
+        response_format: { type: "json_schema", json_schema: { name: "menu", strict: tag === "openai", schema: ONEPASS_SCHEMA as unknown as Record<string, unknown> } },
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(supportsTemperature(model) ? { temperature: 0 } : {}),
+      });
+      let acc = "";
+      let uRaw: import("openai").OpenAI.Completions.CompletionUsage | undefined;
+      for await (const chunk of stream) {
+        const d = chunk.choices?.[0]?.delta?.content;
+        if (d) acc += d;
+        if (chunk.usage) uRaw = chunk.usage;
+      }
+      return { text: acc, usageRaw: uRaw };
+    });
+    usage = usageFromOpenAI(model, usageRaw);
+    recordUsage(tag, usage.inputTokens, usage.outputTokens, usage.costUsd, model);
+    recordBytes(tag, images.reduce((n, i) => n + i.base64.length, 0), text.length);
+    logUsage(`one-pass obrazów=${images.length} (${tag})`, model, usage);
+    jsonText = text;
+  } else {
+    const content: Anthropic.ContentBlockParam[] = [];
+    images.forEach((img, i) => {
+      content.push({ type: "text", text: `— Zdjęcie ${i + 1} z ${images.length} —` });
+      content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.base64 } });
+    });
+    content.push({ type: "text", text: ctx });
+    const stream = client.messages.stream({
+      model,
+      max_tokens: MODELS[model].maxOutput,
+      ...(supportsTemperature(model) ? { temperature: 0 } : {}),
+      system: ONEPASS_SYSTEM,
+      messages: [{ role: "user", content }],
+      output_config: { format: { type: "json_schema", schema: ONEPASS_SCHEMA } },
+    });
+    const resp = await track("claude", "scan-onepass", () => stream.finalMessage());
+    usage = usageFrom(model, resp.usage);
+    recordUsage("claude", usage.inputTokens, usage.outputTokens, usage.costUsd, model);
+    const t = resp.content.find((b) => b.type === "text");
+    jsonText = t && t.type === "text" ? t.text : null;
+    recordBytes("claude", images.reduce((n, i) => n + i.base64.length, 0), jsonText?.length ?? 0);
+    logUsage(`one-pass obrazów=${images.length} (claude)`, model, usage);
+  }
+
+  if (!jsonText) throw new Error("Pusta odpowiedź modelu (skan jednofazowy).");
+  let parsed: Record<string, any>;
+  try {
+    parsed = JSON.parse(jsonText) as Record<string, any>;
+  } catch {
+    throw new Error("Nie udało się odczytać menu (odpowiedź jednofazowa niepełna/ucięta).");
+  }
+  const { menu, readable, lowQuality } = onePassToMenu(parsed);
+  return { menu, usage, readable, poorQuality: lowQuality };
 }
 
 /** Wygoda dla CLI: jeden plik ze ścieżki. */

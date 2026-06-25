@@ -7,7 +7,7 @@
 // stary cache automatycznie omijany, nigdy nie poda starego, gorszego wyniku po ulepszeniu.
 import { getPool, reqContext } from "./db.ts";
 import { recordCacheHit } from "./apiLog.ts";
-import { cacheReadEnabled } from "./runtimeConfig.ts";
+import { cacheReadEnabled, cacheTtlOverride } from "./runtimeConfig.ts";
 
 let ready = false;
 
@@ -16,18 +16,20 @@ let ready = false;
 // warianty/ceny, photo_query „podana potrawa", krótszy opis, verify „pojedyncza porcja", dish-info regionalny.
 // Zmiana promptów = bump wszystkich dotkniętych wersji, by stare wpisy nie zasłaniały nowego zachowania.
 export const CACHE_VERSION = {
-  "repr-photos": 3, // zdjęcia poglądowe „typ dania" (v3: zwracamy WSZYSTKIE które przeszły próg, nie tylko `num`)
-  "dish-info": 2, // opis dania (v2: region+kraj w kluczu, bez powtórki nazwy, akcent regionalny)
-  "vision-url": 2, // werdykt vision dla pojedynczego (v2: verify „pojedyncza porcja" + znak wodny)
-  "menu-structure": 8, // przebieg 1: struktura menu (v8: klucz = STABILNY srcHash oryginału z telefonu, nie hash zmodyfikowanych bajtów)
-  "item-enrich": 4, // przebieg 2: wzbogacenie (v4: photo_query „podana potrawa", krótki opis 1 zdanie, bez peek-kuchni)
-  "venue-match": 1, // Tier 0: dopasowanie zdjęć lokalu do dań (po placeId/zdjęciach + dania) — omija pobranie zdjęć I vision
-  "bad-photo": 1, // zdjęcia odrzucone przez peek (za słaba jakość) — hash → nie skanuj/nie wysyłaj ponownie
+  // MODEL usunięty ZE WSZYSTKICH kluczy (jest teraz osobną kolumną-metadaną `model`, referencyjną, nie w kluczu).
+  "repr-photos": 9, // zdjęcia poglądowe „typ dania" (v9: klucz po full_name + normalizacja BEZ sortu słów)
+  "dish-info": 7, // opis dania (v7: bez modelu w kluczu = danie+kuchnia+kraj+region+język)
+  "vision-url": 5, // werdykt vision (v5: instrukcja odrzuca okładki/skany książek + ciemne kadry bez potrawy)
+  "menu-structure": 13, // przebieg 1: struktura menu (v13: UPROSZCZONY prompt — pola WIERNE KARCIE vs USTALANE z kontekstu; full_name z działu/sąsiadów/kuchni/adnotacji)
+  "item-enrich": 9, // przebieg 2: WYŁĄCZNIE generyczna wiedza (v9: klucz po full_name; tłumaczenia przeniesione do skanu)
+  "venue-match": 2, // Tier 0: dopasowanie zdjęć lokalu (v2: bez modelu w kluczu = hash zdjęć|hash dań|kuchnia|pewność)
+  "bad-photo": 1, // zdjęcia odrzucone (za słaba jakość) — sam hash zdjęcia (modelu nigdy nie miał)
 } as const;
 export type CacheKind = keyof typeof CACHE_VERSION;
 
-/** Domyślny TTL (dni) per rodzaj. Zdjęcia gniją (URL-e) → krócej; tekst/menu → długo. */
-const TTL_DAYS: Record<CacheKind, number> = {
+/** Domyślny TTL (dni) per rodzaj. Zdjęcia gniją (URL-e) → krócej; tekst/menu → długo. Nadpisywalny z LABu
+ *  (config.cacheTtl per rodzaj) — patrz cacheTtlOverride. Eksport, by LAB pokazał domyślne. */
+export const TTL_DAYS: Record<CacheKind, number> = {
   "repr-photos": 45,
   "dish-info": 200,
   "vision-url": 45,
@@ -57,12 +59,14 @@ export async function initCache(): Promise<void> {
         key TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
         lang TEXT,
+        model TEXT,
         value JSONB NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         expires_at TIMESTAMPTZ,
         hits INTEGER NOT NULL DEFAULT 0,
         last_hit TIMESTAMPTZ
       );
+      ALTER TABLE content_cache ADD COLUMN IF NOT EXISTS model TEXT;
       CREATE INDEX IF NOT EXISTS content_cache_kind_idx ON content_cache (kind);
       CREATE INDEX IF NOT EXISTS content_cache_expires_idx ON content_cache (expires_at);
     `);
@@ -142,21 +146,22 @@ export async function cacheGet<T>(kind: CacheKind, key: string, opts?: CacheGetO
   }
 }
 
-export interface CacheSetOpts { ttlDays?: number; lang?: string }
+export interface CacheSetOpts { ttlDays?: number; lang?: string; model?: string }
 
 /** Zapisuje wartość (L1 + L2, best‑effort). No‑op bez DB poza L1. */
 export async function cacheSet(kind: CacheKind, key: string, value: unknown, opts?: CacheSetOpts): Promise<void> {
   if (DISABLED) return;
-  const ttl = opts?.ttlDays ?? TTL_DAYS[kind];
+  // TTL: jawny z wywołania > nadpisanie z configu (LAB) > domyślny rodzaju.
+  const ttl = opts?.ttlDays ?? cacheTtlOverride(kind) ?? TTL_DAYS[kind];
   l1Set(key, value, Date.now() + ttl * 86400_000);
   const p = getPool();
   if (!p || !ready) return;
   p.query(
-    `INSERT INTO content_cache (key, kind, lang, value, expires_at)
-     VALUES ($1,$2,$3,$4, now() + ($5 || ' days')::interval)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, lang = EXCLUDED.lang,
+    `INSERT INTO content_cache (key, kind, lang, model, value, expires_at)
+     VALUES ($1,$2,$3,$4,$5, now() + ($6 || ' days')::interval)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, lang = EXCLUDED.lang, model = EXCLUDED.model,
        created_at = now(), expires_at = EXCLUDED.expires_at, hits = 0, last_hit = NULL`,
-    [key, kind, opts?.lang ?? null, JSON.stringify(value), String(ttl)],
+    [key, kind, opts?.lang ?? null, opts?.model ?? null, JSON.stringify(value), String(ttl)],
   ).catch((e) => console.error("[cache] set:", (e as Error).message));
 }
 
@@ -186,34 +191,41 @@ export async function cacheStats(): Promise<{ enabled: boolean; l1: number; rows
   }
 }
 
-export interface CacheRow { key: string; kind: string; lang: string | null; createdAt: string | null; expiresAt: string | null; hits: number; value: unknown }
+export interface CacheRow { key: string; kind: string; lang: string | null; model: string | null; createdAt: string | null; expiresAt: string | null; hits: number; value: unknown }
 
 /** Przegląd wpisów cache (do podglądu w LABie): filtr po rodzaju + wyszukiwanie w kluczu/wartości.
  *  Źródło: Postgres (pełne metadane) lub — lokalnie bez DB — L1 w pamięci. */
-export async function cacheBrowse(opts: { kind?: string; q?: string; limit?: number }): Promise<{ source: "pg" | "l1"; rows: CacheRow[] }> {
+export async function cacheBrowse(opts: { kind?: string; q?: string; limit?: number; allVersions?: boolean }): Promise<{ source: "pg" | "l1"; rows: CacheRow[] }> {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 5000);
+  // Domyślnie pokazujemy TYLKO bieżącą wersję klucza (`kind:vN:`). Wpisy starych wersji są MARTWE (cacheGet
+  // liczy klucz z aktualną CACHE_VERSION, więc nigdy nie trafią) i mają inny układ członów → myliłyby rozbicie
+  // w LABie (np. stare 4-członowe vision-url pod 3-członowymi etykietami). allVersions=1 → pokaż wszystkie.
+  const verPrefix = !opts.allVersions && opts.kind && opts.kind in CACHE_VERSION
+    ? `${opts.kind}:v${CACHE_VERSION[opts.kind as CacheKind]}:` : null;
   const p = getPool();
   if (p && ready) {
     const params: unknown[] = [];
     const where: string[] = ["(expires_at IS NULL OR expires_at > now())"];
     if (opts.kind) { params.push(opts.kind); where.push(`kind = $${params.length}`); }
+    if (verPrefix) { params.push(verPrefix + "%"); where.push(`key LIKE $${params.length}`); }
     if (opts.q) { params.push("%" + opts.q.toLowerCase() + "%"); where.push(`(lower(key) LIKE $${params.length} OR lower(value::text) LIKE $${params.length})`); }
     params.push(limit);
     const r = await p.query(
-      `SELECT key, kind, lang, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS') AS created_at,
+      `SELECT key, kind, lang, model, to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS') AS created_at,
               to_char(expires_at,'YYYY-MM-DD"T"HH24:MI:SS') AS expires_at, hits, value
        FROM content_cache WHERE ${where.join(" AND ")} ORDER BY hits DESC, created_at DESC LIMIT $${params.length}`,
       params,
     );
-    return { source: "pg", rows: r.rows.map((x) => ({ key: x.key, kind: x.kind, lang: x.lang, createdAt: x.created_at, expiresAt: x.expires_at, hits: x.hits, value: x.value })) };
+    return { source: "pg", rows: r.rows.map((x) => ({ key: x.key, kind: x.kind, lang: x.lang, model: x.model, createdAt: x.created_at, expiresAt: x.expires_at, hits: x.hits, value: x.value })) };
   }
   const q = opts.q?.toLowerCase();
   const rows: CacheRow[] = [];
   for (const [key, e] of L1) {
     const kind = key.split(":")[0] ?? "";
     if (opts.kind && kind !== opts.kind) continue;
+    if (verPrefix && !key.startsWith(verPrefix)) continue;
     if (q && !key.toLowerCase().includes(q) && !JSON.stringify(e.value).toLowerCase().includes(q)) continue;
-    rows.push({ key, kind, lang: null, createdAt: null, expiresAt: e.exp ? new Date(e.exp).toISOString().slice(0, 19) : null, hits: 0, value: e.value });
+    rows.push({ key, kind, lang: null, model: null, createdAt: null, expiresAt: e.exp ? new Date(e.exp).toISOString().slice(0, 19) : null, hits: 0, value: e.value });
     if (rows.length >= limit) break;
   }
   return { source: "l1", rows };
@@ -241,6 +253,9 @@ export async function cacheClear(kind?: CacheKind): Promise<void> {
   L1.clear();
   const p = getPool();
   if (!p || !ready) return;
+  // Pojedynczy rodzaj: DELETE (filtr po kind). CAŁOŚĆ: TRUNCATE — od razu oddaje miejsce na dysku systemowi
+  // (DELETE zostawia martwe krotki/bloat aż do VACUUM FULL), jest też szybszy. Stąd „wyczyść wszystko" realnie
+  // kurczy rozmiar tabeli do ~0.
   if (kind) await p.query(`DELETE FROM content_cache WHERE kind = $1`, [kind]).catch(() => {});
-  else await p.query(`DELETE FROM content_cache`).catch(() => {});
+  else await p.query(`TRUNCATE content_cache`).catch(() => {});
 }

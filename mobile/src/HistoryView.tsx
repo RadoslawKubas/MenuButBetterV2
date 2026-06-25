@@ -5,6 +5,7 @@
 // + wyszukiwarka po nazwie/mieście.
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Icon } from "./Icon";
 import type { SavedScan } from "./storage";
 import { loadHistoryGrouping, saveHistoryGrouping, type HistoryGrouping } from "./storage";
 import { MODEL_OPTIONS, distinctModels, type GeoPoint } from "./types";
@@ -79,14 +80,14 @@ function buildGroups(byDate: SavedScan[], here: GeoPoint | null): Group[] {
     (byCity.get(key) ?? byCity.set(key, []).get(key)!).push(s);
   }
   const groups: Group[] = [];
-  if (near.length) groups.push({ key: "__near__", label: "📍 W pobliżu", scans: near });
+  if (near.length) groups.push({ key: "__near__", label: "W pobliżu", scans: near });
   const cityGroups: Group[] = [...byCity.entries()]
     .filter(([k]) => k !== "__none__")
-    .map(([k, arr]) => ({ key: k, label: `🏙️ ${k}`, scans: arr }))
+    .map(([k, arr]) => ({ key: k, label: `${k}`, scans: arr }))
     .sort((a, b) => (b.scans[0]?.createdAt ?? 0) - (a.scans[0]?.createdAt ?? 0));
   groups.push(...cityGroups);
   const none = byCity.get("__none__");
-  if (none?.length) groups.push({ key: "__none__", label: "📍 Bez lokalizacji", scans: none });
+  if (none?.length) groups.push({ key: "__none__", label: "Bez lokalizacji", scans: none });
   return groups;
 }
 
@@ -124,7 +125,7 @@ export function HistoryView({
     const thumb = thumbForScan(scan);
     const city = cityOf(scan);
     const loc =
-      distanceM != null ? `  📍 ${fmtDist(distanceM)}` : scan.location ? (city ? `  📍 ${city}` : "  📍") : "";
+      distanceM != null ? `  ${fmtDist(distanceM)}` : scan.location ? (city ? `  ${city}` : "  ") : "";
     return (
       <View key={scan.id} style={styles.row}>
         <Pressable onPress={() => onOpen(scan)}>
@@ -132,7 +133,7 @@ export function HistoryView({
             <CachedImage uri={thumb.uri} remoteUrl={thumb.remoteUrl} style={styles.thumb} />
           ) : (
             <View style={[styles.thumb, styles.thumbPlaceholder]}>
-              <Text style={styles.thumbGlyph}>🍽️</Text>
+              <Text style={styles.thumbGlyph}><Icon name="food" /></Text>
             </View>
           )}
         </Pressable>
@@ -142,14 +143,14 @@ export function HistoryView({
             {formatDate(scan.createdAt)} · {itemCount(scan)} pozycji · {scan.targetLang}
             {loc}
           </Text>
-          <Text style={styles.meta}>🤖 {modelSummary(scan)}</Text>
-          {formatCost(scan) ? <Text style={styles.cost}>💰 {formatCost(scan)}</Text> : null}
+          <Text style={styles.meta}><Icon name="robot" /> {modelSummary(scan)}</Text>
+          {formatCost(scan) ? <Text style={styles.cost}><Icon name="cost" /> {formatCost(scan)}</Text> : null}
         </Pressable>
         <Pressable style={styles.del} onPress={() => onRename(scan)} hitSlop={8}>
-          <Text style={styles.delText}>✏️</Text>
+          <Text style={styles.delText}><Icon name="edit" /></Text>
         </Pressable>
         <Pressable style={styles.del} onPress={() => onDelete(scan.id)} hitSlop={8}>
-          <Text style={styles.delText}>🗑</Text>
+          <Text style={styles.delText}><Icon name="delete" /></Text>
         </Pressable>
       </View>
     );
@@ -158,7 +159,7 @@ export function HistoryView({
   if (scans.length === 0) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyEmoji}>🍝</Text>
+        <Text style={styles.emptyEmoji}><Icon name="food" /></Text>
         <Text style={styles.emptyText}>Brak zapisanych menu.</Text>
         <Text style={styles.emptySub}>Zeskanowane menu pojawią się tutaj automatycznie.</Text>
       </View>
@@ -182,13 +183,13 @@ export function HistoryView({
           onPress={() => changeMode("city")}
           style={[styles.toggle, mode === "city" && styles.toggleActive]}
         >
-          <Text style={[styles.toggleText, mode === "city" && styles.toggleTextActive]}>🏙️ Po mieście</Text>
+          <Text style={[styles.toggleText, mode === "city" && styles.toggleTextActive]}><Icon name="city" color={mode === "city" ? colors.buttonText : colors.accent} /> Po mieście</Text>
         </Pressable>
         <Pressable
           onPress={() => changeMode("date")}
           style={[styles.toggle, mode === "date" && styles.toggleActive]}
         >
-          <Text style={[styles.toggleText, mode === "date" && styles.toggleTextActive]}>🗓️ Po dacie</Text>
+          <Text style={[styles.toggleText, mode === "date" && styles.toggleTextActive]}><Icon name="calendar" color={mode === "date" ? colors.buttonText : colors.accent} /> Po dacie</Text>
         </Pressable>
       </View>
       <TextInput

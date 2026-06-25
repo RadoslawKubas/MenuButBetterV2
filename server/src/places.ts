@@ -18,7 +18,13 @@ export interface RestaurantInfo {
   mapsUri: string | null;
   priceLevel: string | null;
   location: { lat: number; lng: number } | null;
-  country: string | null;
+  country: string | null; // lokalizowane (język zapytania) — do WYŚWIETLANIA na karcie
+  /** Kod ISO kraju (np. „ES") — niezależny od języka. */
+  countryCode: string | null;
+  /** Kraj po ANGIELSKU (z kodu ISO przez Intl) — do KANONICZNEGO klucza cache (stabilny, język-niezależny). */
+  countryEn: string | null;
+  /** Region/województwo/stan (administrative_area_level_1, lokalizowane) — do regionalnego kontekstu opisu. */
+  region: string | null;
   city: string | null;
   /** Rodzaj kuchni/typ lokalu z Google (np. „japanese", „pizza", „sushi") — do listy kandydatów dla vision
    *  i do pokazania na karcie wyszukiwania. Pochodzi z primaryType/types Places. */
@@ -29,6 +35,11 @@ export interface RestaurantInfo {
   tripAdvisor?: TripAdvisorInfo | null;
   /** true = lokal zgadnięty po GPS+kuchni (nie po nazwie) — niepewny. */
   guessedByLocation?: boolean;
+  /** Tylko dla kandydatów z `findRestaurantNearby`, gdy kuchnia menu jest rozpoznana:
+   *  true = lokal MA pokrewny typ kuchni (np. menu indyjskie → indian/pakistani_restaurant),
+   *  false = lokal ma KONKRETNY, ale NIEpasujący typ (lub żadnego pokrewnego). undefined = nie liczono
+   *  (kuchnia menu nieznana). Do „guardu kuchni" przy zgadywaniu po samym GPS. */
+  cuisineMatched?: boolean;
   /** Czy nazwa zwróconego lokalu zgadza się z szukaną (Places potrafi zwrócić „najbliższy strzał",
    *  więc bez tego pula zdjęć bywa z innego lokalu). false → traktuj zdjęcia jako NIEPEWNE. */
   nameVerified?: boolean;
@@ -86,6 +97,19 @@ interface Place {
 function pickComponent(components: PlaceComponent[] | undefined, type: string): string | null {
   return components?.find((c) => c.types?.includes(type))?.longText ?? null;
 }
+function pickComponentShort(components: PlaceComponent[] | undefined, type: string): string | null {
+  return components?.find((c) => c.types?.includes(type))?.shortText ?? null;
+}
+// Kraj po angielsku z kodu ISO (np. „ES" → „Spain") — wbudowane Intl, bez API i bez tabelki. Do KANONICZNEGO
+// klucza cache: stabilny, język-niezależny. Fallback: null (wtedy użyjemy lokalizowanej nazwy kraju).
+function countryEnglish(code: string | null): string | null {
+  if (!code) return null;
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code.toUpperCase()) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Czytelna „kuchnia"/typ z Google types (np. „japanese_restaurant" → „japanese", „pizza_restaurant" →
 // „pizza"). Generyczne („restaurant"/„food") pomijamy. Do listy kandydatów dla vision i na kartę.
@@ -116,6 +140,9 @@ function toInfo(p: Place): RestaurantInfo {
         ? { lat: p.location.latitude, lng: p.location.longitude }
         : null,
     country: pickComponent(p.addressComponents, "country"),
+    countryCode: pickComponentShort(p.addressComponents, "country"),
+    countryEn: countryEnglish(pickComponentShort(p.addressComponents, "country")),
+    region: pickComponent(p.addressComponents, "administrative_area_level_1"),
     city:
       pickComponent(p.addressComponents, "locality") ??
       pickComponent(p.addressComponents, "postal_town") ??
@@ -258,14 +285,19 @@ export async function findRestaurantNearby(params: NearbyParams): Promise<Restau
 
   // Stabilne posortowanie: pokrewna kuchnia najpierw (zachowując kolejność po odległości).
   const related = cuisineRelatedTypes(params.cuisine);
+  const isRel = (p: Place) =>
+    (p.primaryType != null && related.includes(p.primaryType)) ||
+    (p.types ?? []).some((t) => related.includes(t));
   if (related.length > 0) {
-    const isRel = (p: Place) =>
-      (p.primaryType != null && related.includes(p.primaryType)) ||
-      (p.types ?? []).some((t) => related.includes(t));
     places = [...places.filter(isRel), ...places.filter((p) => !isRel(p))];
   }
 
-  const out = places.map((p) => ({ ...toInfo(p), guessedByLocation: true }));
+  // Gdy kuchnia menu rozpoznana — stempluj `cuisineMatched` (do guardu kuchni w resolveRestaurant).
+  const out = places.map((p) => ({
+    ...toInfo(p),
+    guessedByLocation: true,
+    ...(related.length > 0 ? { cuisineMatched: isRel(p) } : {}),
+  }));
   lookupSet(lck, out);
   return out;
 }

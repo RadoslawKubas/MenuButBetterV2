@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pl"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Podgląd menu dnia — nowy układ</title>
+<style>
+  :root{ --accent:#7a1f1f; --text:#3a2a1a; --muted:#6a5a4a; --bg:#fdf6e3; --card:#fff; --badge:#f0e6d2; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body{ margin:0; background:#2a241c; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:24px 12px; }
+  .phone{ max-width:414px; margin:0 auto; background:var(--bg); border-radius:28px; border:10px solid #15110c; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,.4); }
+  .scr{ padding:16px 14px 28px; color:var(--text); }
+  .appbar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  .appname{ font-size:22px; font-weight:800; color:var(--accent); }
+  .tabs{ font-size:14px; color:var(--muted); margin-bottom:16px; }
+  .tabs b{ color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:3px; }
+
+  .setSection{ border:1.5px solid rgba(122,31,31,.27); background:var(--bg); border-radius:14px; padding:13px 13px 8px; }
+  .secHead{ display:flex; align-items:baseline; gap:7px; }
+  .chev{ color:var(--accent); font-weight:800; }
+  .secTitle{ font-size:19px; font-weight:800; color:var(--accent); }
+  .secCount{ font-size:13px; color:var(--muted); }
+  .secOrig{ font-size:12.5px; color:var(--muted); font-style:italic; margin:1px 0 7px 22px; }
+  .badge{ display:inline-block; margin-left:22px; background:var(--badge); color:#8a5a1a; font-size:12px; font-weight:700; padding:2px 9px; border-radius:6px; }
+
+  .priceBanner{ display:flex; align-items:center; gap:9px; background:var(--accent); border-radius:10px; padding:10px 13px; margin:10px 0 7px; }
+  .priceBanner .t{ font-size:16px; font-weight:800; color:#fff; }
+  .note{ display:flex; gap:8px; align-items:flex-start; margin:7px 3px 3px; }
+  .note .ic{ font-size:15px; margin-top:1px; }
+  .note .tx{ font-size:13px; line-height:1.45; }
+  .note .or{ font-size:11.5px; color:var(--muted); font-style:italic; margin-top:1px; }
+
+  .courseHead{ display:flex; width:fit-content; align-items:center; gap:7px; background:rgba(122,31,31,.10); border:none; border-radius:8px; padding:6px 11px; margin:13px 0 6px; cursor:pointer; }
+  .courseHead .nm{ font-size:16px; font-weight:800; color:var(--accent); }
+  .courseHead .cnt{ font-size:12px; color:var(--muted); }
+  .grp.closed{ display:none; }
+
+  .card{ background:var(--card); border-radius:13px; border:.5px solid rgba(0,0,0,.06); padding:11px 12px; margin:0 0 10px; display:flex; gap:11px; }
+  .card .main{ flex:1; min-width:0; }
+  .card .top{ display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+  .card .nm{ font-size:14.5px; font-weight:700; line-height:1.3; }
+  .card .sur{ color:var(--accent); font-weight:700; font-size:14px; white-space:nowrap; }
+  .card .or{ font-size:12px; color:var(--muted); font-style:italic; margin-top:2px; }
+  .card .foot{ font-size:12px; color:var(--accent); font-weight:600; margin-top:8px; }
+  .thumb{ width:62px; height:62px; border-radius:11px; background:#ece4d2; flex-shrink:0; position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .thumb .ph{ font-size:26px; opacity:.45; }
+  .thumb .src{ position:absolute; left:0; right:0; bottom:0; font-size:8px; font-weight:700; color:#fff; text-align:center; padding:1px 0; }
+  .hint{ text-align:center; color:#cdbf9f; font-size:12px; margin-top:18px; }
+</style></head>
+<body>
+<div class="phone"><div class="scr">
+
+  <div class="appbar"><span class="appname">MenuButBetter</span><span style="font-size:20px">⚙️</span></div>
+  <div class="tabs"><b>Skan</b> &nbsp; Historia (12)</div>
+
+  <div class="setSection">
+    <div class="secHeadWrap" onclick="togSec(this)" style="cursor:pointer">
+      <div class="secHead"><span class="chev cvs">▾</span><span class="secTitle">Menu dnia — Piątek</span><span class="secCount">(10)</span></div>
+      <div class="secOrig">Menú del Día — Viernes</div>
+      <span class="badge">⏰ viernes</span>
+    </div>
+    <div class="secBody">
+    <div class="priceBanner"><span style="font-size:18px">🎫</span><span class="t">Cena: 19,50€</span></div>
+    <div class="note"><span class="ic">🍽</span><span><span class="tx">Chleb, kieliszek wina lub woda i kawa w cenie.</span><br><span class="or">Pan, copa de vino o agua y café incluidos.</span></span></div>
+
+    <button class="courseHead" onclick="tog(this)"><span class="chev cv">▾</span><span class="nm">1. danie</span><span class="cnt">(4)</span></button>
+    <div class="grp">
+      <div class="card"><div class="main"><div class="top"><span class="nm">Duet świeżych kremów: Tzatziki vs Ajo Blanco z kostkami melona</span></div><div class="or">Dúo de cremas frescas: Tzatziki vs Ajo Blanco con dados de melón</div><div class="foot">ℹ️ Więcej info i 6 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🥗</span><span class="src" style="background:#7c6f64">WIKI</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Sałatka z wędzonym łososiem, majonez i balsamico</span></div><div class="or">Ensalada de salmón ahumado con mayonesa y balsámico</div><div class="foot">ℹ️ Więcej info i 5 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🐟</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Cannelloni z roti w trufowym beszamelu</span></div><div class="or">Canelones de roti con bechamel trufada</div><div class="foot">ℹ️ Więcej info i 4 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🍝</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Średnia czerwona krewetka z wybrzeża</span><span class="sur">+6,80€</span></div><div class="or">Gamba mediana roja de la costa</div><div class="foot">ℹ️ Więcej info i 6 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🦐</span><span class="src" style="background:#b8860b">LOKAL</span></div></div>
+    </div>
+
+    <button class="courseHead" onclick="tog(this)"><span class="chev cv">▾</span><span class="nm">2. danie</span><span class="cnt">(6)</span></button>
+    <div class="grp">
+      <div class="card"><div class="main"><div class="top"><span class="nm">Burger wołowy w tempurze z puree ziemniaczanym</span></div><div class="or">Burger de ternera en tempura con puré de patata</div><div class="foot">ℹ️ Więcej info i 6 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🍔</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Anchois po andaluzyjsku z sałatką</span></div><div class="or">Buquerones a la andaluza con ensalada aliñada</div><div class="foot">ℹ️ Więcej info i 5 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🐟</span><span class="src" style="background:#7c6f64">OPENV.</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Roladki ze szpinaku z brie i kozim serem</span></div><div class="or">Rollitos de espinacas con brie y queso de cabra</div><div class="foot">ℹ️ Więcej info i 4 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🥬</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Ogonki żabnicy po galicyjsku z ziemniakami</span><span class="sur">+5,80€</span></div><div class="or">Colitas de rape al ajillo con patatas panaderas</div><div class="foot">ℹ️ Więcej info i 6 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🐟</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Tagliata z wołowiny z ziemniakami z rozmarynem</span><span class="sur">+5,80€</span></div><div class="or">Tagliata de ternera con patatas al romero</div><div class="foot">ℹ️ Więcej info i 6 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🥩</span><span class="src" style="background:#b8860b">LOKAL</span></div></div>
+      <div class="card"><div class="main"><div class="top"><span class="nm">Ryż z homarem</span><span class="sur">+5,80€</span></div><div class="or">Arroz caldoso de bogavante</div><div class="foot">ℹ️ Więcej info i 5 zdjęcia ✓</div></div><div class="thumb"><span class="ph">🦞</span><span class="src" style="background:#2563eb">SIEĆ</span></div></div>
+    </div>
+    </div>
+  </div>
+
+  <div class="hint">↑ kliknij „Menu dnia — Piątek" (zwija CAŁOŚĆ) albo „1./2. danie" (zwija grupę)</div>
+</div></div>
+<script>
+  function tog(b){var g=b.nextElementSibling;var c=b.querySelector('.cv');var open=!g.classList.contains('closed');g.classList.toggle('closed',open);c.textContent=open?'▸':'▾';}
+  function togSec(w){var body=w.nextElementSibling;var c=w.querySelector('.cvs');var open=body.style.display!=='none';body.style.display=open?'none':'';c.textContent=open?'▸':'▾';}
+</script>
+</body></html>

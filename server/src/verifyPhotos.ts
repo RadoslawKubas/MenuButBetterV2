@@ -40,16 +40,19 @@ export const VERIFY_SYSTEM =
   "(jedzenie lub napój). Bezwzględnie odrzucasz wszystko, co nią nie jest: tekst, karty menu, " +
   "mapy, rysunki, logo, budynki, wnętrza, ludzi, zwierzęta, przedmioty oraz inne dania/napoje.";
 
-export function verifyInstruction(dish: string, cuisine?: string): string {
-  const ctx = cuisine ? ` (kuchnia: ${cuisine})` : "";
+export function verifyInstruction(dish: string): string {
   return (
-    `Oceniasz, czy zdjęcie pokazuje pozycję z menu: „${dish}"${ctx} — faktyczne podane JEDZENIE albo NAPÓJ.\n` +
+    `Oceniasz, czy zdjęcie pokazuje pozycję z menu: „${dish}" — faktyczne podane JEDZENIE albo NAPÓJ.\n` +
     "Dla KAŻDEGO zdjęcia podaj index oraz match w skali 0..1.\n" +
     "match=0.0, gdy zdjęcie NIE przedstawia tej pozycji ani niczego podobnego tego samego typu, w szczególności:\n" +
     "- tekst / karta menu / jadłospis / dokument / szyld / paragon / cennik / ekran (nawet z nazwą dania),\n" +
+    "- OKŁADKA / grzbiet / strona KSIĄŻKI lub czasopisma (też książki KUCHARSKIEJ), skan/reprodukcja druku,\n" +
+    "  etykieta lub sygnatura BIBLIOTECZNA, kod katalogowy (np. 'TX 951 .H42') — to NIE jest zdjęcie potrawy,\n" +
     "- mapa, wykres, rysunek, schemat, logo, grafika, ikona,\n" +
     "- budynek / fasada / wnętrze / ludzie / zwierzę / roślina / krajobraz / przedmiot niezwiązany z jedzeniem,\n" +
     "- INNA potrawa lub napój niż opisany (np. curry/chleb, gdy pozycja to woda lub napój gazowany).\n" +
+    "Gdy kadr jest w PRZEWAŻAJĄCEJ części CIEMNY/JEDNOLITY i NIE widać na nim wyraźnie potrawy ani napoju — " +
+    "match=0 (NIE zgaduj na podstawie samego koloru/tła).\n" +
     "match>0.8 TYLKO, gdy wyraźnie widać właśnie tę pozycję (to danie albo ten napój).\n" +
     "match 0.4–0.7, gdy to jedzenie/napój wyraźnie tego samego typu, ale nie wprost ta pozycja.\n" +
     "Preferuj POJEDYNCZĄ, wyraźnie podaną porcję (jeden talerz / jedna szklanka) — zbiorcze ujęcia wielu " +
@@ -134,10 +137,11 @@ export async function scoreDishPhotos(
   const scores = new Array<number>(urls.length).fill(0);
   const textOverlay = new Array<boolean>(urls.length).fill(false);
 
-  // ③ CACHE werdyktów vision per (termin, URL): to samo zdjęcie ocenione już dla tego dania/kuchni/
-  // modelu → bierzemy z cache i NIE wysyłamy go do modelu (oszczędza vision — główny koszt).
+  // ③ CACHE werdyktów vision per (danie, model, URL): to samo zdjęcie ocenione już dla tego dania i modelu
+  // → bierzemy z cache i NIE wysyłamy go do modelu (oszczędza vision — główny koszt). Kuchnia NIE wchodzi do
+  // klucza ani do instrukcji: danie (zwykle photo_query) niesie sens, kuchnia tylko rozdrabniała cache.
   const useCache = !opts.noCache;
-  const vck = (u: string) => cacheKey("vision-url", dish, opts.cuisine, model, u);
+  const vck = (u: string) => cacheKey("vision-url", dish, u); // MODEL NIE w kluczu (osobna metadana)
   const need: number[] = [];
   if (useCache) {
     await Promise.all(urls.map(async (u, i) => {
@@ -155,14 +159,14 @@ export async function scoreDishPhotos(
   const valid = need.filter((i) => imgs[i]);
   if (valid.length === 0) return { scores, textOverlay, usage: ZERO_USAGE };
   // Zapis ocen do cache (po udanej weryfikacji) — woła się przed zwrotem.
-  const persist = () => { if (useCache) for (const i of valid) void cacheSet("vision-url", vck(urls[i]!), { m: scores[i]!, t: textOverlay[i]! }); };
+  const persist = () => { if (useCache) for (const i of valid) void cacheSet("vision-url", vck(urls[i]!), { m: scores[i]!, t: textOverlay[i]! }, { model }); };
 
   // Ruch: pobranie zdjęć z sieci (recv) + relay tych zdjęć do AI (sent ≈ base64).
   const sentBytes = valid.reduce((n, i) => n + imgs[i]!.data.length, 0);
   recordBytes("other", 0, Math.round(sentBytes * 0.75)); // pobrane z webu (decoded ≈ 3/4 base64)
   recordBytes(apiTag(model), sentBytes, 0); // relay do modelu wizji
 
-  const instruction = verifyInstruction(dish, opts.cuisine);
+  const instruction = verifyInstruction(dish);
   const system = VERIFY_SYSTEM;
 
   try {

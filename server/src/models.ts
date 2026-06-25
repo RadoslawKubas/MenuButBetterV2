@@ -16,18 +16,25 @@ export interface ModelDef {
   maxOutput: number;
   /** Cennik $ za 1M tokenów. */
   price: { in: number; out: number };
+  /** Model NIE przyjmuje parametru `temperature` (API zwraca 400 „deprecated"). Np. Opus 4.8. */
+  noTemperature?: boolean;
+  /** Długa krawędź (px) zdjęcia DO MODELU, jaką TELEFON ma przygotować pod vision tego modelu. Claude pre-4.7
+   *  (Sonnet/Haiku) i tak ścina wewnętrznie do 1568; Opus 4.8 (hi-res) do 2576; OpenAI/Gemini ~2048. Telefon
+   *  dociela do tej wartości PRZED wysyłką (mniejszy upload + zero CPU obrazów na serwerze). Koszt tokenów modelu
+   *  zależy od WYMIARÓW, nie bajtów — więc to JEST realny sufit czytelności jednej klatki. */
+  visionMaxEdge: number;
 }
 
 export const MODELS = {
-  "claude-sonnet-4-6": { provider: "anthropic", label: "Sonnet 4.6", maxOutput: 64000, price: { in: 3, out: 15 } },
-  "claude-opus-4-8": { provider: "anthropic", label: "Opus 4.8", maxOutput: 128000, price: { in: 5, out: 25 } },
-  "claude-haiku-4-5": { provider: "anthropic", label: "Haiku 4.5", maxOutput: 64000, price: { in: 1, out: 5 } },
-  "gpt-5": { provider: "openai", label: "GPT-5", maxOutput: 128000, price: { in: 1.25, out: 10 } },
-  "gpt-5-mini": { provider: "openai", label: "GPT-5 mini", maxOutput: 128000, price: { in: 0.25, out: 2 } },
-  "gpt-5-nano": { provider: "openai", label: "GPT-5 nano", maxOutput: 128000, price: { in: 0.05, out: 0.4 } },
-  "gemini-2.5-flash-lite": { provider: "google", label: "Gemini 2.5 Flash-Lite", maxOutput: 65536, price: { in: 0.1, out: 0.4 } },
-  "gemini-2.5-flash": { provider: "google", label: "Gemini 2.5 Flash", maxOutput: 65536, price: { in: 0.3, out: 2.5 } },
-  "gemini-2.5-pro": { provider: "google", label: "Gemini 2.5 Pro", maxOutput: 65536, price: { in: 1.25, out: 10 } },
+  "claude-sonnet-4-6": { provider: "anthropic", label: "Sonnet 4.6", maxOutput: 64000, price: { in: 3, out: 15 }, visionMaxEdge: 1568 },
+  "claude-opus-4-8": { provider: "anthropic", label: "Opus 4.8", maxOutput: 128000, price: { in: 5, out: 25 }, noTemperature: true, visionMaxEdge: 2576 },
+  "claude-haiku-4-5": { provider: "anthropic", label: "Haiku 4.5", maxOutput: 64000, price: { in: 1, out: 5 }, visionMaxEdge: 1568 },
+  "gpt-5": { provider: "openai", label: "GPT-5", maxOutput: 128000, price: { in: 1.25, out: 10 }, visionMaxEdge: 2048 },
+  "gpt-5-mini": { provider: "openai", label: "GPT-5 mini", maxOutput: 128000, price: { in: 0.25, out: 2 }, visionMaxEdge: 2048 },
+  "gpt-5-nano": { provider: "openai", label: "GPT-5 nano", maxOutput: 128000, price: { in: 0.05, out: 0.4 }, visionMaxEdge: 2048 },
+  "gemini-2.5-flash-lite": { provider: "google", label: "Gemini 2.5 Flash-Lite", maxOutput: 65536, price: { in: 0.1, out: 0.4 }, visionMaxEdge: 2048 },
+  "gemini-2.5-flash": { provider: "google", label: "Gemini 2.5 Flash", maxOutput: 65536, price: { in: 0.3, out: 2.5 }, visionMaxEdge: 2048 },
+  "gemini-2.5-pro": { provider: "google", label: "Gemini 2.5 Pro", maxOutput: 65536, price: { in: 1.25, out: 10 }, visionMaxEdge: 2048 },
 } as const satisfies Record<string, ModelDef>;
 
 export type ModelId = keyof typeof MODELS;
@@ -45,6 +52,12 @@ export function providerOf(model: ModelId): Provider {
   return MODELS[model].provider;
 }
 
+/** Długa krawędź (px) zdjęcia DO MODELU dla danego modelu vision (patrz ModelDef.visionMaxEdge).
+ *  Nieznany model → bezpieczny domyślny 1568 (sufit Claude pre-4.7). */
+export function visionMaxEdge(model: string): number {
+  return defOf(model)?.visionMaxEdge ?? 1568;
+}
+
 /** Czy model jedzie przez API zgodne z OpenAI (OpenAI SDK): OpenAI ALBO Google/Gemini. */
 export function usesOpenAiApi(model: string): boolean {
   const p = defOf(model)?.provider;
@@ -59,6 +72,13 @@ export function compatProvider(model: string): "openai" | "google" {
 /** Czy to model ROZUMUJĄCY OpenAI (gpt-5*) — wtedy wysyłamy reasoning_effort. Gemini: nie. */
 export function isOpenAiReasoning(model: string): boolean {
   return defOf(model)?.provider === "openai";
+}
+
+/** Czy model przyjmuje parametr `temperature`. Modele rozumujące OpenAI (gpt-5*) go nie biorą;
+ *  część nowych modeli Anthropic (Opus 4.8) ma `temperature` ZDEPRECJONOWANE (API zwraca 400). */
+export function supportsTemperature(model: string): boolean {
+  if (isOpenAiReasoning(model)) return false;
+  return !defOf(model)?.noTemperature;
 }
 
 /** Etykieta providera w logu diagnostycznym (apiLog). */

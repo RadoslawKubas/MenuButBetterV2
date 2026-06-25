@@ -58,6 +58,10 @@ export interface OutPhoto {
   fromVenue?: boolean;
   /** Czytelne UZASADNIENIE werdyktu „z lokalu" (czemu tak/nie) — do podglądu w apce i labie. */
   fromVenueReason?: string;
+  /** URL STRONY źródłowej zdjęcia (gdzie znaleziono obraz) — do klikalnego „źródło" w podglądzie apki. */
+  contextUrl?: string;
+  /** Domena źródła (host) — do pokazania nazwy strony przy zdjęciu. */
+  domain?: string;
   /** Zdjęcie poglądowe podane Z CACHE (nie wymagało płatnego wyszukania/weryfikacji). */
   cached?: boolean;
   /** Ocena vision 0..1 (jak bardzo zdjęcie pasuje do dania). Zapamiętana, by pokazać na podglądzie. */
@@ -132,26 +136,35 @@ export function venueNameInUrl(contextUrl: string | undefined, name: string): bo
  * żeby refresh trafiał DOKŁADNIE w ten sam wpis. Zależy od: termin generyczny (photo_query lub
  * nazwa) + kuchnia + model weryfikacji + tryb źródeł (CC/web) + liczba zdjęć.
  */
-/** Kanoniczny klucz z nazwy: bez akcentów, małe litery, tylko [a-z0-9], UNIKALNE słowa POSORTOWANE.
- *  Dzięki temu „salmon nigiri sushi" == „Nigiri Salmon Sushi" == „sushi  salmon nigiri" → jeden klucz
- *  (odporne na kolejność słów / akcenty / duplikaty / drobny szum LLM). */
+/** Kanoniczny klucz z nazwy: bez akcentów, małe litery, znaki niealfanumeryczne → pojedyncza spacja.
+ *  ZACHOWUJE KOLEJNOŚĆ I TOŻSAMOŚĆ SŁÓW (bez sortu/dedupu) — bo kolejność niesie znaczenie dania
+ *  („arroz con pollo" ≠ „pollo con arroz"). Spójność z `full_name` ze skanu daje stabilny, wspólny termin. */
 function canonKey(s: string): string {
-  return [...new Set(deaccentLower(s).replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean))].sort().join(" ");
+  return deaccentLower(s).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Skraca termin do RDZENIA (pierwsze N słów) — dla Wikimedia/Openverse, które szukają po TYTULE/TEKŚCIE:
+ *  pełny opisowy photo_query trafia w długie dokumenty (skany książek kucharskich), a 1–3 słowa kluczowe
+ *  trafiają w realne zdjęcia. Serper (Google Images) zostaje z pełnym opisem (inny silnik). */
+function shortTerm(term: string, maxWords = 3): string {
+  const w = term.trim().split(/\s+/).filter(Boolean);
+  return w.slice(0, maxWords).join(" ") || term.trim();
 }
 
 export function reprPhotoCacheKey(args: { dish: string; photoQuery?: string; cuisine?: string; verifyModel?: string; num?: number; verify?: boolean; takeAll?: boolean }): string {
   // KLUCZ po KANONICZNEJ nazwie (photo_query — angielski, „opisz CZYM danie jest" + kuchnia), znormalizowanej
-  // tak, by była POWTARZALNA mimo drobnego niedeterminizmu LLM i wspólna cross-język. photo_query już niesie
-  // kontekst kuchni, więc osobnej kuchni nie dokładamy. Brak photo_query → fallback do nazwy dania + kuchni.
+  // tak, by była POWTARZALNA mimo niedeterminizmu LLM i wspólna cross-język. Brak photo_query → fallback do
+  // samej nazwy dania. Człony klucza: termin + TRYB weryfikacji („verify"/„noverify"). ŚWIADOMIE NIE w kluczu:
+  // MODEL weryfikacji (osobna metadana), kuchnia (redundantna — photo_query już niesie kontekst kuchni; nadal
+  // używana w wyszukiwaniu/weryfikacji), „cc/web" (env REPRESENTATIVE_CC_FIRST nieustawiany; tylko tie-break),
+  // „all/top" (takeAll — apka nie wysyła; do cache i tak zapisujemy TYLKO dobre) oraz LICZBA `num` (knob
+  // GŁĘBOKOŚCI szukania, nie tożsamość; apka zawsze 3, a wynik to WSZYSTKIE które przeszły próg).
   const pq = args.photoQuery?.trim();
   const term = pq ? canonKey(pq) : deaccentLower(args.dish.trim());
-  const cuisine = pq ? undefined : (args.cuisine ? deaccentLower(args.cuisine.trim()) || undefined : undefined);
-  const verifyModel = args.verifyModel?.trim() || "claude-sonnet-4-6";
-  const num = args.num ?? 4;
-  const ccFirst = process.env.REPRESENTATIVE_CC_FIRST === "1";
   const verifyFlag = args.verify !== false;
-  // takeAll zmienia WYNIK (dochodzą odrzucone + wszystkie dobre) → osobny wpis cache.
-  return cacheKey("repr-photos", term, cuisine, verifyFlag ? verifyModel : "noverify", ccFirst ? "cc" : "web", num, args.takeAll ? "all" : "top");
+  // TRYB weryfikacji (on/off) zostaje — zmienia ZBIÓR wyników (off = każde 0.9). MODEL weryfikacji NIE w
+  // kluczu (osobna metadana) — różne modele weryfikacji dzielą wpis.
+  return cacheKey("repr-photos", term, verifyFlag ? "verify" : "noverify");
 }
 
 /**
@@ -279,6 +292,8 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       representative: o.representative,
       fromVenue: fv.isVenue,
       fromVenueReason: fv.reason,
+      contextUrl: ph.contextUrl,
+      domain: ph.domain ?? hostOf(ph.contextUrl) ?? undefined,
       score: o.score,
       rejected: o.rejected,
     };
@@ -318,14 +333,24 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     const perSource = Math.max(num * 2, 6);
     // DOKŁADNE pytanie wysłane do każdej wyszukiwarki: Serper dokleja kuchnię (jak genericWebImages),
     // Wikimedia/Openverse szukają po samym terminie generycznym.
+    // photo_query (genericTerm) jest CZYSTE (sam opis dania, BEZ kuchni — enrich już jej nie dokleja). Kuchnię
+    // dokleja TU kod, gdy chcemy. „Serper (web)" = termin + kuchnia (kod dokleja); „Serper (web, proste)" =
+    // sam termin (bez kuchni) — eksperyment „czy kuchnia w zapytaniu pomaga, czy zaśmieca".
     const serperQ = [genericTerm, cuisine?.trim()].filter(Boolean).join(" ");
+    // Wikimedia/Openverse szukają po TYTULE/TEKŚCIE → pełny opisowy termin trafia w długie dokumenty (skany
+    // książek kucharskich). Dajemy im sam RDZEŃ (pierwsze ~3 słowa); Serper (Google Images) zostaje z pełnym.
+    const wikiTerm = shortTerm(genericTerm);
     const sources: { name: string; prov: string; step: ToggleStep; query: string; run: () => Promise<DishPhoto[]> }[] = [
       { name: "Serper (web)", prov: "serper", step: "photoSerper", query: serperQ, run: () => genericWebImages(genericTerm, perSource, cuisine) },
-      { name: "Wikimedia", prov: "wikimedia", step: "photoWikimedia", query: genericTerm, run: () => new WikimediaProvider(perSource).find(genericTerm) },
-      { name: "Openverse", prov: "openverse", step: "photoOpenverse", query: genericTerm, run: () => new OpenverseProvider(perSource).find(genericTerm) },
+      { name: "Serper (web, proste, bez kuchni)", prov: "serper", step: "photoSerperPlain", query: genericTerm, run: () => genericWebImages(genericTerm, perSource) },
+      { name: "Wikimedia", prov: "wikimedia", step: "photoWikimedia", query: wikiTerm, run: () => new WikimediaProvider(perSource).find(wikiTerm) },
+      { name: "Openverse", prov: "openverse", step: "photoOpenverse", query: wikiTerm, run: () => new OpenverseProvider(perSource).find(wikiTerm) },
     ];
+    // CC-first (produkcja): źródła licencji CC (Wikimedia/Openverse) najpierw, Serper na końcu — kolejność
+    // wpływa tylko na priorytet przy remisie. Sortujemy po liście priorytetu (odporne na dodawanie źródeł).
+    const ccOrder: ToggleStep[] = ["photoWikimedia", "photoOpenverse", "photoSerper", "photoSerperPlain"];
     // Pomiń źródła WYŁĄCZONE w configu (lab) — zero kosztu/zapytań dla wyłączonych (testy/oszczędność).
-    const ordered = (CC_FIRST ? [sources[1]!, sources[2]!, sources[0]!] : sources).filter((s) => stepEnabled(s.step));
+    const ordered = (CC_FIRST ? [...sources].sort((a, b) => ccOrder.indexOf(a.step) - ccOrder.indexOf(b.step)) : sources).filter((s) => stepEnabled(s.step));
     const lists = await Promise.all(ordered.map((s) => s.run().catch(() => [] as DishPhoto[])));
     const usedProviders = ordered.filter((_, i) => lists[i]!.length > 0).map((s) => s.name);
     // SUROWE wyniki per wyszukiwarka (pytanie + URL-e ZWRÓCONE przez API, PRZED weryfikacją vizją) — do
@@ -376,9 +401,9 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     return { photos: [...goodOut, ...badOut], usage };
   }
 
-  // CACHE ① zdjęć POGLĄDOWYCH (typ dania) — niezależnych od lokalu. Klucz: termin generyczny +
-  // kuchnia + model weryfikacji + tryb źródeł + liczba. Trafienie = zero płatnych wywołań
-  // (ani Serper, ani vision). Pomijany przy noCache (LAB / porównania modeli).
+  // CACHE ① zdjęć POGLĄDOWYCH (typ dania) — niezależnych od lokalu. Klucz: termin generyczny + model
+  // weryfikacji + liczba kandydatów. Trafienie = zero płatnych wywołań (ani Serper, ani vision). Pomijany
+  // przy noCache (LAB / porównania modeli).
   const reprCacheKey = (verifyFlag: boolean) =>
     reprPhotoCacheKey({ dish, photoQuery: p.photoQuery, cuisine, verifyModel, num, verify: verifyFlag, takeAll: p.takeAll });
   async function cachedRepresentatives(verifyFlag: boolean): Promise<{ photos: OutPhoto[]; usage: Usage; cached: boolean }> {
@@ -397,7 +422,10 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
       return { photos, usage: ZERO_USAGE, cached: true };
     }
     const { photos, usage } = await representatives(verifyFlag);
-    if (photos.length) void cacheSet("repr-photos", ck, photos);
+    // Do cache TYLKO dobre (nieodrzucone) — odrzucone zwracamy do podglądu (takeAll/test), ale nie zapisujemy,
+    // dzięki czemu tryb „bierz wszystko" nie zanieczyszcza wpisu (i nie musi być w kluczu).
+    const toCache = photos.filter((ph) => !ph.rejected);
+    if (toCache.length) void cacheSet("repr-photos", ck, toCache, { model: verifyModel });
     return { photos, usage, cached: false };
   }
 

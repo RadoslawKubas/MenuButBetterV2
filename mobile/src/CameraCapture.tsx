@@ -17,6 +17,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { Icon } from "./Icon";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MAX_IMAGES } from "./image";
 import type { PeekResult } from "./api";
@@ -29,8 +30,8 @@ export type Shot = { uri: string; peek?: PeekResult; peeking?: boolean };
 function peekText(info: PeekResult | null | undefined): string {
   if (info === undefined) return "— brak oceny (podgląd wył. lub w toku) —";
   if (!info) return "podgląd gotowy — pstryknij zdjęcie";
-  if (!info.isMenu) return "⚠️ to nie wygląda na menu";
-  const parts = [info.cuisine ? `🍽️ ${info.cuisine}` : "", info.restaurantName ? `📍 ${info.restaurantName}` : ""].filter(Boolean);
+  if (!info.isMenu) return "to nie wygląda na menu";
+  const parts = [info.cuisine ? `${info.cuisine}` : "", info.restaurantName ? `${info.restaurantName}` : ""].filter(Boolean);
   return parts.length ? parts.join("  ·  ") : "✓ wygląda na menu";
 }
 
@@ -67,6 +68,19 @@ export function CameraCapture({
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
   const [torch, setTorch] = useState(false); // latarka (doświetlenie menu)
   const [zoom, setZoom] = useState(0); // 0..1 (expo-camera) — pinch + chipy powiększeń
+  // Rozdzielczość PRZECHWYTYWANIA: domyślnie expo-camera bierze NIŻSZĄ niż natywny aparat → zdjęcia menu wychodzą
+  // miększe/słabsze. Po `onCameraReady` ustawiamy NAJWYŻSZĄ dostępną (iOS: preset „photo"; Android: max „WxH").
+  const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
+  async function pickMaxPictureSize() {
+    try {
+      const sizes = await ref.current?.getAvailablePictureSizesAsync();
+      if (!sizes?.length) return;
+      let best: string | undefined;
+      if (sizes.includes("photo")) best = "photo"; // iOS: najwyższa rozdzielczość stilla
+      else { let area = 0; for (const s of sizes) { const m = /^(\d+)x(\d+)$/.exec(s); if (m) { const a = Number(m[1]) * Number(m[2]); if (a > area) { area = a; best = s; } } } }
+      if (best) setPictureSize(best);
+    } catch { /* zostaw domyślną */ }
+  }
   const zoomRef = useRef(0);
   const pinchStart = useRef<{ dist: number; zoom: number } | null>(null);
   const applyZoom = (z: number) => { const v = Math.max(0, Math.min(1, z)); zoomRef.current = v; setZoom(v); };
@@ -214,7 +228,7 @@ export function CameraCapture({
         {permission?.granted ? (
           <>
             {/* Żywy aparat pod spodem — zostaje „ciepły". */}
-            <CameraView ref={ref} style={styles.camera} facing="back" enableTorch={torch} zoom={zoom} />
+            <CameraView ref={ref} style={styles.camera} facing="back" enableTorch={torch} zoom={zoom} pictureSize={pictureSize} onCameraReady={pickMaxPictureSize} />
 
             {/* Warstwa pinch-zoom nad aparatem (paski są renderowane później → są na wierzchu). */}
             {!pending ? <View style={StyleSheet.absoluteFill} {...pinch.panHandlers} /> : null}
@@ -230,13 +244,13 @@ export function CameraCapture({
                 style={[styles.peekToggle, torch && styles.peekToggleOn]}
                 onPress={() => setTorch((t) => !t)}
               >
-                <Text style={styles.peekToggleText}>{torch ? "🔦 Latarka wł." : "🔦 Latarka"}</Text>
+                <Text style={styles.peekToggleText}>{torch ? "Latarka wł." : "Latarka"}</Text>
               </Pressable>
               <Pressable
                 style={[styles.peekToggle, peekEnabled && styles.peekToggleOn]}
                 onPress={() => onTogglePeek(!peekEnabled)}
               >
-                <Text style={styles.peekToggleText}>🔎 {peekEnabled ? "Podgląd wł." : "Podgląd wył."}</Text>
+                <Text style={styles.peekToggleText}><Icon name="searchAlt" /> {peekEnabled ? "Podgląd wł." : "Podgląd wył."}</Text>
               </Pressable>
               {peekEnabled ? (
                 <View style={styles.peekBanner}>
@@ -298,7 +312,7 @@ export function CameraCapture({
                       </View>
                     </View>
                   ) : (
-                    <Text style={styles.counter}>📸 0</Text>
+                    <Text style={styles.counter}><Icon name="camera" /> 0</Text>
                   )}
                 </Pressable>
               </View>
@@ -347,7 +361,7 @@ export function CameraCapture({
                     <Text style={styles.galleryIndex}>
                       Zdjęcie {index + 1} / {shots.length}
                     </Text>
-                    <Text style={styles.galleryPeek}>{item.peeking ? "🔎 analizuję…" : peekText(item.peek)}</Text>
+                    <Text style={styles.galleryPeek}>{item.peeking ? "analizuję…" : peekText(item.peek)}</Text>
                   </View>
                 </View>
               )}
@@ -360,7 +374,7 @@ export function CameraCapture({
               ↑ przesuń w górę, aby zamknąć
             </Text>
             <Pressable style={styles.galleryDelete} onPress={deleteCurrent} hitSlop={12}>
-              <Text style={styles.galleryDeleteText}>🗑 Usuń to zdjęcie</Text>
+              <Text style={styles.galleryDeleteText}><Icon name="delete" /> Usuń to zdjęcie</Text>
             </Pressable>
 
             {/* Pasek miniatur do szybkiego przewijania (scroll, gdy się nie mieści). */}

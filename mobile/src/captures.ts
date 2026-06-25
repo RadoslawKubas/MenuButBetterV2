@@ -115,8 +115,9 @@ export async function listCaptures(): Promise<ScanCapture[]> {
 }
 
 // Zapisuje zdjęcie menu do katalogu migawek i zwraca referencję względną.
-// Piszemy DOKŁADNIE ten base64, który poszedł do modelu (mamy go w pamięci) — dzięki
-// temu plik = bajt w bajt to, co zeskanowano, a ponowny odczyt daje identyczne wejście.
+// SAMPEL = ORYGINAŁ VERBATIM z telefonu (hiResUri, kopiowany 1:1 bez przekodowania) — PEŁNA jakość, jak zapis
+// do galerii. To NIE jest pomniejszona wersja do modelu (ta idzie osobno, dociela ją telefon). Dzięki temu
+// md5(pliku)=srcHash, więc replay liczy ten sam klucz cache, a do modelu replay pomniejsza ten plik na nowo.
 function persistImage(captureId: string, idx: number, img: PreparedImage): CaptureImage {
   ensureDir();
   const name = `${captureId}-${idx}.jpg`;

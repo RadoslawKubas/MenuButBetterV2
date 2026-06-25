@@ -6,18 +6,21 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { stream } from "hono/streaming";
-import { extractMenu, enrichMenu, menuToStructure, isModelId, MODELS, type InputImage, type MediaType } from "./menu.ts";
-import type { Menu, MenuSection } from "./schema.ts";
+import { extractMenu, enrichMenu, menuToStructure, isModelId, MODELS, type InputImage, type MediaType, type ScanItemStub } from "./menu.ts";
+import type { Menu, MenuSection, MenuItem, MenuStructure } from "./schema.ts";
+import { langCode } from "./lang.ts";
 import { describeDish } from "./dishInfo.ts";
 import { findRestaurant, findRestaurantNearby, fetchPlacePhoto, type RestaurantInfo } from "./places.ts";
 import { findTripAdvisor } from "./tripadvisor.ts";
 import { runDishPhotos, reprPhotoCacheKey } from "./dishPhotosPipeline.ts";
 import { quickPeek } from "./quickPeek.ts";
 import { matchVenuePhotos, type VenueTaPhoto, type VenueMatch } from "./venuePhotos.ts";
+import { harvestVenuePool, matchPoolToDishes, poolMatchAccepted, type PoolPhoto, type PoolResult } from "./venueHarvest.ts";
+import { photoSourceCategory, hostOf } from "./dishPhotos.ts";
 import { snapshot, recordBytes, cacheHitsSnapshot, type Provider } from "./apiLog.ts";
-import { ZERO_USAGE } from "./usage.ts";
+import { ZERO_USAGE, type Usage } from "./usage.ts";
 import { initDb, closeDb, logEvent, getStats, getRecentEvents, getClientErrors, getInstallActivity, upsertInstall, setInstallName, getInstalls, reqContext, budgetExceeded, dailyBudgetUsd, getSessionCost, readPriceOverrides, savePriceOverrides, readRuntimeConfig, saveRuntimeConfig } from "./db.ts";
-import { cfgModel, getRuntimeConfig, getAppConfig, stepEnabled, type RuntimeConfig } from "./runtimeConfig.ts";
+import { cfgModel, getRuntimeConfig, getAppConfig, getServerConfigView, stepEnabled, type RuntimeConfig } from "./runtimeConfig.ts";
 // ⚠️ Jednorazowe naprawy danych (NIE rdzeń — patrz dataFixes.ts). Do usunięcia po wdrożeniu nowej apki.
 import { backfillAppSource, attributeOrphansByTime, backfillSyntheticSessions } from "./dataFixes.ts";
 import { getSessions, getSessionEvents, getSourceCounts } from "./sessions.ts";
@@ -129,6 +132,7 @@ interface ImageInput {
   base64?: string;
   imageBase64?: string;
   mediaType?: string;
+  srcHash?: string;
 }
 interface ScanBody {
   images?: ImageInput[];
@@ -138,6 +142,8 @@ interface ScanBody {
   targetLang?: string;
   restaurantHint?: string;
   locationHint?: string;
+  /** Pozycja lokalu (EXIF/GPS z telefonu) — do serwerowego rozpoznania lokalu w pipeline (★ zdjęcia). */
+  location?: { lat: number; lng: number };
   cuisineHint?: string;
   model?: string;
   /** Model przebiegu WZBOGACANIA (tekst). Używany przy skanie dwuprzebiegowym; gdy brak = model. */
@@ -160,9 +166,19 @@ interface ScanBody {
 // użycia (40 zdjęć po ~0.5 MB = ~27M znaków base64, mieści się).
 const MAX_TOTAL_BASE64 = 36_000_000;
 
-/** Hash pojedynczego zdjęcia (z base64) — klucz rejestru „złych kadrów" + identyfikacja dla apki. */
+/** Hash pojedynczego zdjęcia (z base64) — fallback identyfikacji, gdy brak stabilnego srcHash. */
 function photoHash(base64: string): string {
   return createHash("sha256").update(base64).digest("hex").slice(0, 32);
+}
+
+/**
+ * JEDYNA, WSPÓLNA tożsamość zdjęcia dla cache (bad-photo i każdy przyszły kod). Preferuje STABILNY `srcHash`
+ * z telefonu (md5 ORYGINAŁU — przeżywa resize/rekompresję, więc ten sam kadr jest rozpoznawany po ponownym
+ * wysłaniu, nawet w innej jakości). Brak srcHash (stary klient/lab) → hash otrzymanych bajtów. UŻYWAĆ WSZĘDZIE,
+ * gdzie liczymy tożsamość zdjęcia — żeby peek i scan (i cokolwiek dojdzie) NIGDY nie rozjechały się kluczem.
+ */
+function imageIdHash(srcHash: string | undefined, base64: string): string {
+  return srcHash?.trim() || photoHash(base64);
 }
 
 /** Sanityzacja listy „w pobliżu" z apki → {name, cuisine}. Cap 12 (krótka lista do promptu). */
@@ -198,7 +214,7 @@ function parseImages(body: ScanBody): InputImage[] {
     // Akceptujemy też data-URL (data:image/...;base64,XXXX) — odcinamy nagłówek.
     const data = b64.includes(",") ? b64.split(",")[1]! : b64;
     totalB64 += data.length;
-    return { base64: data, mediaType: img.mediaType as MediaType };
+    return { base64: data, mediaType: img.mediaType as MediaType, srcHash: img.srcHash?.trim() || undefined };
   });
   if (totalB64 > MAX_TOTAL_BASE64) {
     throw new Error("Zdjęcia są za duże (łącznie). Zmniejsz liczbę/rozmiar zdjęć i spróbuj ponownie.");
@@ -226,7 +242,7 @@ app.post("/scan", async (c) => {
   try {
     const checked = await Promise.all(images.map(async (img) => ({
       img,
-      bad: !!(await cacheGet("bad-photo", cacheKey("bad-photo", photoHash(img.base64)), { op: "scan" })),
+      bad: !!(await cacheGet("bad-photo", cacheKey("bad-photo", imageIdHash(img.srcHash, img.base64)), { op: "scan" })),
     })));
     const kept = checked.filter((x) => !x.bad).map((x) => x.img);
     if (kept.length === 0) {
@@ -314,7 +330,7 @@ app.post("/scan", async (c) => {
       // kadry (nie marnuj modelu ponownie) i daj apce sygnał, by ostrzec usera i nie wysyłać tego znów.
       const lowQuality = readable === false; // nic nie odczytano → odrzuć + zapamiętaj jako zły kadr
       if (lowQuality) {
-        for (const img of images) void cacheSet("bad-photo", cacheKey("bad-photo", photoHash(img.base64)), { reason: "skan: model nie odczytał menu (za słaba jakość)", at: Date.now() });
+        for (const img of images) void cacheSet("bad-photo", cacheKey("bad-photo", imageIdHash(img.srcHash, img.base64)), { reason: "skan: model nie odczytał menu (za słaba jakość)", at: Date.now() });
       }
       // Czytelne, ale SŁABA jakość (np. działy ok, pozycje za małe) → wynik może być NIEPEŁNY. NIE
       // rejestrujemy jako zły kadr (jest częściowo użyteczny), tylko ostrzegamy usera.
@@ -334,7 +350,7 @@ app.post("/scan", async (c) => {
 // naturalny pasek postępu), serwer buforuje per SESJA i dopiero w /scan/run TNIE PO ROZMIARZE na partie
 // modelu, skanuje (równolegle, z ciągłością grup) i streamuje strukturę. Serwer = autorytet wielkości. ───
 interface ScanSession {
-  params: { targetLang: string; restaurantHint?: string; locationHint?: string; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId; nearbyVenues?: { name: string; cuisine?: string | null }[] };
+  params: { targetLang: string; restaurantHint?: string; locationHint?: string; location?: { lat: number; lng: number }; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId; nearbyVenues?: { name: string; cuisine?: string | null }[] };
   // index (kolejność dodania) → zdjęcie + takenAt (EXIF). Idempotentne (retry nadpisuje ten sam index).
   // KOLEJNOŚĆ DO AI ustalamy po `takenAt` (data zrobienia), z indeksem jako tie-breakerem — model dostaje
   // strony w kolejności, w jakiej user je fotografował.
@@ -388,6 +404,7 @@ app.post("/scan/start", async (c) => {
       restaurantHint: body.restaurantHint?.trim() || undefined,
       locationHint: body.locationHint?.trim() || undefined,
       cuisineHint: body.cuisineHint?.trim() || undefined,
+      location: body.location && typeof body.location.lat === "number" && typeof body.location.lng === "number" ? { lat: body.location.lat, lng: body.location.lng } : undefined,
       model: isModelId(body.model) ? body.model : undefined,
       enrichModel: isModelId(body.enrichModel) ? body.enrichModel : undefined,
       nearbyVenues: sanitizeNearby(body.nearbyVenues),
@@ -417,7 +434,130 @@ app.post("/scan/photo", async (c) => {
   return c.json({ ok: true, received: s.photos.size });
 });
 
-interface ScanRunBody { sessionId?: string; stream?: boolean; nearbyVenues?: { name?: string; cuisine?: string | null }[] }
+interface ScanRunBody { sessionId?: string; stream?: boolean; pipeline?: boolean; nearbyVenues?: { name?: string; cuisine?: string | null }[] }
+
+const REPR_PER_DISH = 3; // ile zdjęć poglądowych na danie w pipeline (mirror apki)
+
+/** Pula współbieżności: uruchom `fn` dla każdego elementu, max `limit` naraz. */
+async function runPool<T>(items: T[], limit: number, fn: (it: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const it = items[i++]!; await fn(it); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/** Etykieta źródła zdjęcia „z lokalu" (mirror apki). */
+function venueSrcLabel(s: string): string {
+  return s === "tripadvisor" ? "TripAdvisor" : s === "google" ? "Google Maps" : s === "restaurant" ? "strona lokalu" : s === "social" ? "profil społecznościowy" : "z sieci";
+}
+
+/** PIPELINE skanu (serwerowy): po scaleniu struktury nadaje stabilne `id` i emituje kolejno
+ *  structure → enrich-item → photo → venue-photo → cost → done — WSZYSTKO kluczowane po `id`.
+ *  Apka tylko renderuje (nie scala, nie odsyła menu). Abort (rozłączenie apki) przerywa drogie kroki. */
+async function runScanPipeline(
+  st: { write: (s: string) => Promise<unknown> },
+  base: Menu,
+  params: ScanSession["params"],
+  tot: { inputTokens: number; outputTokens: number; costUsd: number },
+  signal: AbortSignal | undefined,
+  cached: boolean,
+  costSid: string | undefined, // przechwycone w handlerze (ALS bywa gubiony w callbacku streama)
+  venuePromise: Promise<{ restaurant: RestaurantInfo | null; candidates: RestaurantInfo[] }> | null, // rozpoznanie lokalu odpalone WCZEŚNIE w handlerze (z onMeta); karta już poszła
+  warmJobs: Promise<void>[] = [], // rolling enrich (leci w tle od czasu vision) — czekamy na nie PO emicie struktury
+): Promise<void> {
+  let menu = base;
+  const emit = (o: unknown) => st.write(JSON.stringify(o) + "\n").catch(() => {});
+  const emitCost = () => { if (costSid) void emit({ phase: "cost", costUsd: getSessionCost(costSid) }); };
+  const aborted = () => signal?.aborted === true;
+  const finish = () => emit({ phase: "done", menu, usage: tot, cached });
+
+  // 1) Stabilne id renderowe: pozycje mają już `id` ze streamu (idPrefix „b{partia}-…", zachowane przez merge) —
+  //    TE SAME, po których warm wyemitował enrich/zdjęcia na żywo. NIE nadajemy nowych. Backstop: gdyby któraś
+  //    pozycja nie miała id (np. dołożona poza streamem), nadaj pozycyjne, by nic nie zostało bez tożsamości.
+  menu.sections.forEach((sec, si) => sec.items.forEach((it, ii) => { if (!it.id) it.id = `s${si}-i${ii}`; }));
+  await emit({ phase: "structure", menu }); // NAJPIERW menu na ekran (bez zawieszania tickera) — apka pokazuje pozycje
+  if (aborted()) return void finish();
+  // DOPIERO TERAZ czekamy na rolling enrich (leciał w tle podczas czytania). Apka jest już w widoku menu
+  // („Opisuję 0/N"), więc to nie wygląda na zwis tickera. Po tym finałowy enrich trafia w cache (z warmu,
+  // ten sam klucz full_name+full_description) → emituje opisy NATYCHMIAST, bez liczenia od nowa.
+  if (warmJobs.length) { await Promise.allSettled(warmJobs); emitCost(); }
+
+  // ── ★ ZDJĘCIA Z LOKALU — RÓWNOLEGLE. Rozpoznanie lokalu + KARTA poszły już WCZEŚNIE (handler, z onMeta).
+  //    Tu dociągamy tylko dopasowanie ★ do dań (full_name mamy ze STRUKTURY → ★ nie czeka na enrich).
+  const venueDishes: { id: string; key: string }[] = [];
+  menu.sections.forEach((sec) => sec.items.forEach((it) => { if (it.original) venueDishes.push({ id: it.id!, key: it.full_name || it.original }); }));
+  const structCuisine = menu.cuisine;
+  const venueP = (async () => {
+    if (!venuePromise) return;
+    try {
+      const { restaurant } = await venuePromise; // rozpoznanie + karta już zrobione wcześnie w handlerze
+      if (!restaurant || aborted() || !venueDishes.length) return;
+      const photoNames = restaurant.photoNames ?? [];
+      const taPhotos = (restaurant.tripAdvisor?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption }));
+      const certain = restaurant.nameVerified !== false && !restaurant.guessedByLocation;
+      const uniqDishes = [...new Set(venueDishes.map((d) => d.key))]; // tożsamość → 1× vision
+      const { matches, usage: venueUsage } = await runVenuePhotos({ photoNames, taPhotos, dishes: uniqDishes, cuisine: structCuisine, certain, name: restaurant.name, website: restaurant.website ?? undefined, city: restaurant.city ?? undefined });
+      tot.inputTokens += venueUsage.inputTokens; tot.outputTokens += venueUsage.outputTokens; tot.costUsd += venueUsage.costUsd; // ★ do kosztu skanu
+      const byDish = new Map<string, Record<string, unknown>[]>();
+      for (const m of matches) {
+        const arr = byDish.get(m.dish) ?? [];
+        if (arr.length >= 3) continue;
+        const label = venueSrcLabel(m.source);
+        arr.push({ ...(m.source === "google" && m.photoName ? { photoName: m.photoName } : { url: m.url }), source: m.source, attribution: label, verified: true, fromVenue: true, fromVenueReason: `Zdjęcie z lokalu (${label}) dopasowane wizją do dania (pewność ${m.confidence.toFixed(2)})` });
+        byDish.set(m.dish, arr);
+      }
+      for (const d of venueDishes) {
+        const photos = byDish.get(d.key);
+        if (photos && photos.length && !aborted()) await emit({ phase: "venue-photo", id: d.id, photos });
+      }
+    } catch (e) { console.error("pipeline venue error:", e); }
+  })();
+
+  // 2) ENRICH + ZDJĘCIA POGLĄDOWE — SKLEJONE: gdy pozycja się wzbogaci (ma photo_query), OD RAZU dociągamy jej
+  //    zdjęcie (pula ≤4). Dzięki temu zdjęcia trafiają PROGRESYWNIE w trakcie enrichu, a nie hurtem na końcu.
+  const verifyModel = cfgModel("verify");
+  const autoLimit = getAppConfig().autoLimit;
+  let photoBudget = autoLimit > 0 ? autoLimit : Infinity; // limit auto-dociągania (0 = wszystkie)
+  const photoPromises: Promise<void>[] = [];
+  let pActive = 0; const pWait: (() => void)[] = []; // semafor ≤4 na równoległe szukanie zdjęć
+  const pAcquire = () => new Promise<void>((res) => { if (pActive < 4) { pActive++; res(); } else pWait.push(() => { pActive++; res(); }); });
+  const pRelease = () => { pActive--; const n = pWait.shift(); if (n) n(); };
+  const fetchPhotoFor = (it: ScanItemStub) => photoPromises.push((async () => {
+    await pAcquire();
+    try {
+      if (aborted() || !it.id) return;
+      const { photos, usage, debug } = await runDishPhotos({
+        dish: it.original, photoQuery: it.photoQuery, photoQueryLocal: it.photoQueryLocal,
+        cuisine: structCuisine, branded: it.branded, representativeOnly: true, num: REPR_PER_DISH, verifyModel,
+      });
+      tot.inputTokens += usage.inputTokens; tot.outputTokens += usage.outputTokens; tot.costUsd += usage.costUsd;
+      logEvent({ type: "ai", op: "dish-photos", model: verifyModel, provider: apiTag(verifyModel), inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd, data: { dish: it.original, resultCount: photos.length, representativeOnly: true, cached: !!debug?.fromCache } });
+      if (photos.length) await emit({ phase: "photo", id: it.id, photos });
+    } catch { /* brak poglądowego dla dania */ } finally { pRelease(); }
+  })());
+
+  const enrichModel = cfgModel("enrich");
+  try {
+    const r = await enrichMenu(menuToStructure(menu), {
+      targetLang: params.targetLang, locationHint: params.locationHint, cuisineHint: params.cuisineHint, restaurantHint: params.restaurantHint,
+      onEnrichItem: (it) => {
+        void emit({ phase: "enrich-item", ...it });
+        if (it.photoQuery && photoBudget-- > 0) fetchPhotoFor(it); // zdjęcie OD RAZU po wzbogaceniu pozycji
+      },
+    }, enrichModel);
+    menu = r.menu; // od teraz `menu` = wzbogacone (te same id)
+    tot.inputTokens += r.usage.inputTokens; tot.outputTokens += r.usage.outputTokens; tot.costUsd += r.usage.costUsd;
+    logEvent({ type: "scan", op: "enrich", model: enrichModel, provider: apiTag(enrichModel), inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, costUsd: r.usage.costUsd, data: { items: menu.sections.reduce((n, sc) => n + sc.items.length, 0), targetLang: params.targetLang } });
+  } catch (e) { console.error("pipeline enrich error:", e); }
+  emitCost();
+  await Promise.all(photoPromises); // dokończ zdjęcia poglądowe (część mogła wystartować dopiero pod koniec enrichu)
+  emitCost();
+  if (aborted()) { await venueP.catch(() => {}); return void finish(); }
+
+  await venueP; // dokończ rozpoznanie lokalu + ★ zanim domkniemy skan
+  emitCost();
+  await finish();
+}
+
 app.post("/scan/run", async (c) => {
   let body: ScanRunBody;
   try { body = await c.req.json<ScanRunBody>(); } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
@@ -445,6 +585,7 @@ app.post("/scan/run", async (c) => {
   const wantSteps = body.stream === true;
   const t0 = Date.now();
   const model = cfgModel("scan");
+  const costSid = reqContext.getStore()?.sessionId; // przechwyć TERAZ (w callbacku streama ALS bywa gubiony)
   return stream(c, async (st) => {
     if (wantSteps) await st.write(JSON.stringify({ phase: "received", images: ordered.length }) + "\n");
     const keepalive = setInterval(() => { st.write(wantSteps ? JSON.stringify({ phase: "extracting", elapsedMs: Date.now() - t0 }) + "\n" : " ").catch(() => {}); }, wantSteps ? 2000 : 5000);
@@ -453,20 +594,114 @@ app.post("/scan/run", async (c) => {
       const tot = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
       let cachedCount = 0; // ile partii wróciło z cache (wszystkie → skan „bez kosztu modelu")
       let knownSections: string[] = [];
+      // venue_match (vision wskazało, do którego lokalu „w pobliżu" pasuje menu) — LEPSZY sygnał niż sama
+      // nazwa z karty; pipeline użyje go do rozpoznania WŁAŚCIWEGO lokalu (zamiast najbliższego po dystansie).
+      let venueMatch: { index: number; by: "name" | "cuisine" } | null | undefined;
+      let scanCuisine = s.params.cuisineHint || "";
+      // ROZPOZNANIE LOKALU startuje JAK NAJWCZEŚNIEJ — z `onMeta` (po 1. partii), RÓWNOLEGLE z resztą struktury
+      // i enrichem. Karta lokalu emitowana od razu po rozpoznaniu (jak w starej apce). ★ dopnie pipeline.
+      let venueStarted = false;
+      let venueResolveP: Promise<{ restaurant: RestaurantInfo | null; candidates: RestaurantInfo[] }> | null = null;
+      const startVenue = (nameFromMeta?: string, allowGpsOnly = false) => {
+        if (venueStarted || !body.pipeline || !process.env.GOOGLE_MAPS_KEY) return;
+        const matchedName = venueMatch != null ? s.params.nearbyVenues?.[venueMatch.index]?.name : undefined;
+        const name = (matchedName || nameFromMeta || s.params.restaurantHint || "").trim();
+        const lat = s.params.location?.lat, lng = s.params.location?.lng;
+        // Rozpoznanie po SAMYM GPS wskazuje NAJBLIŻSZY punkt (często zły — np. sklep obok) i blokuje się na nim,
+        // zanim vision poda nazwę. Dlatego WCZEŚNIE (onMeta) rozpoznajemy lokal TYLKO gdy mamy konkretny sygnał:
+        // nazwę z karty albo venue_match. Sam GPS to OSTATECZNY fallback — dopiero w backstopie po scaleniu
+        // struktury (allowGpsOnly=true), gdy vision i tak nie dał nazwy.
+        if (!name && (!allowGpsOnly || lat == null || lng == null)) return; // brak pewnego sygnału — czekaj na nazwę/venue_match
+        venueStarted = true;
+        console.log(`[pipeline venue] start venueMatch=${JSON.stringify(venueMatch ?? null)} matchedName=${matchedName ?? "-"} name="${name}" loc=${lat ?? "-"},${lng ?? "-"} cuisine=${scanCuisine}`);
+        venueResolveP = resolveRestaurant({ name: name || undefined, lat, lng, lang: langCode(s.params.targetLang) || undefined, cuisine: scanCuisine || undefined })
+          .then((r) => {
+            console.log(`[pipeline venue] resolved=${r.restaurant?.name ?? "NULL"} verified=${r.restaurant?.nameVerified} guessed=${r.restaurant?.guessedByLocation} cands=${r.candidates.length}`);
+            if (r.restaurant && wantSteps) {
+              if (venueMatch?.by === "cuisine") { r.restaurant.guessedByLocation = true; r.restaurant.nameVerified = false; }
+              st.write(JSON.stringify({ phase: "venue", restaurant: r.restaurant, candidates: r.candidates }) + "\n").catch(() => {});
+            }
+            return r;
+          })
+          .catch((e) => { console.error("pipeline venue resolve error:", e); return { restaurant: null as RestaurantInfo | null, candidates: [] as RestaurantInfo[] }; });
+      };
+
+      // ── ROLLING NA ŻYWO: w trakcie czytania (vision), gdy znamy kuchnię, wzbogacamy partie dań PO KILKA i
+      //    EMITUJEMY na żywo `enrich-item` (po stabilnym `id` ze streamu); dla każdej wzbogaconej pozycji OD RAZU
+      //    dociągamy zdjęcie (mamy photo_query) i emitujemy `photo`. Apka pokazuje 3 liczniki (odczytane /
+      //    wzbogacone / ze zdjęciem) rosnące JUŻ w trakcie czytania. Finałowy przebieg potwierdza z cache i domyka
+      //    resztę (idempotentnie — apka kluczuje po `id`, więc powtórka nie podwaja). Warm = best-effort. ──
+      const warmEnrichModel = cfgModel("enrich");
+      const warmVerifyModel = cfgModel("verify");
+      let warmReady = !!scanCuisine; // start dopiero gdy znamy kuchnię (ta sama co w finale → trafienie cache)
+      const warmQueue: ScanItemStub[] = [];
+      const warmJobs: Promise<void>[] = [];
+      let warmPhotoBudget = getAppConfig().autoLimit > 0 ? getAppConfig().autoLimit : Infinity;
+      let wpActive = 0; const wpWait: (() => void)[] = []; // semafor ≤4 na równoległe szukanie zdjęć
+      const wpAcq = () => new Promise<void>((r) => { if (wpActive < 4) { wpActive++; r(); } else wpWait.push(() => { wpActive++; r(); }); });
+      const wpRel = () => { wpActive--; const n = wpWait.shift(); if (n) n(); };
+      const warmFetchPhoto = async (it: { id?: string; original: string; photoQuery?: string; photoQueryLocal?: string; branded?: boolean }): Promise<void> => {
+        if (!it.id) return;
+        await wpAcq();
+        try {
+          const { photos, usage, debug } = await runDishPhotos({ dish: it.original, photoQuery: it.photoQuery, photoQueryLocal: it.photoQueryLocal, cuisine: scanCuisine, branded: it.branded, representativeOnly: true, num: REPR_PER_DISH, verifyModel: warmVerifyModel });
+          tot.inputTokens += usage.inputTokens; tot.outputTokens += usage.outputTokens; tot.costUsd += usage.costUsd;
+          logEvent({ type: "ai", op: "dish-photos", model: warmVerifyModel, provider: apiTag(warmVerifyModel), inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd, data: { dish: it.original, resultCount: photos.length, representativeOnly: true, cached: !!debug?.fromCache, rolling: true } });
+          if (photos.length) st.write(JSON.stringify({ phase: "photo", id: it.id, photos }) + "\n").catch(() => {});
+        } catch { /* zdjęcie best-effort */ } finally { wpRel(); }
+      };
+      const warmEnrich = (stubs: ScanItemStub[]) => {
+        if (!body.pipeline || stubs.length === 0) return;
+        warmJobs.push((async () => {
+          const photoP: Promise<void>[] = [];
+          try {
+            const partial: MenuStructure = {
+              restaurant_name: null, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine,
+              sections: [{ name: "", name_translated: "", availability: null, items: stubs.map((st0) => ({ id: st0.id, original: st0.original, translated: st0.translated || st0.original, full_name: st0.full_name || st0.original, full_description: st0.fullDescription || "", portion: "", menu_description: st0.description || "", menu_description_translated: "", source_text: "", price: st0.price, currency: st0.currency, variants: [], course: null, surcharge: null })) }],
+              notes: [], readable: true, low_quality: false,
+            };
+            const r = await enrichMenu(partial, { targetLang: s.params.targetLang, locationHint: s.params.locationHint, cuisineHint: scanCuisine, onEnrichItem: (it) => {
+              st.write(JSON.stringify({ phase: "enrich-item", ...it }) + "\n").catch(() => {}); // enrich danej pozycji GOTOWY → apka podbija licznik #2
+              if (it.photoQuery && warmPhotoBudget-- > 0) photoP.push(warmFetchPhoto(it)); // mamy hasło → od razu zdjęcie (#3)
+            } }, warmEnrichModel);
+            tot.inputTokens += r.usage.inputTokens; tot.outputTokens += r.usage.outputTokens; tot.costUsd += r.usage.costUsd;
+            logEvent({ type: "scan", op: "enrich", model: warmEnrichModel, provider: apiTag(warmEnrichModel), inputTokens: r.usage.inputTokens, outputTokens: r.usage.outputTokens, costUsd: r.usage.costUsd, data: { items: stubs.length, rolling: true } });
+          } catch { /* rolling enrich best-effort — finał trafi w cache albo policzy sam */ }
+          await Promise.all(photoP); // job kończy się dopiero gdy zdjęcia tej partii gotowe → await warmJobs czeka też na nie
+        })());
+      };
+      const flushWarm = () => { if (!warmReady || warmQueue.length === 0) return; warmEnrich(warmQueue.splice(0, warmQueue.length)); };
+
       const runOne = async (bi: number) => {
         const { menu, usage, cached } = await extractMenu(batches[bi]!, {
           targetLang: s.params.targetLang, restaurantHint: s.params.restaurantHint, locationHint: s.params.locationHint,
           cuisineHint: s.params.cuisineHint, model, enrichModel: s.params.enrichModel, structureOnly: true,
           knownSections: bi === 0 ? undefined : knownSections,
+          // Stabilne `id` pozycji nadawane JUŻ w streamie (porządek dokumentu) — to SAMO id niesie scalona struktura
+          // (mergeStructureMenus zachowuje it.id) → rolling enrich/zdjęcia emitowane po id PRZED `structure` trafią
+          // w slot, gdy apka złoży menu. Prefiks per partia (unikalność między stronami).
+          idPrefix: `b${bi}-`,
           // Lista „w pobliżu" tylko do PIERWSZEJ partii (ma okładkę/szyld) — venue_match emitowany raz.
           nearbyVenues: bi === 0 ? s.params.nearbyVenues : undefined,
-          onItem: wantSteps ? (it) => { st.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {}); } : undefined,
-          onMeta: wantSteps ? (m) => { st.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {}); } : undefined,
+          onItem: wantSteps ? (it) => { st.write(JSON.stringify({ phase: "item", ...it }) + "\n").catch(() => {}); if (body.pipeline && it.original) { warmQueue.push(it); if (warmReady && warmQueue.length >= 6) flushWarm(); } } : undefined,
+          onMeta: wantSteps ? (m) => { if (m.cuisine && m.cuisine.trim()) { scanCuisine = m.cuisine.trim(); if (!warmReady) { warmReady = true; flushWarm(); } } if (m.venueMatch !== undefined) venueMatch = m.venueMatch; startVenue(m.restaurantName); st.write(JSON.stringify({ phase: "meta", ...m }) + "\n").catch(() => {}); } : undefined,
         });
         results[bi] = menu;
         if (cached) cachedCount++;
         tot.inputTokens += usage.inputTokens; tot.outputTokens += usage.outputTokens; tot.costUsd += usage.costUsd;
       };
+      // NEARBY SERWEROWO: mając GPS z sesji (scanStart), serwer SAM liczy lokale „w pobliżu" do venue_match —
+      // apka nie musi już robić osobnego /restaurant?forceNearby i odsyłać listy (koniec ping-ponga). Promień jak
+      // w apce (220 m). body.nearbyVenues zostaje tylko jako zapas (gdy brak GPS / starszy klient). Musi być
+      // gotowe PRZED 1. partią vision (tam idzie do promptu venue_match) — krótkie i cache'owane.
+      if (s.params.location && process.env.GOOGLE_MAPS_KEY) {
+        try {
+          const near = await findRestaurantNearby({ lat: s.params.location.lat, lng: s.params.location.lng, radius: 220, lang: langCode(s.params.targetLang) || undefined, cuisine: s.params.cuisineHint || undefined });
+          const mapped = sanitizeNearby(near.map((r) => ({ name: r.name, cuisine: r.cuisine ?? null })));
+          if (mapped && mapped.length) s.params.nearbyVenues = mapped;
+          console.log(`[pipeline nearby] serwer policzył ${mapped?.length ?? 0} lokali w pobliżu (loc=${s.params.location.lat},${s.params.location.lng})`);
+        } catch (e) { console.error("nearby (server) error:", e); }
+      }
       await runOne(0);
       knownSections = (results[0]?.sections ?? []).map((x) => x.name).filter((n) => n && !/sin t[ií]tulo|untitled|bez tyt|^\(/i.test(n));
       if (batches.length > 1) {
@@ -477,7 +712,22 @@ app.post("/scan/run", async (c) => {
       const merged = mergeStructureMenus(results.filter(Boolean));
       const cached = cachedCount === batches.length; // wszystkie partie z cache → bez kosztu modelu
       logEvent({ type: "scan", op: "scan", model, provider: apiTag(model), inputTokens: tot.inputTokens, outputTokens: tot.outputTokens, costUsd: tot.costUsd, data: { images: ordered.length, sections: merged.sections.length, items: merged.sections.reduce((n, sec) => n + sec.items.length, 0), targetLang: s.params.targetLang, restaurant: merged.restaurant_name ?? null, cuisine: merged.cuisine ?? null, mode: "session", cached } });
-      await st.write(wantSteps ? JSON.stringify({ done: true, menu: merged, usage: tot, enriched: false, cached }) + "\n" : JSON.stringify({ menu: merged, usage: tot, enriched: false, cached }));
+      if (body.pipeline) {
+        // ROLLING ENRICH: dokończ zakolejkowane partie (kuchnia ze SCALONEJ struktury jako backstop) i poczekaj.
+        // To TYLKO enrich (bez zdjęć) → krótkie i w większości już zrobione równolegle z vision; dzięki temu
+        // finałowy enrich trafia w cache (bez podwójnego liczenia).
+        if (merged.cuisine && !warmReady) { scanCuisine = merged.cuisine; warmReady = true; }
+        flushWarm();
+        // NIE czekamy tu na warm — najpierw emitujemy strukturę (menu OD RAZU po czytaniu), a na rolling enrich
+        // czeka runScanPipeline JUŻ PO emicie struktury. Dzięki temu ticker „27 odczytanych" się nie zawiesza,
+        // a finałowy enrich trafia w cache warmu (ten sam klucz) → opisy wskakują natychmiast, bez podwójnego liczenia.
+        // Backstop po scaleniu: użyj nazwy ze struktury; gdy vision nie dał nazwy — DOPIERO TERAZ pozwól na
+        // rozpoznanie po samym GPS (allowGpsOnly=true), jako ostateczność (lepsze to niż brak lokalu).
+        startVenue(merged.restaurant_name ?? undefined, true);
+        await runScanPipeline(st, merged, s.params, tot, c.req.raw.signal, cached, costSid, venueResolveP, warmJobs);
+      } else {
+        await st.write(wantSteps ? JSON.stringify({ done: true, menu: merged, usage: tot, enriched: false, cached }) + "\n" : JSON.stringify({ menu: merged, usage: tot, enriched: false, cached }));
+      }
     } catch (e) {
       console.error("scan/run error:", e);
       await st.write(JSON.stringify({ error: `Skan nie powiódł się: ${(e as Error).message}` }) + "\n");
@@ -594,9 +844,8 @@ app.post("/quick-peek", async (c) => {
   try {
     const body = (await c.req.json()) as { image?: { base64?: string; mediaType?: string }; model?: string; srcHash?: string };
     if (!body.image?.base64) return c.json({ error: "Brak zdjęcia." }, 400);
-    // STABILNY hash źródłowy (md5 oryginału z telefonu) gdy podany — przeżywa modyfikację (resize/JPEG), więc
-    // ten sam zły kadr jest rozpoznany po ponownym wysłaniu. Fallback: hash zmodyfikowanych bajtów.
-    const imageHash = body.srcHash?.trim() || photoHash(body.image.base64);
+    // Tożsamość zdjęcia przez WSPÓLNY helper (srcHash > hash bajtów) — ten sam kod co w skanie, bez rozjazdu.
+    const imageHash = imageIdHash(body.srcHash, body.image.base64);
     // Znany „zły kadr" (za słaba jakość) → werdykt od razu, BEZ wołania modelu (oszczędność);
     // apka i tak zablokuje wysyłkę. To realizuje „nie skanuj/nie wysyłaj ponownie".
     const known = await cacheGet<{ reason?: string }>("bad-photo", cacheKey("bad-photo", imageHash), { op: "quick-peek" });
@@ -636,6 +885,44 @@ interface RestaurantBody {
   radius?: number; // zasięg „w pobliżu" w metrach (klient może zwiększać)
 }
 
+/** Rozpoznanie lokalu (Google Places + TripAdvisor) — wspólny rdzeń handlera /restaurant i pipeline'u skanu.
+ *  Nazwa → wyszukiwanie po nazwie; brak/pudło → fallback po GPS + kuchni. Zwraca najlepszy + kandydatów. */
+export async function resolveRestaurant(p: {
+  name?: string; lat?: number; lng?: number; lang?: string; address?: string; cuisine?: string; radius?: number;
+}): Promise<{ restaurant: RestaurantInfo | null; candidates: RestaurantInfo[] }> {
+  // Doczepia ocenę/link z TripAdvisora (po nazwie). Ciche niepowodzenie.
+  const withTripAdvisor = async (r: RestaurantInfo): Promise<RestaurantInfo> => {
+    r.tripAdvisor = await findTripAdvisor({ name: r.name, lat: r.location?.lat, lng: r.location?.lng, lang: p.lang })
+      .catch((e) => { console.error("tripadvisor error:", e); return null; });
+    return r;
+  };
+  // 1) Mamy nazwę → standardowe wyszukiwanie po nazwie + okolicy.
+  if (p.name) {
+    const restaurant = await findRestaurant({ name: p.name, address: p.address, lat: p.lat, lng: p.lng, lang: p.lang });
+    if (restaurant) { await withTripAdvisor(restaurant); return { restaurant, candidates: [] }; }
+  }
+  // 2) Brak nazwy LUB nic nie znaleziono → fallback po GPS + kuchni.
+  if (p.lat != null && p.lng != null) {
+    const candidates = await findRestaurantNearby({ lat: p.lat, lng: p.lng, cuisine: p.cuisine, lang: p.lang, radius: p.radius });
+    if (candidates.length > 0) {
+      const top = candidates[0]!;
+      // GUARD KUCHNI (siatka bezpieczeństwa dla zgadywania po SAMYM GPS): jeśli znamy kuchnię z menu, a
+      // najbliższy kandydat ma KONKRETNY, NIEpasujący typ kuchni (cuisine != null && cuisineMatched === false)
+      // — np. menu indyjskie, a lokal to sklep ze zdrową żywnością — NIE podstawiaj go pewnie. Lepiej brak
+      // pewnej karty (apka pokaże nazwę z menu + ręczne „Zły lokal?") niż pewny zły lokal. Kandydaci sortowani
+      // kuchnią-pierwszą, więc gdy KTÓRYKOLWIEK pasował, byłby na czele i guard NIE wejdzie. Generyczna
+      // restauracja (cuisine == null, Google nie taguje kuchni) NIE jest konfliktem — nie odrzucamy.
+      if (p.cuisine && top.cuisine && top.cuisineMatched === false) {
+        console.log(`[venue guard] GPS-only: '${top.name}' cuisine='${top.cuisine}' ≠ menu '${p.cuisine}' → brak pewnej karty, zwracam ${candidates.length} kandydatów`);
+        return { restaurant: null, candidates };
+      }
+      const best = await withTripAdvisor(top); // best zgadnięty, reszta jako alternatywy do wyboru w apce
+      return { restaurant: best, candidates };
+    }
+  }
+  return { restaurant: null, candidates: [] };
+}
+
 app.post("/restaurant", async (c) => {
   if (!process.env.GOOGLE_MAPS_KEY) {
     return c.json({ error: "Brak GOOGLE_MAPS_KEY na serwerze." }, 503);
@@ -650,48 +937,20 @@ app.post("/restaurant", async (c) => {
   const name = body.name?.trim() || undefined;
   const lat = typeof body.lat === "number" ? body.lat : undefined;
   const lng = typeof body.lng === "number" ? body.lng : undefined;
-  const lang = body.lang?.trim() || undefined;
   // Potrzebujemy nazwy ALBO współrzędnych — inaczej nie ma jak szukać.
   if (!name && (lat == null || lng == null)) {
     return c.json({ error: "Brak nazwy lokalu i lokalizacji." }, 400);
   }
 
-  // Doczepia ocenę/link z TripAdvisora (po nazwie). Ciche niepowodzenie.
-  async function withTripAdvisor(r: RestaurantInfo): Promise<RestaurantInfo> {
-    r.tripAdvisor = await findTripAdvisor({
-      name: r.name,
-      lat: r.location?.lat,
-      lng: r.location?.lng,
-      lang,
-    }).catch((e) => {
-      console.error("tripadvisor error:", e);
-      return null;
-    });
-    return r;
-  }
-
   try {
-    // 1) Mamy nazwę → standardowe wyszukiwanie po nazwie + okolicy.
-    if (name) {
-      const restaurant = await findRestaurant({ name, address: body.address?.trim() || undefined, lat, lng, lang });
-      if (restaurant) {
-        await withTripAdvisor(restaurant);
-        return c.json({ restaurant, candidates: [] });
-      }
-    }
-
-    // 2) Brak nazwy LUB nic nie znaleziono → fallback po GPS + kuchni.
-    if (lat != null && lng != null) {
-      const radius = typeof body.radius === "number" ? body.radius : undefined;
-      const candidates = await findRestaurantNearby({ lat, lng, cuisine: body.cuisine?.trim() || undefined, lang, radius });
-      if (candidates.length > 0) {
-        const best = await withTripAdvisor(candidates[0]!);
-        // best zgadnięty, reszta jako alternatywy do wyboru w apce
-        return c.json({ restaurant: best, candidates });
-      }
-    }
-
-    return c.json({ restaurant: null, candidates: [] });
+    const out = await resolveRestaurant({
+      name, lat, lng,
+      lang: body.lang?.trim() || undefined,
+      address: body.address?.trim() || undefined,
+      cuisine: body.cuisine?.trim() || undefined,
+      radius: typeof body.radius === "number" ? body.radius : undefined,
+    });
+    return c.json(out);
   } catch (e) {
     console.error("restaurant error:", e);
     return c.json({ error: `Wyszukiwanie lokalu nie powiodło się: ${(e as Error).message}` }, 502);
@@ -944,39 +1203,111 @@ app.post("/cache-clear", async (c) => {
   return c.json({ ok: true, cleared: kind ?? "all" });
 });
 
-// Tier 0: pula zdjęć z lokalu (Google Places + TripAdvisor) → wizja → ★ dopasowania do dań.
-app.post("/venue-photos", async (c) => {
-  // KROK WYŁĄCZONY w configu (lab) — zdjęcia z lokalu (Tier 0) jak inne źródła: pomiń pobranie zdjęć + vision.
-  if (!stepEnabled("photoVenue")) return c.json({ matches: [], usage: ZERO_USAGE });
-  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
-  try {
-    const body = (await c.req.json()) as {
-      photoNames?: string[];
-      taPhotos?: VenueTaPhoto[];
-      dishes?: string[];
-      cuisine?: string;
-      model?: string;
-      certain?: boolean; // lokal pewny? (z /restaurant: nameVerified && !guessedByLocation)
-    };
-    const venueModel = body.model?.trim() || "claude-sonnet-4-6";
+// Profile społecznościowe — gdy „website" lokalu to IG/FB itp., NIE traktujemy tego jako domeny do site:.
+const VENUE_SOCIAL_HOSTS = new Set(["instagram.com", "facebook.com", "fb.com", "twitter.com", "x.com", "tiktok.com", "linktr.ee"]);
+
+/** Mapuje werdykt szerokiej puli na VenueMatch (kontrakt apki). Google → photoName (proxy); reszta → URL,
+ *  z kategorią źródła do etykiety (restaurant/tripadvisor/web/social…). */
+function poolResultToMatch(r: PoolResult, restaurantDomain?: string): VenueMatch {
+  if (r.source === "google") return { dish: r.dish, source: "google", photoName: r.photoName, caption: r.caption ?? null, confidence: r.confidence };
+  const cat = r.source === "tripadvisor" ? "tripadvisor" : photoSourceCategory(r.domain ?? hostOf(r.contextUrl), restaurantDomain);
+  return { dish: r.dish, source: cat, url: r.url, caption: r.caption ?? null, confidence: r.confidence };
+}
+
+// Zdjęcia z lokalu → dania. Dwa tryby (sterowane togglami z LABu, można niezależnie):
+//  • photoVenuePool: SZEROKA pula (Serper site:+portale + Google Places + TripAdvisor) → 1× vision. Nadzbiór Tier 0.
+//  • photoVenue: klasyczny Tier 0 (tylko Google + TA).
+// Gdy oba ON → wygrywa pula (jest nadzbiorem). Gdy oba OFF → pomijamy (zero kosztu).
+interface VenuePhotosArgs {
+  photoNames?: string[];
+  taPhotos?: VenueTaPhoto[];
+  dishes?: string[];
+  cuisine?: string;
+  model?: string;
+  certain?: boolean; // lokal pewny? (z /restaurant: nameVerified && !guessedByLocation)
+  name?: string;     // szeroka pula: nazwa lokalu (portale)
+  website?: string;  // szeroka pula: site:domena
+  city?: string;     // szeroka pula: zawężenie portali
+}
+
+/** Rdzeń dopasowania zdjęć „z lokalu" do dań — WSPÓLNY dla handlera /venue-photos i pipeline'u skanu.
+ *  Tryb szerokiej puli (Serper site:+portale + Google + TA → 1× vision) lub klasyczny Tier 0; cache + log.
+ *  Pusto, gdy oba kroki wyłączone. Rzuca przy błędzie (handler/pipeline łapią). */
+export async function runVenuePhotos(body: VenuePhotosArgs): Promise<{ matches: VenueMatch[]; usage: Usage; cached?: boolean }> {
+  const usePool = stepEnabled("photoVenuePool");
+  const useTier0 = stepEnabled("photoVenue");
+  if (!usePool && !useTier0) return { matches: [], usage: ZERO_USAGE };
+  {
     const photoNames = Array.isArray(body.photoNames) ? body.photoNames : [];
     const taPhotos = Array.isArray(body.taPhotos) ? body.taPhotos : [];
     const dishes = Array.isArray(body.dishes) ? body.dishes : [];
     const certain = body.certain !== false;
-    // CACHE Tier 0: ten sam lokal (te same zdjęcia) + te same dania + model → ten sam werdykt. Trafienie
-    // omija I pobranie zdjęć z Google ($), I vision ($) — klucz po HASHU zdjęć + dań (nie po bajtach skanu),
-    // więc trafia nawet przy ŚWIEŻYM zdjęciu menu tego samego lokalu. Trzymamy URL-e + werdykt, nie bajty.
-    const photoSig = createHash("sha256").update(JSON.stringify([photoNames, taPhotos.map((p) => p.url)])).digest("hex").slice(0, 32);
     const dishSig = createHash("sha256").update(dishes.join("\n")).digest("hex").slice(0, 32);
-    const vck = cacheKey("venue-match", photoSig, dishSig, body.cuisine ?? "", certain ? "c" : "u", venueModel);
+
+    // ---- TRYB: SZEROKA PULA Z LOKALU (Serper site:+portale + Google + TA → 1× vision) ----
+    if (usePool) {
+      const poolModel = cfgModel("venuePool"); // model wybierany z LABu (osobny krok)
+      let domain: string | undefined;
+      if (body.website?.trim()) {
+        try {
+          const host = new URL(body.website.trim()).hostname.replace(/^(www|m)\./, "").toLowerCase();
+          if (!VENUE_SOCIAL_HOSTS.has(host)) domain = host;
+        } catch { /* zły URL */ }
+      }
+      const name = body.name?.trim() || "";
+      // CACHE: tożsamość lokalu (nazwa/miasto/domena + zdjęcia Google/TA) + dania + kuchnia + pewność → werdykt.
+      // Re-otwarcie tego samego skanu = zero ponownego harvestu/vision. Model = metadana, nie klucz.
+      const venueId = createHash("sha256").update(JSON.stringify([name.toLowerCase(), (body.city || "").toLowerCase(), domain || "", photoNames, taPhotos.map((p) => p.url)])).digest("hex").slice(0, 32);
+      const pck = cacheKey("venue-match", "pool", venueId, dishSig, body.cuisine ?? "", certain ? "c" : "u");
+      const cachedPool = dishes.length ? await cacheGet<VenueMatch[]>("venue-match", pck, { op: "venue-photos" }) : null;
+      if (cachedPool) {
+        logEvent({ type: "ai", op: "venue-photos", model: poolModel, provider: apiTag(poolModel), inputTokens: 0, outputTokens: 0, costUsd: 0, data: { dishes: dishes.length, matches: cachedPool.length, cached: true, pool: true } });
+        return { matches: cachedPool, usage: ZERO_USAGE, cached: true };
+      }
+      // HARVEST puli zdjęć lokalu (Serper site:/portale) — CACHE per RESTAURACJA (nazwa/miasto/domena), NIEZALEŻNIE
+      // od dań. Dzięki temu PONOWNY skan tej samej knajpy (nawet z innym/edytowanym menu) NIE ciągnie Serpera od
+      // nowa — tylko dopasowanie wizją (`pck`) leci per zestaw dań. Pula jest restauracji, nie dań.
+      const harvestId = createHash("sha256").update(JSON.stringify(["h", name.toLowerCase(), (body.city || "").toLowerCase(), domain || ""])).digest("hex").slice(0, 32);
+      const harvestKey = cacheKey("venue-match", "harvest", harvestId);
+      let harvest = (name || domain) ? await cacheGet<Awaited<ReturnType<typeof harvestVenuePool>>>("venue-match", harvestKey, { op: "venue-photos" }) : null;
+      if (!harvest) {
+        harvest = (name || domain) ? await harvestVenuePool({ domain, name, city: body.city, perQuery: 12 }).catch(() => ({ photos: [] as PoolPhoto[], queries: [] })) : { photos: [] as PoolPhoto[], queries: [] };
+        if (name || domain) void cacheSet("venue-match", harvestKey, harvest, { model: poolModel });
+      }
+      const pool: PoolPhoto[] = [...harvest.photos];
+      for (const n of photoNames.slice(0, 10)) pool.push({ source: "google", photoName: n });
+      for (const p of taPhotos.slice(0, 12)) pool.push({ source: "tripadvisor", url: p.url, caption: p.caption });
+      const { results, usage } = await matchPoolToDishes({ pool, dishes, cuisine: body.cuisine, model: poolModel, certain });
+      const matches: VenueMatch[] = results.filter(poolMatchAccepted).map((r) => poolResultToMatch(r, domain));
+      if (dishes.length) void cacheSet("venue-match", pck, matches, { model: poolModel });
+      // ŚLAD do podglądu w logu sesji (ten sam kształt co dish-photos: `searched` = co zebrano per źródło,
+      // `cands` = werdykt per zdjęcie + DANIE). Render w labie pokoloruje ramki (akcept/odrzut) i pokaże ⭐ trafienia.
+      const urlsBySrc = (s: PoolPhoto["source"]) => harvest.photos.filter((p) => p.source === s).map((p) => p.url).filter((u): u is string => !!u);
+      const searched: { provider: string; query?: string; urls: string[] }[] = [];
+      if (urlsBySrc("site").length) searched.push({ provider: "Serper — strona www (site:)", query: harvest.queries.find((q) => q.label.includes("site"))?.query, urls: urlsBySrc("site").slice(0, 20) });
+      if (urlsBySrc("portal").length) searched.push({ provider: "Serper — portale/social", query: harvest.queries.find((q) => q.label.includes("portal"))?.query, urls: urlsBySrc("portal").slice(0, 20) });
+      if (taPhotos.length) searched.push({ provider: "TripAdvisor (profil lokalu)", urls: taPhotos.map((p) => p.url).filter(Boolean).slice(0, 12) });
+      if (photoNames.length) searched.push({ provider: `Google Places — ${Math.min(photoNames.length, 10)} zdj (podgląd tylko w apce)`, urls: [] });
+      // Werdykt per zdjęcie — klucz = URL (Google bez publicznego URL → widoczne tylko w „matches"). dish/ocena/akcept.
+      const cands = results.map((r) => ({ u: r.url || "", s: +r.confidence.toFixed(2), p: poolMatchAccepted(r), fin: poolMatchAccepted(r), fv: r.source === "site" || r.source === "google" || r.source === "tripadvisor", dish: r.dish || null, src: r.source })).filter((c) => c.u).slice(0, 60);
+      logEvent({ type: "ai", op: "venue-photos", model: poolModel, provider: apiTag(poolModel), inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd, data: { dishes: dishes.length, matches: matches.length, pool: true, poolSize: pool.length, analyzed: results.length, dishesCovered: new Set(matches.map((m) => m.dish)).size, poolCounts: { site: urlsBySrc("site").length, portal: urlsBySrc("portal").length, google: Math.min(photoNames.length, 10), tripadvisor: Math.min(taPhotos.length, 12) }, searched, cands } });
+      return { matches, usage };
+    }
+
+    // ---- TRYB KLASYCZNY: Tier 0 (Google + TA) ----
+    const venueModel = body.model?.trim() || "claude-sonnet-4-6";
+    // CACHE Tier 0: ten sam lokal (te same zdjęcia) + te same dania + model → ten sam werdykt. Trafienie
+    // omija I pobranie zdjęć z Google ($), I vision ($) — klucz po HASHU zdjęć + dań (nie po bajtach skanu).
+    const photoSig = createHash("sha256").update(JSON.stringify([photoNames, taPhotos.map((p) => p.url)])).digest("hex").slice(0, 32);
+    const vck = cacheKey("venue-match", photoSig, dishSig, body.cuisine ?? "", certain ? "c" : "u"); // MODEL → metadana, nie klucz
     const hasPhotos = photoNames.length > 0 || taPhotos.length > 0;
     const cachedMatches = hasPhotos ? await cacheGet<VenueMatch[]>("venue-match", vck, { op: "venue-photos" }) : null;
     if (cachedMatches) {
       logEvent({ type: "ai", op: "venue-photos", model: venueModel, provider: apiTag(venueModel), inputTokens: 0, outputTokens: 0, costUsd: 0, data: { dishes: dishes.length, matches: cachedMatches.length, cached: true } });
-      return c.json({ matches: cachedMatches, usage: ZERO_USAGE, cached: true });
+      return { matches: cachedMatches, usage: ZERO_USAGE, cached: true };
     }
     const { matches, usage } = await matchVenuePhotos({ photoNames, taPhotos, dishes, cuisine: body.cuisine, model: venueModel, certain });
-    if (hasPhotos) void cacheSet("venue-match", vck, matches);
+    if (hasPhotos) void cacheSet("venue-match", vck, matches, { model: venueModel });
     logEvent({
       type: "ai",
       op: "venue-photos",
@@ -987,7 +1318,16 @@ app.post("/venue-photos", async (c) => {
       costUsd: usage.costUsd,
       data: { dishes: dishes.length, matches: matches.length },
     });
-    return c.json({ matches, usage });
+    return { matches, usage };
+  }
+}
+
+app.post("/venue-photos", async (c) => {
+  if (await budgetExceeded()) return c.json({ error: budgetMsg() }, 402);
+  let body: VenuePhotosArgs;
+  try { body = (await c.req.json()) as VenuePhotosArgs; } catch { return c.json({ error: "Nieprawidłowy JSON." }, 400); }
+  try {
+    return c.json(await runVenuePhotos(body));
   } catch (e) {
     console.error("venue-photos error:", e);
     return c.json({ error: (e as Error).message, matches: [], usage: ZERO_USAGE }, 500);
@@ -1167,6 +1507,10 @@ app.post("/admin/runtime-config", async (c) => {
 // Zachowania apki sterowane z serwera (dawne „Koszty/Limity"): czy długie opisy generować od razu po skanie
 // i ile dań auto-dociągać. Apka czyta to na starcie i stosuje (sama decyduje, kiedy odpalić dociąganie).
 app.get("/app-config", (c) => c.json(getAppConfig()));
+
+// Podgląd EFEKTYWNEJ konfiguracji serwera dla apki (read-only): modele per-krok, włączone kroki, cache z
+// wyłączonym odczytem, zachowania apki. Apka pokazuje to w Ustawieniach — żeby było widać, co ustawiono w LAB.
+app.get("/server-config", (c) => c.json(getServerConfigView()));
 
 // Lab: nadaj nazwę instalacji.
 app.post("/install/name", async (c) => {

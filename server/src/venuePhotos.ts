@@ -54,7 +54,8 @@ export interface VenueTaPhoto {
 export interface VenueMatch {
   /** Dokładna nazwa pozycji z menu (oryginalna). */
   dish: string;
-  source: "google" | "tripadvisor";
+  /** Kategoria źródła zdjęcia. Tier 0: „google"/„tripadvisor". Szeroka pula: też „restaurant"/„web"/portale. */
+  source: string;
   /** Google: nazwa zasobu zdjęcia (klient buduje proxy URL). */
   photoName?: string;
   /** TripAdvisor: bezpośredni URL. */

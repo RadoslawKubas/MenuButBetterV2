@@ -15,8 +15,18 @@ export type DishCategory =
   | "other";
 
 export interface MenuItem {
+  /** Stabilne id RENDEROWE nadane przez serwer w pipeline (np. „s0-i3") = TOŻSAMOŚĆ slotu. Apka aktualizuje
+   *  pozycję po nim (enrich/zdjęcia/★), odporne na powtórzone nazwy. Undefined w starych torach. */
+  id?: string;
   original: string;
   translated: string;
+  /** Kanoniczna, angielska, kompletna nazwa (z kontekstem grupy) = TOŻSAMOŚĆ dania. Klucz merge enrich
+   *  (odporny na powtórzone `original` — np. dwa „Mango": lunch=mango curry vs drink=mango lemonade). */
+  full_name?: string;
+  /** Kanoniczny angielski „dodatkowy opis" z karty (istotne wyróżniki) — wejście enrich; "" gdy brak. */
+  full_description?: string;
+  /** Gramatura/pojemność z karty (np. „250 ml") — do wyświetlenia; "" gdy brak. */
+  portion?: string;
   /** Fragment oryginalnej karty (przepisana linijka/blok), z którego pochodzi danie. */
   source_text?: string;
   /** Opis NADRUKOWANY na karcie (oryginał), gdy był. */
@@ -95,6 +105,10 @@ export interface DishPhotoLite {
   fromVenueReason?: string;
   /** Źródłowy URL zdalny (gdy `url` to lokalny plik) — na wszelki wypadek. */
   remoteUrl?: string;
+  /** URL STRONY źródłowej (gdzie znaleziono zdjęcie) — klikalne „źródło" w podglądzie. */
+  contextUrl?: string;
+  /** Domena źródła (host) — nazwa strony przy zdjęciu. */
+  domain?: string;
   /** Ocena vision 0..1 (dopasowanie do dania) — pokazywana na podglądzie. */
   score?: number;
   /** Odrzucone (poniżej progu jakości) — pokazywane tylko przy „bierz wszystko", oznaczone. */
@@ -191,7 +205,13 @@ export interface RestaurantInfo {
   mapsUri: string | null;
   priceLevel: string | null;
   location: GeoPoint | null;
-  country: string | null;
+  country: string | null; // lokalizowane — do wyświetlania
+  /** Kod ISO kraju (np. „ES"). */
+  countryCode?: string | null;
+  /** Kraj po angielsku (kanoniczny, do klucza cache opisu — stabilny, język-niezależny). */
+  countryEn?: string | null;
+  /** Region/województwo/stan (lokalizowane) — kontekst regionalny opisu dania. */
+  region?: string | null;
   city: string | null;
   photoNames: string[];
   /** Lokalne `file://` zdjęć Google (zrównane z `photoNames`) — po zcache'owaniu. */
