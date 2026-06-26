@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
 import { downscaleForModel, type PreparedImage } from "./image";
+import { recognizeOcr, type OcrData } from "./menuRegion";
 import { getInstallId } from "./api";
 import { listScans, saveScan } from "./storage";
 import { DEFAULT_MODELS, type GeoPoint, type LocationSource, type Menu, type ModelId, type ModelRole, type Usage } from "./types";
@@ -38,6 +39,8 @@ export interface CaptureImage {
   mediaType: "image/jpeg";
   /** Współrzędne z EXIF tego zdjęcia (jeśli były) — kontekst, co dało lokalizację. */
   exifLocation?: GeoPoint;
+  /** SUROWY wynik on-device OCR (ML Kit) tego zdjęcia — do eksperymentów z algorytmami w LABie bez ponownego OCR. */
+  ocr?: OcrData;
 }
 
 /** Migawka jednego skanu — komplet danych potrzebny do ponownego wysłania. */
@@ -185,6 +188,28 @@ export function deleteScanImages(photos: { path: string }[]): void {
   }
 }
 
+/** JEDNORAZOWO: policz on-device OCR dla KAŻDEGO zdjęcia migawek, których jeszcze nie ma, i zapisz do sampla.
+ *  OCR liczony POZA lockiem (wolny), zapis race-safe (serializowany re-load + apply). Wynik leci na serwer przy
+ *  kolejnym udostępnieniu/uploadzie (eksport niesie `ocr`). onProgress(done,total) do paska postępu. */
+export async function ocrAllCaptures(onProgress?: (done: number, total: number) => void): Promise<{ done: number; total: number }> {
+  const all = await listCaptures();
+  const targets: { id: string; idx: number; path: string }[] = [];
+  for (const c of all) for (let i = 0; i < c.images.length; i++) if (!c.images[i]!.ocr) targets.push({ id: c.id, idx: i, path: c.images[i]!.path });
+  const results: { id: string; idx: number; ocr: OcrData }[] = [];
+  let n = 0;
+  for (const t of targets) {
+    const f = fileFor(t.path);
+    if (f) { try { const ocr = await recognizeOcr(f.uri); if (ocr) results.push({ id: t.id, idx: t.idx, ocr }); } catch { /* pomiń zdjęcie */ } }
+    onProgress?.(++n, targets.length);
+  }
+  await serialize(async () => {
+    const fresh = await listCaptures();
+    for (const r of results) { const im = fresh.find((x) => x.id === r.id)?.images[r.idx]; if (im) im.ocr = r.ocr; }
+    await AsyncStorage.setItem(KEY, JSON.stringify(fresh));
+  });
+  return { done: results.length, total: targets.length };
+}
+
 export async function saveCapture(input: {
   images: PreparedImage[];
   restaurantHint?: string;
@@ -205,13 +230,13 @@ export async function saveCapture(input: {
 
     const id = newId();
     const images: CaptureImage[] = [];
-    input.images.forEach((img, i) => {
-      try {
-        images.push(persistImage(id, i, img));
-      } catch {
-        // nie udało się skopiować pojedynczego pliku — pomiń, reszta migawki i tak się przyda
-      }
-    });
+    for (let i = 0; i < input.images.length; i++) {
+      let im: CaptureImage;
+      try { im = persistImage(id, i, input.images[i]!); } catch { continue; } // pojedynczy plik się nie skopiował — pomiń
+      // capture-time OCR: KAŻDE nowe zdjęcie od razu z surowym wynikiem OCR (best-effort; leci na serwer w eksporcie).
+      try { const ocr = await recognizeOcr(new File(DIR, `${id}-${i}.jpg`).uri); if (ocr) im.ocr = ocr; } catch { /* OCR nieobowiązkowe */ }
+      images.push(im);
+    }
     const capture: ScanCapture = {
       id,
       createdAt: Date.now(),
@@ -335,7 +360,7 @@ export async function captureImageBase64(im: CaptureImage, crop = false): Promis
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
   /** GUID instancji apki, z której pochodzi eksport — lab rozpoznaje źródło migawki z pliku. */
   installId?: string;
-  images: { file: string; mediaType: string; exifLocation?: GeoPoint }[];
+  images: { file: string; mediaType: string; exifLocation?: GeoPoint; ocr?: OcrData }[];
   /** WYNIK skanu (z historii): ustawienia użyte do WYNIKU + przetłumaczone menu + lokal + koszt. */
   result?: {
     targetLang?: string;
@@ -378,7 +403,7 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
       if (!base64) continue;
       const fname = `${c.id}-${i}.jpg`;
       imagesDir.file(fname, base64, { base64: true });
-      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation });
+      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr });
     }
     const { images: _drop, ...meta } = c;
     const scan = c.scanId ? scanById.get(c.scanId) : undefined;
@@ -437,7 +462,7 @@ export async function buildCaptureUpload(captureId: string): Promise<{ hash: str
     const base64 = await captureImageBase64(im);
     if (!base64) continue;
     imagesDir.file(`${c.id}-${i}.jpg`, base64, { base64: true });
-    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation });
+    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr });
   }
   const { images: _drop, ...metaCap } = c;
   const result: CaptureExportEntry["result"] = scan
@@ -512,7 +537,7 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
       if (dest.exists) dest.delete();
       dest.create();
       dest.write(b64, { encoding: "base64" });
-      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation });
+      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation, ocr: im.ocr });
     }
     if (!images.length) continue;
     all.unshift({

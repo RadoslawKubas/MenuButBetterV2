@@ -18,6 +18,7 @@ import {
   capturesDiskBytes,
   buildCaptureUpload,
   importCapturesFromZip,
+  ocrAllCaptures,
   type ScanCapture,
 } from "./captures";
 import { uploadSample, fetchSampleStatus, reportError, fetchAppServerSamples, downloadServerSampleZip, deleteServerSample } from "./api";
@@ -95,6 +96,7 @@ export function CapturesView({
   // Co teraz pakujemy: "all" | id konkretnej migawki | null. Blokuje pozostałe przyciski.
   const [exporting, setExporting] = useState<string | null>(null);
   const [preview, setPreview] = useState<LightboxState | null>(null);
+  const [ocrProg, setOcrProg] = useState<{ done: number; total: number } | null>(null); // postęp batcha OCR
   // Stan migawek na serwerze (po hashu/sygnaturze): na serwerze? zaimportowane do labu?
   const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
   const [uploading, setUploading] = useState<string | null>(null);
@@ -125,6 +127,21 @@ export function CapturesView({
       await load();
       Alert.alert("Import z serwera", `Dodano ${added}, zaktualizowano ${updated}${failed ? `, błędów ${failed}` : ""}.`);
     } finally { setImporting(false); }
+  }
+
+  // JEDNORAZOWO policz OCR dla wszystkich zdjęć migawek (on-device) i zapisz; potem wyślij sample na serwer.
+  async function runOcrAll() {
+    if (ocrProg) return;
+    setOcrProg({ done: 0, total: 0 });
+    try {
+      const r = await ocrAllCaptures((done, total) => setOcrProg({ done, total }));
+      await load();
+      Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma teraz dane OCR. Wyślij/udostępnij sample na serwer, by je zsyncować.`);
+    } catch (e) {
+      reportError((e as Error)?.message ?? String(e), { label: "ocr-all" });
+    } finally {
+      setOcrProg(null);
+    }
   }
 
   async function load() {
@@ -275,6 +292,12 @@ export function CapturesView({
                 {exporting === "all" ? "Pakuję ZIP…" : `Wyeksportuj wszystkie (${captures.length}) do ZIP`}
               </Text>
             </Pressable>
+            <Pressable style={[styles.export, !!ocrProg && styles.disabled]} disabled={!!ocrProg} onPress={runOcrAll}>
+              <Text style={styles.exportText}>
+                <Icon name={ocrProg ? "hourglass" : "searchAlt"} size={14} color={colors.accent} />{" "}
+                {ocrProg ? `Liczę OCR… ${ocrProg.done}/${ocrProg.total}` : "Policz OCR dla wszystkich (on-device)"}
+              </Text>
+            </Pressable>
             <View style={styles.toolbar}>
               <Text style={styles.toolbarInfo}>
                 {captures.length} migawek · {fmtBytes(capturesDiskBytes(captures))} na dysku
@@ -340,7 +363,12 @@ export function CapturesView({
                           })
                         }
                       >
-                        <Image source={{ uri: resolveCaptureUri(im.path) }} style={styles.thumb} />
+                        <View>
+                          <Image source={{ uri: resolveCaptureUri(im.path) }} style={styles.thumb} />
+                          {im.ocr ? (
+                            <View style={styles.ocrBadge}><Text style={styles.ocrBadgeText}>OCR {im.ocr.blocks.length}</Text></View>
+                          ) : null}
+                        </View>
                       </Pressable>
                     ))}
                   </ScrollView>
@@ -490,6 +518,8 @@ const styles = StyleSheet.create({
   sampleDim: { fontSize: 11, color: colors.muted },
   thumbRow: { flexDirection: "row", marginTop: 10 },
   thumb: { width: 64, height: 80, borderRadius: 8, marginRight: 8, backgroundColor: colors.badgeBg },
+  ocrBadge: { position: "absolute", top: 3, left: 3, backgroundColor: "rgba(74,222,128,0.9)", borderRadius: 5, paddingHorizontal: 4, paddingVertical: 1 },
+  ocrBadgeText: { color: "#06281a", fontSize: 9, fontWeight: "800" },
   metaLine: { fontSize: 12, color: colors.text, marginTop: 4 },
   runs: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.badgeBg, paddingTop: 8 },
   runsTitle: { fontSize: 12, fontWeight: "800", color: colors.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 },

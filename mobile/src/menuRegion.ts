@@ -45,6 +45,27 @@ export function clusterGroups(region: MenuRegion, mult: number): MenuBox[] {
   return clusterPx(fr, Math.max(1, region.medH * mult)).map((g) => ({ x: g.left / W, y: g.top / H, w: g.width / W, h: g.height / H }));
 }
 
+// SUROWY wynik OCR per zdjęcie — zapisywany do sampla, by eksperymentować z algorytmami w LABie (na komputerze),
+// bez ponownego OCR na telefonie. Współrzędne ZNORMALIZOWANE 0..1 (+ w/h w px do ewentualnego przeliczenia).
+export type OcrLine = { frame: MenuBox; corners: Pt[]; text: string };
+export type OcrBlock = { frame: MenuBox; corners: Pt[]; text: string; lines: OcrLine[] };
+export type OcrData = { w: number; h: number; blocks: OcrBlock[] };
+
+/** Surowy OCR on-device (ML Kit) → bloki/linie z ramkami + cornerPoints + tekstem (znormalizowane). null = brak. */
+export async function recognizeOcr(uri: string): Promise<OcrData | null> {
+  const res = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
+  const { width, height } = await imageSize(uri);
+  if (!width || !height) return null;
+  const fr = (f?: { left: number; top: number; width: number; height: number } | null): MenuBox =>
+    f ? { x: f.left / width, y: f.top / height, w: f.width / width, h: f.height / height } : { x: 0, y: 0, w: 0, h: 0 };
+  const cp = (c?: readonly { x: number; y: number }[] | null): Pt[] => (c ?? []).map((p) => ({ x: p.x / width, y: p.y / height }));
+  const blocks: OcrBlock[] = res.blocks.map((b) => ({
+    frame: fr(b.frame), corners: cp(b.cornerPoints), text: b.text,
+    lines: b.lines.map((l) => ({ frame: fr(l.frame), corners: cp(l.cornerPoints), text: l.text })),
+  }));
+  return { w: width, h: height, blocks };
+}
+
 /** OCR on-device → osiowy prostokąt + perspektywiczny czworokąt menu + proponowana siatka. null = brak tekstu. */
 export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> {
   const res = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
