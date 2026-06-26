@@ -48,20 +48,32 @@ export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> 
   const bx = Math.max(0, (minL - padX) / width), by = Math.max(0, (minT - padY) / height);
   const box: MenuBox = { x: bx, y: by, w: Math.min(1 - bx, (maxR + padX) / width - bx), h: Math.min(1 - by, (maxB + padY) / height - by) };
 
-  // quad: 4 skrajne narożniki chmury punktów (klasyka: min/max sumy i różnicy współrzędnych). Odporne na skos.
-  let tl = pts[0]!, br = pts[0]!, tr = pts[0]!, bl = pts[0]!;
-  for (const p of pts) {
-    if (p.x + p.y < tl.x + tl.y) tl = p;
-    if (p.x + p.y > br.x + br.y) br = p;
-    if (p.x - p.y > tr.x - tr.y) tr = p;
-    if (p.x - p.y < bl.x - bl.y) bl = p;
+  // quad: ORIENTED BOUNDING BOX — odporny czworokąt idący za SKOSEM menu. NIE wymaga tekstu w rogach (menu często
+  // ma puste rogi / wyśrodkowany tytuł), więc nie „ucieka" jak metoda 4 skrajnych punktów. Kąt = MEDIANA kątów
+  // górnych krawędzi linii (cornerPoints[0]→[1]) — odporna na pojedyncze przekrzywione linie. Obracamy punkty o
+  // −kąt wokół centroidu, liczymy bbox (z lekkim przycięciem 1% outlierów), rogi obracamy z powrotem o +kąt.
+  const angles: number[] = [];
+  for (const b of res.blocks) for (const line of b.lines) {
+    const cp = line.cornerPoints;
+    if (cp && cp.length >= 2) { const a = Math.atan2(cp[1]!.y - cp[0]!.y, cp[1]!.x - cp[0]!.x); if (Number.isFinite(a)) angles.push(a); }
   }
+  const angle = angles.length ? angles.slice().sort((a, b) => a - b)[Math.floor(angles.length / 2)]! : 0;
+  let cx = 0, cy = 0;
+  for (const p of pts) { cx += p.x; cy += p.y; }
+  cx /= pts.length; cy /= pts.length;
+  const rot = (p: Pt, ang: number): Pt => { const c = Math.cos(ang), s = Math.sin(ang), dx = p.x - cx, dy = p.y - cy; return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c }; };
+  const rpts = pts.map((p) => rot(p, -angle));
+  const xs = rpts.map((p) => p.x).sort((a, b) => a - b);
+  const ys = rpts.map((p) => p.y).sort((a, b) => a - b);
+  const at = (arr: number[], t: number) => arr[Math.min(arr.length - 1, Math.max(0, Math.round((arr.length - 1) * t)))]!;
+  const minX = at(xs, 0.01), maxX = at(xs, 0.99), minY = at(ys, 0.01), maxY = at(ys, 0.99); // przytnij 1% skrajnych
+  const tlP = rot({ x: minX, y: minY }, angle), trP = rot({ x: maxX, y: minY }, angle), brP = rot({ x: maxX, y: maxY }, angle), blP = rot({ x: minX, y: maxY }, angle);
   const norm = (p: Pt): Pt => ({ x: p.x / width, y: p.y / height });
-  const quad: MenuQuad = { tl: norm(tl), tr: norm(tr), br: norm(br), bl: norm(bl) };
+  const quad: MenuQuad = { tl: norm(tlP), tr: norm(trP), br: norm(brP), bl: norm(blP) };
 
-  // Siatka: ile kafelków, by każdy ≤ sufit. Z DŁUGOŚCI krawędzi czworokąta (w pikselach), bierzemy dłuższą parę.
-  const wPx = Math.max(dist(tl, tr), dist(bl, br));
-  const hPx = Math.max(dist(tl, bl), dist(tr, br));
+  // Siatka: ile kafelków, by każdy ≤ sufit. Z DŁUGOŚCI krawędzi OBB (w pikselach), bierzemy dłuższą parę.
+  const wPx = Math.max(dist(tlP, trP), dist(blP, brP));
+  const hPx = Math.max(dist(tlP, blP), dist(trP, brP));
   const cols = Math.max(1, Math.ceil(wPx / TILE_MAX_PX));
   const rows = Math.max(1, Math.ceil(hPx / TILE_MAX_PX));
 
