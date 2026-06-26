@@ -1,6 +1,6 @@
 // Pełnoekranowy podgląd zdjęć: swipe lewo/prawo między zdjęciami dania, swipe w GÓRĘ
 // zamyka galerię. Na dole pokazujemy, SKĄD pochodzi aktualnie oglądane zdjęcie.
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -48,6 +48,29 @@ export interface LightboxState {
 function sourceHost(p: LightboxPhoto): string {
   if (p.domain) return p.domain.replace(/^www\./, "");
   try { return new URL(p.contextUrl!).host.replace(/^www\./, ""); } catch { return ""; }
+}
+
+// Cienka, obrócona kreska między dwoma punktami — rysuje perspektywiczną siatkę BEZ SVG (linie są proste,
+// więc każdy segment to obrócony prostokąt). `bold` = krawędź czworokąta menu; cienka = wewnętrzny podział.
+function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number; y: number }; bold?: boolean }) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const th = bold ? 2.5 : 1.5;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: (a.x + b.x) / 2 - len / 2,
+        top: (a.y + b.y) / 2 - th / 2,
+        width: len,
+        height: th,
+        backgroundColor: bold ? "rgba(251,191,36,0.95)" : "rgba(251,191,36,0.5)",
+        transform: [{ rotate: `${angle}deg` }],
+      }}
+    />
+  );
 }
 
 export function Lightbox({
@@ -153,14 +176,29 @@ export function Lightbox({
           }}
           renderItem={({ item, index }) => {
             const boxW = width * 0.92, boxH = height * 0.72;
-            // Prostokąt menu (OCR) tylko na AKTUALNIE oglądanym zdjęciu; znormalizowany box mapujemy na
-            // wyświetlany (resizeMode contain) obraz z uwzględnieniem letterboxu.
-            let rect: { left: number; top: number; width: number; height: number } | null = null;
+            // Nakładka (OCR) tylko na AKTUALNIE oglądanym zdjęciu; znormalizowane punkty mapujemy na wyświetlany
+            // (resizeMode contain) obraz z uwzględnieniem letterboxu.
+            let overlay: ReactNode = null;
             if (detected && index === current) {
               const scale = Math.min(boxW / detected.imgW, boxH / detected.imgH);
               const dW = detected.imgW * scale, dH = detected.imgH * scale;
               const offX = (boxW - dW) / 2, offY = (boxH - dH) / 2;
-              rect = { left: offX + detected.box.x * dW, top: offY + detected.box.y * dH, width: detected.box.w * dW, height: detected.box.h * dH };
+              const toDisp = (p: { x: number; y: number }) => ({ x: offX + p.x * dW, y: offY + p.y * dH });
+              const lerp = (A: { x: number; y: number }, B: { x: number; y: number }, t: number) => ({ x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t });
+              // Osiowy crop (zielony) — to, co poszłoby jako proste przycięcie.
+              const rect = { left: offX + detected.box.x * dW, top: offY + detected.box.y * dH, width: detected.box.w * dW, height: detected.box.h * dH };
+              // Perspektywiczny czworokąt + siatka kafelków (bursztynowa): krawędzie pogrubione, podziały cienkie.
+              // Linie są PROSTYMI segmentami między punktami interpolowanymi po krawędziach → rombowe kafelki przy skosie.
+              const TL = toDisp(detected.quad.tl), TR = toDisp(detected.quad.tr), BR = toDisp(detected.quad.br), BL = toDisp(detected.quad.bl);
+              const lines: ReactNode[] = [];
+              for (let i = 0; i <= detected.cols; i++) { const t = i / detected.cols; lines.push(<GridLine key={`v${i}`} a={lerp(TL, TR, t)} b={lerp(BL, BR, t)} bold={i === 0 || i === detected.cols} />); }
+              for (let j = 0; j <= detected.rows; j++) { const t = j / detected.rows; lines.push(<GridLine key={`h${j}`} a={lerp(TL, BL, t)} b={lerp(TR, BR, t)} bold={j === 0 || j === detected.rows} />); }
+              overlay = (
+                <>
+                  <View pointerEvents="none" style={[styles.menuBox, rect]} />
+                  {lines}
+                </>
+              );
             }
             return (
               <Animated.View
@@ -174,7 +212,7 @@ export function Lightbox({
                       style={{ width: boxW, height: boxH }}
                       resizeMode="contain"
                     />
-                    {rect ? <View pointerEvents="none" style={[styles.menuBox, rect]} /> : null}
+                    {overlay}
                   </View>
                 </Pressable>
               </Animated.View>
@@ -193,7 +231,7 @@ export function Lightbox({
               <ActivityIndicator color="#fff" size="small" />
             ) : (
               <Text style={styles.detectBtnText}>
-                <Icon name="searchAlt" /> {detected ? `menu: ${detected.blocks} bloków · ponów` : "Zaznacz menu"}
+                <Icon name="searchAlt" /> {detected ? `${detected.blocks} bl · ${detected.cols}×${detected.rows} kafl · ponów` : "Zaznacz menu"}
               </Text>
             )}
           </Pressable>

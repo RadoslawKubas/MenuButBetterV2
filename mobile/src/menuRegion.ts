@@ -1,37 +1,69 @@
-// ON-DEVICE wykrywanie prostokąta MENU (lista dań) — lokalne AI telefonu, ZERO chmury. Używa ML Kit Text
-// Recognition (OCR Google na urządzeniu): rozpoznaje bloki tekstu i ich ramki, a my składamy z nich jeden
-// prostokąt obejmujący cały tekst (karta dań = gęsty tekst). Wynik znormalizowany 0..1 → rysowany na podglądzie.
-// To NA RAZIE TYLKO podgląd (zaznaczenie graficzne); fizyczny crop do modelu dorobimy, jeśli ramki będą dobre.
+// ON-DEVICE analiza układu MENU — lokalne AI telefonu (ML Kit Text Recognition, OCR Google, ZERO chmury).
+// Z bloków/linii tekstu wyciągamy DWIE rzeczy:
+//  • `box`  — prostokąt OSIOWY obejmujący tekst (crop „do modelu": mniej marginesów = lepsza rozdzielczość).
+//  • `quad` — CZWOROKĄT perspektywiczny (z `cornerPoints` linii) → uwzględnia krzywą perspektywę (menu pstryknięte
+//    pod kątem to romb/trapez, nie prostokąt). Na nim rysujemy siatkę kafelków (rombów), nie prostą kratę.
+//  • `cols`/`rows` — proponowana siatka kafelków, tak by każdy kafelek mieścił się w suficie modelu (duże menu‑ściany
+//    → więcej kafelków → każdy fragment w pełnej rozdzielczości). TEST: na razie tylko podgląd, bez cięcia/wysyłki.
 import TextRecognition, { TextRecognitionScript } from "@react-native-ml-kit/text-recognition";
 import { Image } from "react-native";
 
+export type Pt = { x: number; y: number }; // znormalizowane 0..1 względem zdjęcia
 export type MenuBox = { x: number; y: number; w: number; h: number };
-export type MenuRegion = { box: MenuBox; imgW: number; imgH: number; blocks: number };
+export type MenuQuad = { tl: Pt; tr: Pt; br: Pt; bl: Pt };
+export type MenuRegion = { box: MenuBox; quad: MenuQuad; cols: number; rows: number; imgW: number; imgH: number; blocks: number };
+
+// Sufit dłuższej krawędzi kafelka W PIKSELACH ORYGINAŁU — powyżej model i tak downscale'uje (tekst się robi
+// nieczytelny). Trochę poniżej realnego sufitu vision (~1568), by zostawić zapas na zakładkę między kafelkami.
+const TILE_MAX_PX = 1500;
 
 function imageSize(uri: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => Image.getSize(uri, (width, height) => resolve({ width, height }), reject));
 }
+const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
-/** OCR on-device → prostokąt obejmujący wykryty tekst (lista dań), znormalizowany 0..1. null = nie znaleziono tekstu. */
+/** OCR on-device → osiowy prostokąt + perspektywiczny czworokąt menu + proponowana siatka. null = brak tekstu. */
 export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> {
   const res = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
-  const frames = res.blocks.map((b) => b.frame).filter((f): f is NonNullable<typeof f> => !!f && f.width > 0 && f.height > 0);
-  if (!frames.length) return null;
   const { width, height } = await imageSize(uri);
   if (!width || !height) return null;
-  // Union ramek wszystkich bloków tekstu = obszar menu.
-  let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
-  for (const f of frames) {
-    minL = Math.min(minL, f.left);
-    minT = Math.min(minT, f.top);
-    maxR = Math.max(maxR, f.left + f.width);
-    maxB = Math.max(maxB, f.top + f.height);
+
+  // Zbierz ramki (osiowe) + narożniki SKOŚNE wszystkich linii (cornerPoints niosą perspektywę; brak → rogi ramki).
+  const frames: { left: number; top: number; width: number; height: number }[] = [];
+  const pts: Pt[] = []; // wszystkie narożniki tekstu, w pikselach
+  let blocks = 0;
+  for (const b of res.blocks) {
+    if (b.frame && b.frame.width > 0 && b.frame.height > 0) { frames.push(b.frame); blocks++; }
+    for (const line of b.lines) {
+      if (line.cornerPoints) for (const p of line.cornerPoints) pts.push({ x: p.x, y: p.y });
+      else if (line.frame) { const f = line.frame; pts.push({ x: f.left, y: f.top }, { x: f.left + f.width, y: f.top }, { x: f.left + f.width, y: f.top + f.height }, { x: f.left, y: f.top + f.height }); }
+    }
   }
-  // Mały margines wokół tekstu + clamp do 0..1.
+  if (!frames.length || !pts.length) return null;
+
+  // box: union ramek osiowych + mały margines (crop).
+  let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
+  for (const f of frames) { minL = Math.min(minL, f.left); minT = Math.min(minT, f.top); maxR = Math.max(maxR, f.left + f.width); maxB = Math.max(maxB, f.top + f.height); }
   const padX = width * 0.015, padY = height * 0.01;
-  const x = Math.max(0, (minL - padX) / width);
-  const y = Math.max(0, (minT - padY) / height);
-  const w = Math.min(1 - x, (maxR + padX) / width - x);
-  const h = Math.min(1 - y, (maxB + padY) / height - y);
-  return { box: { x, y, w, h }, imgW: width, imgH: height, blocks: frames.length };
+  const bx = Math.max(0, (minL - padX) / width), by = Math.max(0, (minT - padY) / height);
+  const box: MenuBox = { x: bx, y: by, w: Math.min(1 - bx, (maxR + padX) / width - bx), h: Math.min(1 - by, (maxB + padY) / height - by) };
+
+  // quad: 4 skrajne narożniki chmury punktów (klasyka: min/max sumy i różnicy współrzędnych). Odporne na skos.
+  let tl = pts[0]!, br = pts[0]!, tr = pts[0]!, bl = pts[0]!;
+  for (const p of pts) {
+    if (p.x + p.y < tl.x + tl.y) tl = p;
+    if (p.x + p.y > br.x + br.y) br = p;
+    if (p.x - p.y > tr.x - tr.y) tr = p;
+    if (p.x - p.y < bl.x - bl.y) bl = p;
+  }
+  const norm = (p: Pt): Pt => ({ x: p.x / width, y: p.y / height });
+  const quad: MenuQuad = { tl: norm(tl), tr: norm(tr), br: norm(br), bl: norm(bl) };
+
+  // Siatka: ile kafelków, by każdy ≤ sufit. Z DŁUGOŚCI krawędzi czworokąta (w pikselach), bierzemy dłuższą parę.
+  const wPx = Math.max(dist(tl, tr), dist(bl, br));
+  const hPx = Math.max(dist(tl, bl), dist(tr, br));
+  const cols = Math.max(1, Math.ceil(wPx / TILE_MAX_PX));
+  const rows = Math.max(1, Math.ceil(hPx / TILE_MAX_PX));
+
+  return { box, quad, cols, rows, imgW: width, imgH: height, blocks };
 }
