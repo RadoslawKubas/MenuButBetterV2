@@ -11,7 +11,7 @@ import { Image } from "react-native";
 export type Pt = { x: number; y: number }; // znormalizowane 0..1 względem zdjęcia
 export type MenuBox = { x: number; y: number; w: number; h: number };
 export type MenuQuad = { tl: Pt; tr: Pt; br: Pt; bl: Pt };
-export type MenuRegion = { box: MenuBox; quad: MenuQuad; cols: number; rows: number; imgW: number; imgH: number; blocks: number };
+export type MenuRegion = { box: MenuBox; quad: MenuQuad; frames: MenuBox[]; cols: number; rows: number; imgW: number; imgH: number; blocks: number };
 
 // Sufit dłuższej krawędzi kafelka W PIKSELACH ORYGINAŁU — powyżej model i tak downscale'uje (tekst się robi
 // nieczytelny). Trochę poniżej realnego sufitu vision (~1568), by zostawić zapas na zakładkę między kafelkami.
@@ -77,5 +77,7 @@ export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> 
   const cols = Math.max(1, Math.ceil(wPx / TILE_MAX_PX));
   const rows = Math.max(1, Math.ceil(hPx / TILE_MAX_PX));
 
-  return { box, quad, cols, rows, imgW: width, imgH: height, blocks };
+  // Indywidualne ramki bloków OCR (znormalizowane) — do podglądu „co dostajemy" (niebieskie).
+  const framesN: MenuBox[] = frames.map((f) => ({ x: f.left / width, y: f.top / height, w: f.width / width, h: f.height / height }));
+  return { box, quad, frames: framesN, cols, rows, imgW: width, imgH: height, blocks };
 }
