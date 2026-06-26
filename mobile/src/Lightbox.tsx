@@ -84,6 +84,7 @@ export function Lightbox({
   const [current, setCurrent] = useState(0);
   const [detected, setDetected] = useState<MenuRegion | null>(null); // prostokąt menu (OCR) dla AKTUALNEGO zdjęcia
   const [detecting, setDetecting] = useState(false);
+  const [detectMsg, setDetectMsg] = useState<string | null>(null); // WIDOCZNY status/błąd OCR (zamiast cichego połykania)
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
   const openedRef = useRef<LightboxState | null>(null);
@@ -109,7 +110,7 @@ export function Lightbox({
 
   // Ustaw stronę startową przy otwarciu.
   useEffect(() => {
-    if (state) { setCurrent(Math.min(state.index, state.photos.length - 1)); setDetected(null); }
+    if (state) { setCurrent(Math.min(state.index, state.photos.length - 1)); setDetected(null); setDetectMsg(null); }
   }, [state]);
 
   // Gest pionowy w górę → zamknij. Poziome przesuwanie zostawiamy FlatList (paginacja).
@@ -150,12 +151,14 @@ export function Lightbox({
   // On-device OCR (ML Kit) → prostokąt menu dla AKTUALNEGO zdjęcia. TYLKO podgląd (nie tnie fizycznie).
   const runDetect = () => {
     const uri = resolveCachedUri(cur.url);
-    if (!uri || detecting) return;
+    if (!uri) { setDetectMsg("brak URI zdjęcia"); return; }
+    if (detecting) return;
     setDetecting(true);
     setDetected(null);
+    setDetectMsg(null);
     detectMenuRegion(uri)
-      .then((r) => setDetected(r))
-      .catch(() => setDetected(null))
+      .then((r) => { setDetected(r); setDetectMsg(r ? null : "OCR: nie wykryto tekstu na zdjęciu"); })
+      .catch((e: unknown) => { setDetected(null); setDetectMsg("OCR błąd: " + ((e as Error)?.message ?? String(e))); })
       .finally(() => setDetecting(false));
   };
 
@@ -172,7 +175,7 @@ export function Lightbox({
           keyExtractor={(_, i) => String(i)}
           onMomentumScrollEnd={(e) => {
             setCurrent(Math.round(e.nativeEvent.contentOffset.x / width));
-            setDetected(null); // prostokąt był dla poprzedniego zdjęcia — wyczyść przy zmianie strony
+            setDetected(null); setDetectMsg(null); // overlay był dla poprzedniego zdjęcia — wyczyść przy zmianie strony
           }}
           renderItem={({ item, index }) => {
             const boxW = width * 0.92, boxH = height * 0.72;
@@ -237,6 +240,13 @@ export function Lightbox({
           </Pressable>
         ) : null}
 
+        {/* WIDOCZNY status/błąd OCR — żeby porażka nie była niewidzialna („nic się nie dzieje"). */}
+        {detectMsg ? (
+          <View style={styles.detectMsg} pointerEvents="none">
+            <Text style={styles.detectMsgText}>{detectMsg}</Text>
+          </View>
+        ) : null}
+
         {/* Skąd jest aktualnie oglądane zdjęcie. */}
         <View style={styles.infoBar} pointerEvents="box-none">
           {cur.note ? <Text style={styles.peekNote} numberOfLines={2}>{cur.note}</Text> : null}
@@ -289,6 +299,8 @@ const styles = StyleSheet.create({
   closeText: { color: "#fff", fontSize: 26, fontWeight: "700" },
   detectBtn: { position: "absolute", top: 50, left: 20, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 999, paddingVertical: 8, paddingHorizontal: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", minWidth: 130, minHeight: 34, alignItems: "center", justifyContent: "center" },
   detectBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  detectMsg: { position: "absolute", top: 92, left: 20, right: 20, backgroundColor: "rgba(180,40,40,0.94)", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
+  detectMsgText: { color: "#fff", fontSize: 12, fontWeight: "700" },
   menuBox: { position: "absolute", borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 },
   infoBar: { position: "absolute", bottom: 36, alignSelf: "center", alignItems: "center", paddingHorizontal: 24 },
   peekNote: { color: "#fff", fontSize: 13, fontWeight: "700", marginBottom: 8, maxWidth: 320, textAlign: "center" },
