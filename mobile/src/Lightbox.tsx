@@ -1,6 +1,6 @@
 // Pełnoekranowy podgląd zdjęć: swipe lewo/prawo między zdjęciami dania, swipe w GÓRĘ
 // zamyka galerię. Na dole pokazujemy, SKĄD pochodzi aktualnie oglądane zdjęcie.
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -19,6 +19,7 @@ import { Icon } from "./Icon";
 import { sourceMeta } from "./photoSource";
 import { resolveCachedUri } from "./imageCache";
 import { detectMenuRegion, type MenuRegion } from "./menuRegion";
+import { MenuRegionOverlay } from "./MenuRegionOverlay";
 
 export interface LightboxPhoto {
   url: string;
@@ -50,29 +51,6 @@ function sourceHost(p: LightboxPhoto): string {
   try { return new URL(p.contextUrl!).host.replace(/^www\./, ""); } catch { return ""; }
 }
 
-// Cienka, obrócona kreska między dwoma punktami — rysuje perspektywiczną siatkę BEZ SVG (linie są proste,
-// więc każdy segment to obrócony prostokąt). `bold` = krawędź czworokąta menu; cienka = wewnętrzny podział.
-function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number; y: number }; bold?: boolean }) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.hypot(dx, dy);
-  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-  const th = bold ? 2.5 : 1.5;
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: "absolute",
-        left: (a.x + b.x) / 2 - len / 2,
-        top: (a.y + b.y) / 2 - th / 2,
-        width: len,
-        height: th,
-        backgroundColor: bold ? "rgba(251,191,36,0.95)" : "rgba(251,191,36,0.5)",
-        transform: [{ rotate: `${angle}deg` }],
-      }}
-    />
-  );
-}
-
 export function Lightbox({
   state,
   onClose,
@@ -85,6 +63,7 @@ export function Lightbox({
   const [detected, setDetected] = useState<MenuRegion | null>(null); // prostokąt menu (OCR) dla AKTUALNEGO zdjęcia
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState<string | null>(null); // WIDOCZNY status/błąd OCR (zamiast cichego połykania)
+  const [showOverlay, setShowOverlay] = useState(true); // nakładka liczona AUTO; przycisk tylko ukrywa/pokazuje
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
   const openedRef = useRef<LightboxState | null>(null);
@@ -112,6 +91,22 @@ export function Lightbox({
   useEffect(() => {
     if (state) { setCurrent(Math.min(state.index, state.photos.length - 1)); setDetected(null); setDetectMsg(null); }
   }, [state]);
+
+  // AUTO on-device OCR: po otwarciu i przy zmianie strony licz prostokąt/siatkę menu dla AKTUALNEGO zdjęcia
+  // (bez przycisku — szybkie, on-device). Tylko migawki (allowMenuDetect). Stróż `cancelled` odsiewa spóźnione.
+  useEffect(() => {
+    if (!state?.allowMenuDetect) return;
+    const photo = state.photos[current];
+    const uri = photo ? resolveCachedUri(photo.url) : undefined;
+    if (!uri) { setDetected(null); return; }
+    let cancelled = false;
+    setDetected(null); setDetecting(true); setDetectMsg(null);
+    detectMenuRegion(uri)
+      .then((r) => { if (!cancelled) { setDetected(r); setDetectMsg(r ? null : "OCR: nie wykryto tekstu na zdjęciu"); } })
+      .catch((e: unknown) => { if (!cancelled) { setDetected(null); setDetectMsg("OCR błąd: " + ((e as Error)?.message ?? String(e))); } })
+      .finally(() => { if (!cancelled) setDetecting(false); });
+    return () => { cancelled = true; };
+  }, [state, current]);
 
   // Gest pionowy w górę → zamknij. Poziome przesuwanie zostawiamy FlatList (paginacja).
   const pan = useRef(
@@ -148,20 +143,6 @@ export function Lightbox({
   const cur = state.photos[current] ?? state.photos[0]!;
   const meta = sourceMeta(cur.source);
 
-  // On-device OCR (ML Kit) → prostokąt menu dla AKTUALNEGO zdjęcia. TYLKO podgląd (nie tnie fizycznie).
-  const runDetect = () => {
-    const uri = resolveCachedUri(cur.url);
-    if (!uri) { setDetectMsg("brak URI zdjęcia"); return; }
-    if (detecting) return;
-    setDetecting(true);
-    setDetected(null);
-    setDetectMsg(null);
-    detectMenuRegion(uri)
-      .then((r) => { setDetected(r); setDetectMsg(r ? null : "OCR: nie wykryto tekstu na zdjęciu"); })
-      .catch((e: unknown) => { setDetected(null); setDetectMsg("OCR błąd: " + ((e as Error)?.message ?? String(e))); })
-      .finally(() => setDetecting(false));
-  };
-
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Animated.View style={[styles.bg, { opacity: bgOpacity }]}>
@@ -173,36 +154,9 @@ export function Lightbox({
           initialScrollIndex={Math.min(state.index, state.photos.length - 1)}
           getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
           keyExtractor={(_, i) => String(i)}
-          onMomentumScrollEnd={(e) => {
-            setCurrent(Math.round(e.nativeEvent.contentOffset.x / width));
-            setDetected(null); setDetectMsg(null); // overlay był dla poprzedniego zdjęcia — wyczyść przy zmianie strony
-          }}
+          onMomentumScrollEnd={(e) => setCurrent(Math.round(e.nativeEvent.contentOffset.x / width))}
           renderItem={({ item, index }) => {
             const boxW = width * 0.92, boxH = height * 0.72;
-            // Nakładka (OCR) tylko na AKTUALNIE oglądanym zdjęciu; znormalizowane punkty mapujemy na wyświetlany
-            // (resizeMode contain) obraz z uwzględnieniem letterboxu.
-            let overlay: ReactNode = null;
-            if (detected && index === current) {
-              const scale = Math.min(boxW / detected.imgW, boxH / detected.imgH);
-              const dW = detected.imgW * scale, dH = detected.imgH * scale;
-              const offX = (boxW - dW) / 2, offY = (boxH - dH) / 2;
-              const toDisp = (p: { x: number; y: number }) => ({ x: offX + p.x * dW, y: offY + p.y * dH });
-              const lerp = (A: { x: number; y: number }, B: { x: number; y: number }, t: number) => ({ x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t });
-              // Osiowy crop (zielony) — to, co poszłoby jako proste przycięcie.
-              const rect = { left: offX + detected.box.x * dW, top: offY + detected.box.y * dH, width: detected.box.w * dW, height: detected.box.h * dH };
-              // Perspektywiczny czworokąt + siatka kafelków (bursztynowa): krawędzie pogrubione, podziały cienkie.
-              // Linie są PROSTYMI segmentami między punktami interpolowanymi po krawędziach → rombowe kafelki przy skosie.
-              const TL = toDisp(detected.quad.tl), TR = toDisp(detected.quad.tr), BR = toDisp(detected.quad.br), BL = toDisp(detected.quad.bl);
-              const lines: ReactNode[] = [];
-              for (let i = 0; i <= detected.cols; i++) { const t = i / detected.cols; lines.push(<GridLine key={`v${i}`} a={lerp(TL, TR, t)} b={lerp(BL, BR, t)} bold={i === 0 || i === detected.cols} />); }
-              for (let j = 0; j <= detected.rows; j++) { const t = j / detected.rows; lines.push(<GridLine key={`h${j}`} a={lerp(TL, BL, t)} b={lerp(TR, BR, t)} bold={j === 0 || j === detected.rows} />); }
-              overlay = (
-                <>
-                  <View pointerEvents="none" style={[styles.menuBox, rect]} />
-                  {lines}
-                </>
-              );
-            }
             return (
               <Animated.View
                 {...pan.panHandlers}
@@ -215,7 +169,7 @@ export function Lightbox({
                       style={{ width: boxW, height: boxH }}
                       resizeMode="contain"
                     />
-                    {overlay}
+                    {detected && showOverlay && index === current ? <MenuRegionOverlay region={detected} boxW={boxW} boxH={boxH} /> : null}
                   </View>
                 </Pressable>
               </Animated.View>
@@ -227,14 +181,14 @@ export function Lightbox({
           <Text style={styles.closeText}>✕</Text>
         </Pressable>
 
-        {/* On-device OCR: zaznacz prostokąt, w którym jest menu (lista dań). Tylko migawki. */}
+        {/* OCR liczy się AUTOMATYCZNIE na każdym zdjęciu; przycisk tylko UKRYWA/POKAZUJE nakładkę. Tylko migawki. */}
         {state.allowMenuDetect ? (
-          <Pressable style={styles.detectBtn} onPress={runDetect} disabled={detecting} hitSlop={8}>
+          <Pressable style={styles.detectBtn} onPress={() => setShowOverlay((s) => !s)} disabled={detecting} hitSlop={8}>
             {detecting ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
               <Text style={styles.detectBtnText}>
-                <Icon name="searchAlt" /> {detected ? `${detected.blocks} bl · ${detected.cols}×${detected.rows} kafl · ponów` : "Zaznacz menu"}
+                <Icon name="searchAlt" /> {detected ? `${detected.blocks} bl · ${detected.cols}×${detected.rows} · ${showOverlay ? "ukryj" : "pokaż"}` : "—"}
               </Text>
             )}
           </Pressable>

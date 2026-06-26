@@ -20,6 +20,8 @@ import {
 import { Icon } from "./Icon";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MAX_IMAGES, setModelCropInsets } from "./image";
+import { detectMenuRegion, type MenuRegion } from "./menuRegion";
+import { MenuRegionOverlay } from "./MenuRegionOverlay";
 import type { PeekResult } from "./api";
 import { colors } from "./theme";
 
@@ -73,6 +75,15 @@ export function CameraCapture({
   const [busy, setBusy] = useState(false); // robienie zdjęcia
   const [saving, setSaving] = useState(false); // przetwarzanie „Użyj"
   const [pending, setPending] = useState<Pending | null>(null); // zamrożony podgląd
+  const [camRegion, setCamRegion] = useState<MenuRegion | null>(null); // on-device OCR: prostokąt/siatka menu dla zamrożonego zdjęcia
+  // AUTO on-device OCR na ZAMROŻONYM zdjęciu (jak w Migawkach) — od razu po pstryknięciu pokaż prostokąt/siatkę menu.
+  useEffect(() => {
+    if (!pending?.uri) { setCamRegion(null); return; }
+    let cancelled = false;
+    setCamRegion(null);
+    detectMenuRegion(pending.uri).then((r) => { if (!cancelled) setCamRegion(r); }).catch(() => { if (!cancelled) setCamRegion(null); });
+    return () => { cancelled = true; };
+  }, [pending]);
   const [torch, setTorch] = useState(false); // latarka (doświetlenie menu)
   const [zoom, setZoom] = useState(0); // 0..1 (expo-camera) — pinch + chipy powiększeń
   // Rozdzielczość PRZECHWYTYWANIA: domyślnie expo-camera bierze NIŻSZĄ niż natywny aparat → zdjęcia menu wychodzą
@@ -244,6 +255,8 @@ export function CameraCapture({
             {pending ? (
               <Image source={{ uri: pending.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
             ) : null}
+            {/* On-device OCR: prostokąt + perspektywiczna siatka menu na zamrożonym zdjęciu (auto, jak w Migawkach). */}
+            {pending && camRegion ? <MenuRegionOverlay region={camRegion} boxW={width} boxH={height} /> : null}
 
             {/* Górny pasek: latarka + przełącznik „szybkiego podglądu" + banner z kontekstem. */}
             <View style={styles.topBar} onLayout={(e) => setTopH(e.nativeEvent.layout.height)}>
