@@ -1,9 +1,8 @@
-// Zwięzły pasek kosztów na GŁÓWNYM ekranie: ostatnia sesja / dziś / łącznie. „Ostatnia sesja" = live koszt
-// bieżącej sesji (x-session-cost), a po restarcie/braku — koszt najnowszego zapisanego skanu. „Dziś/łącznie"
-// z serwera (/stats). Kliknięcie → pełny ekran „Koszty". Serwer liczy koszty; apka tylko pokazuje kwoty.
-import { useEffect, useState } from "react";
+// Zwięzły pasek kosztów na GŁÓWNYM ekranie: ostatnia sesja / dziś / łącznie. WSZYSTKO liczone LOKALNIE z historii
+// skanów TEJ instancji apki (nie z serwera — serwer sumuje WSZYSTKIE instalacje). „Ostatnia sesja" = live koszt
+// bieżącej sesji (x-session-cost), a po restarcie/braku — koszt najnowszego zapisanego skanu. „Dziś/łącznie" =
+// suma usage.costUsd zapisanych skanów (dziś = createdAt ≥ początek dnia urządzenia). Kliknięcie → ekran „Koszty".
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { fetchStats } from "./api";
 import { Icon } from "./Icon";
 import type { SavedScan } from "./storage";
 import { colors } from "./theme";
@@ -21,15 +20,13 @@ export function CostStrip({
   liveSessionCost: number;
   onPress?: () => void;
 }) {
-  const [stats, setStats] = useState<{ today: number; total: number } | null>(null);
-  useEffect(() => {
-    fetchStats()
-      .then((s) => { if (s?.enabled) setStats({ today: s.todayCostUsd ?? 0, total: s.totalCostUsd ?? 0 }); })
-      .catch(() => {});
-  }, [scans.length]); // odśwież po nowym skanie (przybyła migawka)
-
   const lastScanCost = scans.length ? (scans.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).usage?.costUsd ?? 0) : 0;
   const lastSession = liveSessionCost > 0 ? liveSessionCost : lastScanCost;
+  // „Dziś" i „Łącznie" = TYLKO ta instancja (suma kosztów skanów na tym telefonie), NIE serwer (= wszystkie instalacje).
+  const total = scans.reduce((a, s) => a + (s.usage?.costUsd ?? 0), 0);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const today = scans.reduce((a, s) => a + (s.createdAt >= startOfToday.getTime() ? (s.usage?.costUsd ?? 0) : 0), 0);
 
   return (
     <Pressable style={styles.strip} onPress={onPress} disabled={!onPress}>
@@ -40,12 +37,12 @@ export function CostStrip({
       <View style={styles.sep} />
       <View style={styles.cell}>
         <Text style={styles.lbl}>Dziś</Text>
-        <Text style={styles.val}>{stats ? fmtUsd(stats.today) : "—"}</Text>
+        <Text style={styles.val}>{fmtUsd(today)}</Text>
       </View>
       <View style={styles.sep} />
       <View style={styles.cell}>
         <Text style={styles.lbl}>Łącznie</Text>
-        <Text style={styles.val}>{stats ? fmtUsd(stats.total) : "—"}</Text>
+        <Text style={styles.val}>{fmtUsd(total)}</Text>
       </View>
       {onPress ? <Icon name="forward" size={14} color={colors.muted} style={styles.chev} /> : null}
     </Pressable>
