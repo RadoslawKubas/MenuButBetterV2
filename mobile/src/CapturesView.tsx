@@ -102,6 +102,7 @@ export function CapturesView({
   // Stan migawek na serwerze (po hashu/sygnaturze): na serwerze? zaimportowane do labu?
   const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
   const [uploading, setUploading] = useState<string | null>(null);
+  const [sentFlash, setSentFlash] = useState<Record<string, string>>({}); // krótki „✓ wysłano/zaktualizowano" w markerze (bez popupu)
   const [importing, setImporting] = useState(false);
   // Podpis treści ostatniego uploadu per sampel (sig→contentSig) → „Aktualizuj" tylko gdy się zmieniło.
   const [uploadedSigs, setUploadedSigs] = useState<Record<string, string>>({});
@@ -196,13 +197,11 @@ export function CapturesView({
         AsyncStorage.setItem(UPLOADED_SIGS_KEY, JSON.stringify(next)).catch(() => {});
         return next;
       });
-      const title = r.status === "updated" ? "Zaktualizowano" : r.status === "exists" ? "Już na serwerze" : "Wysłano";
-      const body = r.status === "updated"
-        ? "Zmodyfikowany sampel (nowy wynik) zastąpił poprzedni — zaimportuj ponownie w labie, podmieni wynik."
-        : r.status === "exists"
-          ? "Identyczny sampel już jest na serwerze (bez zmian)."
-          : "Migawka jest na serwerze — zaimportuj ją w labie.";
-      Alert.alert(title, body);
+      // Bez popupu — krótki feedback w markerze na kafelku.
+      const flash = r.status === "updated" ? "✓ zaktualizowano" : r.status === "exists" ? "✓ bez zmian" : "✓ wysłano";
+      const key = c.sig || c.id;
+      setSentFlash((prev) => ({ ...prev, [key]: flash }));
+      setTimeout(() => setSentFlash((prev) => { const n = { ...prev }; delete n[key]; return n; }), 2500);
     } catch (e) {
       reportError((e as Error)?.message ?? String(e), { stack: (e as Error)?.stack, label: "sample-upload-throw", context: { id: c.id } });
       Alert.alert("Wysyłka nieudana", (e as Error)?.message ?? "Spróbuj ponownie.");
@@ -445,10 +444,13 @@ export function CapturesView({
                   const onSrv = !!(st?.onServer || st?.imported);
                   // „Aktualizuj" tylko gdy treść sampla różni się od ostatnio wysłanej (nowy skan/nazwa…).
                   const changed = uploadedSigs[hash] !== contentSig(c);
+                  const flash = sentFlash[hash];
                   return (
                     <View style={styles.secondary}>
                       <View style={styles.footerRow}>
-                        {st?.imported ? (
+                        {flash ? (
+                          <Text style={[styles.sampleBadge, styles.sampleImported]} numberOfLines={1}>{flash}</Text>
+                        ) : st?.imported ? (
                           <Text style={[styles.sampleBadge, styles.sampleImported]} numberOfLines={1}>
                             <Icon name="check" size={11} color="#2E7D32" /> zaimportowany{!changed ? " · aktualny" : ""}
                           </Text>
