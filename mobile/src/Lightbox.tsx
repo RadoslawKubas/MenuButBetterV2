@@ -2,6 +2,7 @@
 // zamyka galerię. Na dole pokazujemy, SKĄD pochodzi aktualnie oglądane zdjęcie.
 import { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Animated,
   FlatList,
   Image,
@@ -17,6 +18,7 @@ import {
 import { Icon } from "./Icon";
 import { sourceMeta } from "./photoSource";
 import { resolveCachedUri } from "./imageCache";
+import { detectMenuRegion, type MenuRegion } from "./menuRegion";
 
 export interface LightboxPhoto {
   url: string;
@@ -38,6 +40,8 @@ export interface LightboxPhoto {
 export interface LightboxState {
   photos: LightboxPhoto[];
   index: number;
+  /** Pokaż przycisk „Zaznacz menu" (on-device OCR → prostokąt listy dań). Tylko dla migawek (zdjęcia menu). */
+  allowMenuDetect?: boolean;
 }
 
 /** Nazwa strony źródłowej (host bez „www.") do pokazania przy zdjęciu. */
@@ -55,6 +59,8 @@ export function Lightbox({
 }) {
   const { width, height } = useWindowDimensions();
   const [current, setCurrent] = useState(0);
+  const [detected, setDetected] = useState<MenuRegion | null>(null); // prostokąt menu (OCR) dla AKTUALNEGO zdjęcia
+  const [detecting, setDetecting] = useState(false);
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
   const openedRef = useRef<LightboxState | null>(null);
@@ -80,7 +86,7 @@ export function Lightbox({
 
   // Ustaw stronę startową przy otwarciu.
   useEffect(() => {
-    if (state) setCurrent(Math.min(state.index, state.photos.length - 1));
+    if (state) { setCurrent(Math.min(state.index, state.photos.length - 1)); setDetected(null); }
   }, [state]);
 
   // Gest pionowy w górę → zamknij. Poziome przesuwanie zostawiamy FlatList (paginacja).
@@ -118,6 +124,18 @@ export function Lightbox({
   const cur = state.photos[current] ?? state.photos[0]!;
   const meta = sourceMeta(cur.source);
 
+  // On-device OCR (ML Kit) → prostokąt menu dla AKTUALNEGO zdjęcia. TYLKO podgląd (nie tnie fizycznie).
+  const runDetect = () => {
+    const uri = resolveCachedUri(cur.url);
+    if (!uri || detecting) return;
+    setDetecting(true);
+    setDetected(null);
+    detectMenuRegion(uri)
+      .then((r) => setDetected(r))
+      .catch(() => setDetected(null))
+      .finally(() => setDetecting(false));
+  };
+
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Animated.View style={[styles.bg, { opacity: bgOpacity }]}>
@@ -129,28 +147,57 @@ export function Lightbox({
           initialScrollIndex={Math.min(state.index, state.photos.length - 1)}
           getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
           keyExtractor={(_, i) => String(i)}
-          onMomentumScrollEnd={(e) =>
-            setCurrent(Math.round(e.nativeEvent.contentOffset.x / width))
-          }
-          renderItem={({ item }) => (
-            <Animated.View
-              {...pan.panHandlers}
-              style={[styles.page, { width, transform: [{ translateY }] }]}
-            >
-              <Pressable style={styles.pagePress} onPress={onClose}>
-                <Image
-                  source={{ uri: resolveCachedUri(item.url) }}
-                  style={{ width: width * 0.92, height: height * 0.72 }}
-                  resizeMode="contain"
-                />
-              </Pressable>
-            </Animated.View>
-          )}
+          onMomentumScrollEnd={(e) => {
+            setCurrent(Math.round(e.nativeEvent.contentOffset.x / width));
+            setDetected(null); // prostokąt był dla poprzedniego zdjęcia — wyczyść przy zmianie strony
+          }}
+          renderItem={({ item, index }) => {
+            const boxW = width * 0.92, boxH = height * 0.72;
+            // Prostokąt menu (OCR) tylko na AKTUALNIE oglądanym zdjęciu; znormalizowany box mapujemy na
+            // wyświetlany (resizeMode contain) obraz z uwzględnieniem letterboxu.
+            let rect: { left: number; top: number; width: number; height: number } | null = null;
+            if (detected && index === current) {
+              const scale = Math.min(boxW / detected.imgW, boxH / detected.imgH);
+              const dW = detected.imgW * scale, dH = detected.imgH * scale;
+              const offX = (boxW - dW) / 2, offY = (boxH - dH) / 2;
+              rect = { left: offX + detected.box.x * dW, top: offY + detected.box.y * dH, width: detected.box.w * dW, height: detected.box.h * dH };
+            }
+            return (
+              <Animated.View
+                {...pan.panHandlers}
+                style={[styles.page, { width, transform: [{ translateY }] }]}
+              >
+                <Pressable style={styles.pagePress} onPress={onClose}>
+                  <View style={{ width: boxW, height: boxH }}>
+                    <Image
+                      source={{ uri: resolveCachedUri(item.url) }}
+                      style={{ width: boxW, height: boxH }}
+                      resizeMode="contain"
+                    />
+                    {rect ? <View pointerEvents="none" style={[styles.menuBox, rect]} /> : null}
+                  </View>
+                </Pressable>
+              </Animated.View>
+            );
+          }}
         />
 
         <Pressable style={styles.close} onPress={onClose} hitSlop={12}>
           <Text style={styles.closeText}>✕</Text>
         </Pressable>
+
+        {/* On-device OCR: zaznacz prostokąt, w którym jest menu (lista dań). Tylko migawki. */}
+        {state.allowMenuDetect ? (
+          <Pressable style={styles.detectBtn} onPress={runDetect} disabled={detecting} hitSlop={8}>
+            {detecting ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.detectBtnText}>
+                <Icon name="searchAlt" /> {detected ? `menu: ${detected.blocks} bloków · ponów` : "Zaznacz menu"}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
 
         {/* Skąd jest aktualnie oglądane zdjęcie. */}
         <View style={styles.infoBar} pointerEvents="box-none">
@@ -202,6 +249,9 @@ const styles = StyleSheet.create({
   pagePress: { alignItems: "center", justifyContent: "center" },
   close: { position: "absolute", top: 52, right: 24 },
   closeText: { color: "#fff", fontSize: 26, fontWeight: "700" },
+  detectBtn: { position: "absolute", top: 50, left: 20, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 999, paddingVertical: 8, paddingHorizontal: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", minWidth: 130, minHeight: 34, alignItems: "center", justifyContent: "center" },
+  detectBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
+  menuBox: { position: "absolute", borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 },
   infoBar: { position: "absolute", bottom: 36, alignSelf: "center", alignItems: "center", paddingHorizontal: 24 },
   peekNote: { color: "#fff", fontSize: 13, fontWeight: "700", marginBottom: 8, maxWidth: 320, textAlign: "center" },
   scoreTag: { color: "#7fd6a0", fontSize: 12.5, fontWeight: "700", marginTop: 5 },

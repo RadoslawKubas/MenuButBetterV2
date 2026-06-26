@@ -334,6 +334,7 @@ export function CapturesView({
                           setPreview({
                             photos: c.images.map((p) => ({ url: resolveCaptureUri(p.path) ?? p.path, source: "menu" })),
                             index: i,
+                            allowMenuDetect: true, // migawka = zdjęcie menu → pokaż przycisk OCR „Zaznacz menu"
                           })
                         }
                       >
