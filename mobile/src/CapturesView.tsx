@@ -56,7 +56,9 @@ function fmtBytes(n: number): string {
 // (nowy skan/wynik, nazwa, hint, lokalizacja, liczba przebiegów). Do decyzji „czy jest co aktualizować".
 const UPLOADED_SIGS_KEY = "mbb.uploadedSigs.v1";
 function contentSig(c: ScanCapture): string {
-  return `${c.scanId ?? ""}|${c.name ?? ""}|${c.restaurantHint ?? ""}|${c.locationHint ?? ""}|${c.runs?.length ?? 0}`;
+  // OCR też wchodzi w podpis treści — po policzeniu OCR sampel pokaże się jako „do aktualizacji" na serwerze.
+  const ocr = c.images.map((im) => (im.ocr ? im.ocr.blocks.length : 0)).join(",");
+  return `${c.scanId ?? ""}|${c.name ?? ""}|${c.restaurantHint ?? ""}|${c.locationHint ?? ""}|${c.runs?.length ?? 0}|o${ocr}`;
 }
 
 function sourceLabel(c: ScanCapture): string {
@@ -129,14 +131,31 @@ export function CapturesView({
     } finally { setImporting(false); }
   }
 
-  // JEDNORAZOWO policz OCR dla wszystkich zdjęć migawek (on-device) i zapisz; potem wyślij sample na serwer.
+  // Re-upload (aktualizacja) wielu sampli po kolei — pojedynczy błąd nie blokuje reszty.
+  async function uploadMany(caps: ScanCapture[]) {
+    for (const c of caps) { try { await uploadOne(c); } catch { /* idziemy dalej */ } }
+    await load();
+  }
+
+  // JEDNORAZOWO policz OCR dla wszystkich zdjęć migawek (on-device) i zapisz; potem zaproponuj wysłanie na serwer.
   async function runOcrAll() {
     if (ocrProg) return;
     setOcrProg({ done: 0, total: 0 });
     try {
       const r = await ocrAllCaptures((done, total) => setOcrProg({ done, total }));
       await load();
-      Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma teraz dane OCR. Wyślij/udostępnij sample na serwer, by je zsyncować.`);
+      // Które sample są JUŻ na serwerze (świeży status) → zaproponuj wysłanie aktualizacji z OCR od razu.
+      const fresh = await listCaptures();
+      const status = await fetchSampleStatus(fresh.map((c) => c.sig || c.id)).catch(() => ({} as Record<string, { onServer: boolean; imported: boolean }>));
+      const onSrv = fresh.filter((c) => { const s = status[c.sig || c.id]; return !!(s?.onServer || s?.imported); });
+      if (onSrv.length) {
+        Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma OCR. ${onSrv.length} sampli jest na serwerze — wysłać aktualizację z OCR teraz?`, [
+          { text: "Później", style: "cancel" },
+          { text: "Wyślij update", onPress: () => void uploadMany(onSrv) },
+        ]);
+      } else {
+        Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma teraz dane OCR. Wyślij sample na serwer, by je zsyncować (przycisk „Wyślij na serwer" pod migawką).`);
+      }
     } catch (e) {
       reportError((e as Error)?.message ?? String(e), { label: "ocr-all" });
     } finally {
