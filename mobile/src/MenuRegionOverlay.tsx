@@ -47,10 +47,18 @@ export function MenuRegionOverlay({ region, boxW, boxH }: { region: MenuRegion; 
     <View key={`f${i}`} pointerEvents="none" style={{ position: "absolute", left: offX + f.x * dW, top: offY + f.y * dH, width: f.w * dW, height: f.h * dH, borderWidth: 1, borderColor: "rgba(96,165,250,0.85)", backgroundColor: "rgba(96,165,250,0.07)", borderRadius: 1 }} />
   ));
 
+  // KLASTRY stykających się bloków — każdy w innym kolorze (cyklicznie), żeby 2+ grup było rozróżnialnych.
+  const GROUP_COLORS = ["#e879f9", "#22d3ee", "#fb7185", "#c084fc", "#2dd4bf"];
+  const groupRects = region.groups.map((g, i) => {
+    const col = GROUP_COLORS[i % GROUP_COLORS.length]!;
+    return <View key={`g${i}`} pointerEvents="none" style={{ position: "absolute", left: offX + g.x * dW, top: offY + g.y * dH, width: g.w * dW, height: g.h * dH, borderWidth: 2, borderColor: col, backgroundColor: col + "22", borderRadius: 3 }} />;
+  });
+
   return (
     <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0, width: boxW, height: boxH }}>
       {frameRects}
       <View style={{ position: "absolute", left: rect.left, top: rect.top, width: rect.width, height: rect.height, borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 }} />
+      {groupRects}
       {lines}
     </View>
   );

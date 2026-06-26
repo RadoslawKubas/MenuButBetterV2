@@ -11,7 +11,7 @@ import { Image } from "react-native";
 export type Pt = { x: number; y: number }; // znormalizowane 0..1 względem zdjęcia
 export type MenuBox = { x: number; y: number; w: number; h: number };
 export type MenuQuad = { tl: Pt; tr: Pt; br: Pt; bl: Pt };
-export type MenuRegion = { box: MenuBox; quad: MenuQuad; frames: MenuBox[]; cols: number; rows: number; imgW: number; imgH: number; blocks: number };
+export type MenuRegion = { box: MenuBox; quad: MenuQuad; frames: MenuBox[]; groups: MenuBox[]; cols: number; rows: number; imgW: number; imgH: number; blocks: number };
 
 // Sufit dłuższej krawędzi kafelka W PIKSELACH ORYGINAŁU — powyżej model i tak downscale'uje (tekst się robi
 // nieczytelny). Trochę poniżej realnego sufitu vision (~1568), by zostawić zapas na zakładkę między kafelkami.
@@ -29,12 +29,15 @@ export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> 
   if (!width || !height) return null;
 
   // Zbierz ramki (osiowe) + narożniki SKOŚNE wszystkich linii (cornerPoints niosą perspektywę; brak → rogi ramki).
-  const frames: { left: number; top: number; width: number; height: number }[] = [];
+  type Fr = { left: number; top: number; width: number; height: number };
+  const frames: Fr[] = [];
   const pts: Pt[] = []; // wszystkie narożniki tekstu, w pikselach
+  const lineHeights: number[] = []; // do progu „bliskości" przy klastrowaniu
   let blocks = 0;
   for (const b of res.blocks) {
     if (b.frame && b.frame.width > 0 && b.frame.height > 0) { frames.push(b.frame); blocks++; }
     for (const line of b.lines) {
+      if (line.frame?.height) lineHeights.push(line.frame.height);
       if (line.cornerPoints) for (const p of line.cornerPoints) pts.push({ x: p.x, y: p.y });
       else if (line.frame) { const f = line.frame; pts.push({ x: f.left, y: f.top }, { x: f.left + f.width, y: f.top }, { x: f.left + f.width, y: f.top + f.height }, { x: f.left, y: f.top + f.height }); }
     }
@@ -79,5 +82,23 @@ export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> 
 
   // Indywidualne ramki bloków OCR (znormalizowane) — do podglądu „co dostajemy" (niebieskie).
   const framesN: MenuBox[] = frames.map((f) => ({ x: f.left / width, y: f.top / height, w: f.width / width, h: f.height / height }));
-  return { box, quad, frames: framesN, cols, rows, imgW: width, imgH: height, blocks };
+
+  // KLASTRY stykających się bloków (connected-components po bliskości) → osobne grupy zamiast JEDNEJ obwiedni
+  // (np. 2 kolumny / panele). Próg ~1.2 wysokości linii: scala wiersze tej samej grupy, rozdziela kolumny z
+  // większym odstępem. Każda grupa → bbox znormalizowany.
+  const medH = lineHeights.length ? lineHeights.slice().sort((a, b) => a - b)[Math.floor(lineHeights.length / 2)]! : (maxB - minT) * 0.05;
+  const gap = Math.max(1, medH * 1.2);
+  const parent = frames.map((_, i) => i);
+  const find = (i: number): number => { let x = i; while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; } return x; };
+  const near = (a: Fr, b: Fr) => a.left <= b.left + b.width + gap && b.left <= a.left + a.width + gap && a.top <= b.top + b.height + gap && b.top <= a.top + a.height + gap;
+  for (let i = 0; i < frames.length; i++) for (let j = i + 1; j < frames.length; j++) if (near(frames[i]!, frames[j]!)) parent[find(i)] = find(j);
+  const byRoot = new Map<number, Fr[]>();
+  for (let i = 0; i < frames.length; i++) { const r = find(i); let g = byRoot.get(r); if (!g) { g = []; byRoot.set(r, g); } g.push(frames[i]!); }
+  const groups: MenuBox[] = [...byRoot.values()].map((g) => {
+    let l = Infinity, t = Infinity, r = -Infinity, btm = -Infinity;
+    for (const f of g) { l = Math.min(l, f.left); t = Math.min(t, f.top); r = Math.max(r, f.left + f.width); btm = Math.max(btm, f.top + f.height); }
+    return { x: l / width, y: t / height, w: (r - l) / width, h: (btm - t) / height };
+  });
+
+  return { box, quad, frames: framesN, groups, cols, rows, imgW: width, imgH: height, blocks };
 }
