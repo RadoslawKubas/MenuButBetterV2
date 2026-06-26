@@ -129,6 +129,8 @@ export function CapturesView({
 
   async function load() {
     const caps = await listCaptures().catch(() => []);
+    // Lista od NAJNOWSZEJ po dacie ZROBIENIA migawki (createdAt) — nie po kolejności zapisu/importu.
+    caps.sort((a, b) => b.createdAt - a.createdAt);
     setCaptures(caps);
     // Znaczniki „na serwerze / zaimportowany" — best-effort (cicho, gdy serwer/baza niedostępne).
     const hashes = caps.map((c) => c.sig || c.id);
