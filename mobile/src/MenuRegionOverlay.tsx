@@ -4,7 +4,7 @@
 // w kontenerze boxW×boxH (z letterboxem). Linie bez SVG: każda to cienki obrócony View.
 import { type ReactNode } from "react";
 import { View } from "react-native";
-import type { MenuRegion } from "./menuRegion";
+import { clusterGroups, type MenuRegion, type MenuBox } from "./menuRegion";
 
 function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number; y: number }; bold?: boolean }) {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -27,7 +27,7 @@ function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number;
   );
 }
 
-export function MenuRegionOverlay({ region, boxW, boxH }: { region: MenuRegion; boxW: number; boxH: number }) {
+export function MenuRegionOverlay({ region, boxW, boxH, groupMult }: { region: MenuRegion; boxW: number; boxH: number; groupMult?: number }) {
   const scale = Math.min(boxW / region.imgW, boxH / region.imgH);
   const dW = region.imgW * scale, dH = region.imgH * scale;
   const offX = (boxW - dW) / 2, offY = (boxH - dH) / 2;
@@ -48,8 +48,10 @@ export function MenuRegionOverlay({ region, boxW, boxH }: { region: MenuRegion; 
   ));
 
   // KLASTRY stykających się bloków — każdy w innym kolorze (cyklicznie), żeby 2+ grup było rozróżnialnych.
+  // groupMult (z suwaka) → przelicz grupy na żywo; brak → domyślne z detekcji.
+  const groups: MenuBox[] = groupMult != null ? clusterGroups(region, groupMult) : region.groups;
   const GROUP_COLORS = ["#e879f9", "#22d3ee", "#fb7185", "#c084fc", "#2dd4bf"];
-  const groupRects = region.groups.map((g, i) => {
+  const groupRects = groups.map((g, i) => {
     const col = GROUP_COLORS[i % GROUP_COLORS.length]!;
     return <View key={`g${i}`} pointerEvents="none" style={{ position: "absolute", left: offX + g.x * dW, top: offY + g.y * dH, width: g.w * dW, height: g.h * dH, borderWidth: 2, borderColor: col, backgroundColor: col + "22", borderRadius: 3 }} />;
   });

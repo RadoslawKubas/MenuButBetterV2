@@ -18,7 +18,7 @@ import {
 import { Icon } from "./Icon";
 import { sourceMeta } from "./photoSource";
 import { resolveCachedUri } from "./imageCache";
-import { detectMenuRegion, type MenuRegion } from "./menuRegion";
+import { detectMenuRegion, clusterGroups, type MenuRegion } from "./menuRegion";
 import { MenuRegionOverlay } from "./MenuRegionOverlay";
 
 export interface LightboxPhoto {
@@ -51,6 +51,30 @@ function sourceHost(p: LightboxPhoto): string {
   try { return new URL(p.contextUrl!).host.replace(/^www\./, ""); } catch { return ""; }
 }
 
+// Minimalny suwak (bez natywnej zależności): drag WZGLĘDNY (gestureState.dx), refy trzymają aktualną wartość →
+// brak stale-closure. Szerokość toru stała. Touch zaczęty na suwaku trafia do niego (nie do FlatList/swipe).
+function MiniSlider({ value, min, max, onChange }: { value: number; min: number; max: number; onChange: (v: number) => void }) {
+  const W = 200;
+  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  const valueRef = useRef(value); valueRef.current = value;
+  const startRef = useRef(value);
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => { startRef.current = valueRef.current; },
+      onPanResponderMove: (_, g) => { onChange(Math.max(min, Math.min(max, startRef.current + (g.dx / W) * (max - min)))); },
+    }),
+  ).current;
+  return (
+    <View {...pan.panHandlers} style={{ width: W, height: 30, justifyContent: "center" }}>
+      <View style={{ height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.3)" }} />
+      <View style={{ position: "absolute", left: pct * W - 9, width: 18, height: 18, borderRadius: 9, backgroundColor: "#fff", borderWidth: 2, borderColor: "rgba(0,0,0,0.3)" }} />
+    </View>
+  );
+}
+
 export function Lightbox({
   state,
   onClose,
@@ -64,6 +88,7 @@ export function Lightbox({
   const [detecting, setDetecting] = useState(false);
   const [detectMsg, setDetectMsg] = useState<string | null>(null); // WIDOCZNY status/błąd OCR (zamiast cichego połykania)
   const [showOverlay, setShowOverlay] = useState(true); // nakładka liczona AUTO; przycisk tylko ukrywa/pokazuje
+  const [gapMult, setGapMult] = useState(1.2); // próg klastrowania grup (×medianowa wys. linii) — live suwakiem
   const translateY = useRef(new Animated.Value(0)).current;
   const bgOpacity = useRef(new Animated.Value(1)).current;
   const openedRef = useRef<LightboxState | null>(null);
@@ -169,7 +194,7 @@ export function Lightbox({
                       style={{ width: boxW, height: boxH }}
                       resizeMode="contain"
                     />
-                    {detected && showOverlay && index === current ? <MenuRegionOverlay region={detected} boxW={boxW} boxH={boxH} /> : null}
+                    {detected && showOverlay && index === current ? <MenuRegionOverlay region={detected} boxW={boxW} boxH={boxH} groupMult={gapMult} /> : null}
                   </View>
                 </Pressable>
               </Animated.View>
@@ -198,6 +223,14 @@ export function Lightbox({
         {detectMsg ? (
           <View style={styles.detectMsg} pointerEvents="none">
             <Text style={styles.detectMsgText}>{detectMsg}</Text>
+          </View>
+        ) : null}
+
+        {/* LIVE suwak progu grupowania — przelicza TYLKO klastry (bez ponownego OCR). */}
+        {state.allowMenuDetect && detected ? (
+          <View style={styles.sliderBar}>
+            <Text style={styles.sliderLabel}>grupy · próg {gapMult.toFixed(1)} · {clusterGroups(detected, gapMult).length} grup</Text>
+            <MiniSlider value={gapMult} min={0.2} max={4} onChange={setGapMult} />
           </View>
         ) : null}
 
@@ -255,6 +288,8 @@ const styles = StyleSheet.create({
   detectBtnText: { color: "#fff", fontSize: 13, fontWeight: "800" },
   detectMsg: { position: "absolute", top: 92, left: 20, right: 20, backgroundColor: "rgba(180,40,40,0.94)", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
   detectMsgText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  sliderBar: { position: "absolute", bottom: 118, alignSelf: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.6)", borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16, borderWidth: 1, borderColor: "rgba(255,255,255,0.2)" },
+  sliderLabel: { color: "#fff", fontSize: 12, fontWeight: "700", marginBottom: 4 },
   menuBox: { position: "absolute", borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 },
   infoBar: { position: "absolute", bottom: 36, alignSelf: "center", alignItems: "center", paddingHorizontal: 24 },
   peekNote: { color: "#fff", fontSize: 13, fontWeight: "700", marginBottom: 8, maxWidth: 320, textAlign: "center" },
