@@ -441,7 +441,7 @@ export function enrichMenuOnServer(
 // pasek postępu), serwer buforuje per sesja i sam tnie na partie modelu w /scan/run. ───
 
 /** Zaczyna sesję skanu (parametry bez zdjęć) → zwraca sessionId. */
-export async function scanStart(params: { targetLang: string; restaurantHint?: string; locationHint?: string; location?: GeoPoint | null; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
+export async function scanStart(params: { targetLang: string; restaurantHint?: string; nameGuess?: string; locationHint?: string; location?: GeoPoint | null; cuisineHint?: string; model?: ModelId; enrichModel?: ModelId }): Promise<string> {
   const res = await fetch(`${API_BASE}/scan/start`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(params) });
   readSessionCost(res.headers.get("x-session-cost"));
   if (!res.ok) throw new Error(`Nie udało się rozpocząć skanu (HTTP ${res.status}).`);
@@ -452,7 +452,7 @@ export async function scanStart(params: { targetLang: string; restaurantHint?: s
 
 /** Wysyła JEDNO zdjęcie do sesji (POJEDYNCZA próba — ponawianiem steruje wywołujący: 1 auto-retry, potem
  *  pyta usera). Idempotentne po `index`. `takenAt` (EXIF) → serwer ułoży strony po dacie zrobienia. */
-export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string; takenAt?: number | null; srcHash?: string }): Promise<void> {
+export function scanUploadPhoto(sessionId: string, index: number, image: { base64: string; mediaType: string; takenAt?: number | null; srcHash?: string; ocr?: unknown; menuAi?: unknown; menuAiCrop?: unknown }): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/scan/photo`);
@@ -461,7 +461,8 @@ export function scanUploadPhoto(sessionId: string, index: number, image: { base6
     xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(`Zdjęcie ${index + 1}: HTTP ${xhr.status}`)); };
     xhr.onerror = () => reject(new Error(`Zdjęcie ${index + 1}: błąd sieci`));
     xhr.ontimeout = () => reject(new Error(`Zdjęcie ${index + 1}: timeout`));
-    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType, takenAt: image.takenAt ?? undefined, srcHash: image.srcHash }));
+    // OCR + menu-AI dołączone do wycinka — serwer GROMADZI przy wycinku (użycie/triaż = później).
+    xhr.send(JSON.stringify({ sessionId, index, base64: image.base64, mediaType: image.mediaType, takenAt: image.takenAt ?? undefined, srcHash: image.srcHash, ocr: image.ocr, menuAi: image.menuAi, menuAiCrop: image.menuAiCrop }));
   });
 }
 
@@ -720,6 +721,17 @@ export function placePhotoUrl(photoName: string, width = 800): string {
   return `${API_BASE}/place-photo?name=${encodeURIComponent(photoName)}&w=${width}${tok}${iid}`;
 }
 
+/** BENCHMARK weryfikatorów zdjęć: wysyła werdykty lokalnych modeli (ML Kit/CLIP/Apple Vision) na serwer
+ *  (POST /photo-feedback). Best-effort — NIE blokuje skanu ani UI; install_id idzie w nagłówku (jsonHeaders). */
+export async function sendPhotoFeedback(items: { dish: string; url: string; evaluator: string; score: number; label?: string; meta?: unknown }[], platform: string): Promise<void> {
+  if (!items.length) return;
+  try {
+    await fetch(`${API_BASE}/photo-feedback`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ items, platform }) });
+  } catch {
+    /* best-effort */
+  }
+}
+
 export interface VenueMatch {
   dish: string;
   /** Tier 0: „google"/„tripadvisor". Szeroka pula: też kategorie źródła („restaurant"/„web"/portale). */
@@ -750,6 +762,33 @@ export async function fetchVenuePhotos(
   const json = (await res.json()) as { matches?: VenueMatch[]; usage?: Usage; error?: string };
   if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
   return { matches: json.matches ?? [], usage: json.usage ?? ZERO_USAGE };
+}
+
+// ★ ZDJĘCIA Z LOKALU — TRYB APP-DRIVEN. (1) /venue-pool: tani harvest puli (bez wizji) → apka filtruje lokalnie.
+export interface VenuePoolPhoto { url?: string; photoName?: string; source: string; contextUrl?: string; caption?: string | null }
+export async function fetchVenuePool(venue: { name?: string; website?: string; city?: string; photoNames?: string[]; taPhotos?: { url: string; caption: string | null }[] }): Promise<VenuePoolPhoto[]> {
+  const res = await loggedFetch("venue-pool", `${API_BASE}/venue-pool`, {
+    method: "POST", headers: jsonHeaders(),
+    body: JSON.stringify({ name: venue.name, website: venue.website, city: venue.city, photoNames: venue.photoNames ?? [], taPhotos: venue.taPhotos ?? [] }),
+  });
+  const json = (await res.json()) as { pool?: VenuePoolPhoto[]; error?: string };
+  if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return json.pool ?? [];
+}
+// (2) /venue-match: apka wysyła pulę z PEŁNĄ analizą lokalną (sygnały per model + surowe) → SERWER decyduje, co idzie
+//     do płatnej wizji → zwraca gotowe zdjęcia ★ pogrupowane per KLUCZ dania (full_name). Apka mapuje klucz→id pozycji.
+export async function postVenueMatch(
+  pool: (VenuePoolPhoto & { clipFood?: number; appleFood?: number; mlkitFood?: number; clipDishes?: { dish: string; cos: number }[]; local?: unknown })[],
+  dishes: string[],
+  opts: { cuisine?: string; certain?: boolean; name?: string; website?: string; city?: string } = {},
+): Promise<{ byDish: Record<string, unknown[]>; usage: Usage }> {
+  const res = await loggedFetch("venue-match", `${API_BASE}/venue-match`, {
+    method: "POST", headers: jsonHeaders(),
+    body: JSON.stringify({ pool, dishes, cuisine: opts.cuisine, certain: opts.certain, name: opts.name, website: opts.website, city: opts.city }),
+  });
+  const json = (await res.json()) as { byDish?: Record<string, unknown[]>; usage?: Usage; error?: string };
+  if (!res.ok || json.error) throw new Error(json.error ?? `Błąd serwera (HTTP ${res.status})`);
+  return { byDish: json.byDish ?? {}, usage: json.usage ?? ZERO_USAGE };
 }
 
 export async function fetchDishPhotos(

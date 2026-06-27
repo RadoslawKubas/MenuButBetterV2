@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Pressable,
   ScrollView,
@@ -11,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import {
@@ -26,14 +28,20 @@ import {
   fetchDishPhotos,
   fetchRestaurant,
   fetchVenuePhotos,
+  fetchVenuePool,
+  postVenueMatch,
   quickPeek,
   placePhotoUrl,
   reportError,
   registerInstall,
   fetchAppConfig,
+  sendPhotoFeedback,
   type VenueMatch,
   type PeekResult,
 } from "./src/api";
+import { evaluatePhoto, scoreDishPhotosForRank, EVAL_PLATFORM, venuePoolFood } from "./src/photoEval";
+import { clipLooksLikeMenu } from "./src/clip";
+import { triageGroup, triagePassesToScan, harvestVenueName } from "./src/triage";
 import { cacheImage, cachePhotos, resolveCachedUri } from "./src/imageCache";
 import { mergeMenus } from "./src/mergeMenu";
 import {
@@ -53,6 +61,9 @@ import {
   deleteScan,
   updateScanItem,
   updateScanMenu,
+  setScanPending,
+  setVenueTried,
+  recordDeletedCost,
   setScanSourcePhotos,
   setScanSessionId,
   updateScanRestaurant,
@@ -69,6 +80,8 @@ import {
 import {
   listCaptures,
   saveCapture,
+  analyzeCapture,
+  recomputeCaptureOcr,
   addCaptureRun,
   captureImageBase64,
   captureSrcHash,
@@ -203,6 +216,8 @@ export default function App() {
   const [status, setStatus] = useState<Status>("idle");
   // Postęp analizy gdy skan idzie partiami (duże menu). null = brak/jedna partia.
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
+  const [analyzeProg, setAnalyzeProg] = useState<{ done: number; total: number } | null>(null); // postęp lokalnej analizy AI per zdjęcie (przed wysyłką)
+  const [venuePhotoProg, setVenuePhotoProg] = useState<{ done: number; total: number } | null>(null); // postęp app-driven ★ (lokalna analiza puli z lokalu)
   // Faza bieżącej partii skanu (wysyłka % → model czyta z licznikiem) — żywy sygnał postępu.
   const [scanPhase, setScanPhase] = useState<{ label: string; pct?: number } | null>(null);
   // Postęp POBIERANIA ZDJĘĆ (pompa poglądowych) — żeby pasek liczył też ten krok, a skan nie kończył się
@@ -236,6 +251,10 @@ export default function App() {
   const [replayLocation, setReplayLocation] = useState<{ location: GeoPoint | null; locationSource: LocationSource; locationHint?: string } | null>(null);
   const [useDeviceLocation, setUseDeviceLocation] = useState(true);
   const [useExifLocation, setUseExifLocation] = useState(true);
+  // Triaż przy skanie: domyślnie OFF = wysyłaj WSZYSTKO do modelu czytającego kartę (jak dawniej). ON = pomijaj
+  // zdjęcia nie-menu (danie/szyld/śmieć). Triaż-KLASYFIKACJA (etykiety na zdjęciach) liczy się ZAWSZE, niezależnie.
+  const [triageScan, setTriageScan] = useState(false);
+  const TRIAGE_SCAN_KEY = "mbb.triageScan";
   const [showCamera, setShowCamera] = useState(false); // własny ekran aparatu (z podglądem zdjęcia)
   const [peekEnabled, setPeekEnabled] = useState(true); // „szybki podgląd" na żywo (kuchnia/nazwa)
   const [peekInfo, setPeekInfo] = useState<PeekResult | null>(null);
@@ -275,6 +294,10 @@ export default function App() {
   const scanGenRef = useRef(0); // generacja skanu — rośnie z każdym runScan; odsiewa spóźnione callbacki starych skanów
   const scanCancelRef = useRef<(() => void) | null>(null); // abort bieżącego pipeline'u (nowy skan/cancel → serwer staje)
   const replayCaptureIdRef = useRef<string | null>(null); // replay z migawki → REUŻYJ tej migawki (nie twórz nowej)
+  const activeScanIds = useRef<Set<string>>(new Set()); // scanId z ŻYWYM runScan w tej sesji apki → wznawianie ich NIE rusza
+  const resumingRef = useRef<Set<string>>(new Set()); // scanId aktualnie wznawiane (dedupe, by nie odpalić 2×)
+  const resumeRef = useRef<() => void>(() => {}); // wskaźnik na NAJŚWIEŻSZY resumePendingScans (dla AppState bez re-subskrypcji)
+  const venueRunningRef = useRef<Set<string>>(new Set()); // scanId z trwającym app-driven ★ (dedupe)
   const venueFinalizedRef = useRef(false); // czy lokal zapisany do skanu (raz na skan)
   const previewStartedRef = useRef(false); // czy ruszyło dociąganie TANICH poglądowych (★ z lokalu czeka na to)
   const venueUpgradedRef = useRef(false); // czy ★ z lokalu już podmieniane (raz na skan)
@@ -327,12 +350,39 @@ export default function App() {
       })
       .catch(() => {});
     loadPeekPref().then(setPeekEnabled).catch(() => {});
+    AsyncStorage.getItem(TRIAGE_SCAN_KEY).then((v) => { if (v === "1") setTriageScan(true); }).catch(() => {});
     fetchAppConfig().then((c) => {
       setAppCfg(c); // zachowania auto-dociągania z serwera (config runtime)
       // rozmiary zdjęć DO MODELI (serwer = źródło prawdy) — osobno skan i peek (różne modele)
       setModelImageSpec({ imageMaxEdge: c.imageMaxEdge, imageQuality: c.imageQuality, peekImageMaxEdge: c.peekImageMaxEdge, peekImageQuality: c.peekImageQuality });
     }).catch(() => {});
   }, []);
+
+  // WZNAWIANIE: po starcie apki (gdy scans/config zdążą się załadować) ORAZ przy KAŻDYM powrocie do apki
+  // (AppState→'active': po zamknięciu/zminimalizowaniu, też po odzyskaniu sieci w międzyczasie) — dograj z serwera
+  // (z cache) resztę dla niedokończonych „⏳ w toku". Cicho, w tle; resumeRef.current = najświeższa implementacja.
+  useEffect(() => {
+    const t = setTimeout(() => resumeRef.current(), 2500);
+    const sub = AppState.addEventListener("change", (st) => { if (st === "active") resumeRef.current(); });
+    return () => { clearTimeout(t); sub.remove(); };
+  }, []);
+
+  // LIVE-PODGLĄD otwartego wpisu „w toku": gdy patrzysz na skan, który właśnie się dograwa (w tle / wznawianie),
+  // re-syncuj `openScan` z `scans` przy każdej aktualizacji → pozycje/zdjęcia/★ wskakują NA ŻYWO bez zamykania.
+  // TYLKO dopóki `openScan.pending` (akcje mutujące i tak zablokowane do końca) → po `done` przestaje, więc lokalne
+  // edycje na GOTOWYM skanie (np. „szukaj więcej zdjęć") nigdy nie są nadpisywane przez ten resync.
+  useEffect(() => {
+    const cur = openScan;
+    if (!cur?.pending) return;
+    const fresh = scans.find((s) => s.id === cur.id);
+    if (!fresh) return;
+    const changed = fresh.menu !== cur.menu || fresh.pending !== cur.pending
+      || fresh.restaurantName !== cur.restaurantName || (!!fresh.restaurant && fresh.restaurant !== cur.restaurant);
+    if (!changed) return;
+    setOpenScan((prev) => (prev && prev.id === fresh.id
+      ? { ...prev, menu: fresh.menu, pending: fresh.pending, restaurantName: fresh.restaurantName, usage: fresh.usage, restaurant: fresh.restaurant ?? prev.restaurant }
+      : prev));
+  }, [scans, openScan]);
 
   // KROK ★ „zdjęcia z lokalu" to ostatni etap (po enrich+zdjęciach) — JEDNO wywołanie wizji bez „per-danie".
   // Pełznij jego segment paska czasowo (0→0.9), żeby pasek dalej się ruszał, a nie stał na 100% przy „kończę".
@@ -489,7 +539,23 @@ export default function App() {
     if (good.length < images.length) {
       Alert.alert("Pominięto słabe zdjęcia", `${images.length - good.length} zdjęć było za słabej jakości — zeskanuję tylko ${good.length} czytelnych.`);
     }
-    await runScan({ images: good, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined });
+    // TRIAŻ OFF (domyślnie) → STARA ścieżka 1:1: wyślij wszystko do modelu czytającego kartę.
+    if (!triageScan) {
+      await runScan({ images: good, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined });
+      return;
+    }
+    // TRIAŻ ON → 2-fazy LOKALNIE: (0) podziel po OCR na menu/niepewne vs nie-menu; (1) z ODRZUCONYCH (szyldy) wyłuskaj
+    // nazwę lokalu jako MIĘKKI hint (model i tak potwierdza z karty — nazwa niepewna); (2) skanuj tylko menu/niepewne.
+    // Próg zachowawczy (unsure→menu), recovery: gdy nic nie przeszło → skanuj wszystko (nigdy puste).
+    const groups = good.map((img) => ({ img, pass: triagePassesToScan(triageGroup(img.ocr)) }));
+    const menuish = groups.filter((g) => g.pass).map((g) => g.img);
+    const dropped = groups.filter((g) => !g.pass).map((g) => g.img);
+    const softVenueName = harvestVenueName(dropped) ?? undefined; // nazwa z odrzuconych szyldów (miękka podpowiedź)
+    const toScan = menuish.length ? menuish : good; // recovery: gdy triaż wszystko odrzucił → skanuj wszystko
+    if (toScan.length < good.length) {
+      Alert.alert("Triaż zdjęć", `Do modelu idzie ${toScan.length}/${good.length} (pominięto nie-menu)${softVenueName ? `, nazwa z szyldu: „${softVenueName}" (do potwierdzenia)` : ""}. Wyłącz triaż w opcjach, by wysłać wszystkie.`);
+    }
+    await runScan({ images: toScan, targetLang, models, hint, useExifLocation, useDeviceLocation, fixedLocation: replayLocation ?? undefined, softVenueName });
   }
 
   // Rdzeń skanu — wspólny dla zwykłego skanu i „Wyślij ponownie" (tryb testowy).
@@ -505,9 +571,16 @@ export default function App() {
     fixedLocation?: { location: GeoPoint | null; locationSource: LocationSource; locationHint?: string };
     // Replay odtwarza istniejącą migawkę → nie tworzymy kolejnej (uniknięcie duplikatów).
     recordCapture?: boolean;
+    // MIĘKKA podpowiedź nazwy lokalu (triaż: wyłuskana z OCR szyldu) — idzie do modelu jako „podpowiedź" (kontekst),
+    // ale NIE robi twardego override nazwy (to robi tylko ręczny `hint` usera). Model potwierdza/odrzuca z karty.
+    softVenueName?: string;
+    // WZNAWIANIE: gdy ustawione → NIE tworzymy nowego wpisu w historii ani migawki; dograwamy do TEGO scanId
+    // (cichy replay w tle, cache-backed). Używane po starcie apki / powrocie do niej dla niedokończonych skanów.
+    resumeScanId?: string;
   }) {
     if (opts.images.length === 0) return;
-    scanCancelRef.current?.(); // przerwij ewentualny poprzedni pipeline (serwer staje, nie dolicza kosztu)
+    // PRE-FILTR „czy to menu" przeniesiony NIŻEJ — DOPIERO PO zapisaniu sampla (krytyczne: nie stracić wejścia,
+    // nawet gdy user anuluje not-a-menu). SKANY W TLE: NIE anulujemy poprzedniego skanu — leci w tle do historii.
     scanCancelRef.current = null;
     setError(null);
     setStatus("scanning");
@@ -524,7 +597,9 @@ export default function App() {
     previewStartedRef.current = false;
     venueUpgradedRef.current = false;
     setScanFoundName(null); // nie pokazuj nazwy lokalu z POPRZEDNIEGO skanu
-    const myGen = (scanGenRef.current += 1); // generacja tego skanu — odsiewa SPÓŹNIONE callbacki starych skanów
+    // WZNAWIANIE (resume): cichy replay celowany w istniejący wpis → myGen=-1 (nigdy nie pasuje do scanGenRef →
+    // ZERO dotknięć ekranu) i NIE inkrementujemy generacji (nie zrzucamy aktywnego skanu z ekranu).
+    const myGen = opts.resumeScanId != null ? -1 : (scanGenRef.current += 1); // generacja — odsiewa SPÓŹNIONE callbacki starych skanów
     // Domknięcie wczesnego lokalu (karta + zapis ★). STRAŻNIK generacji: spóźniony lokal STAREGO skanu nie
     // może zatruć bieżącego ani nie wskoczy do złego scanId (przeciek nazwy lokalu między skanami).
     const applyEarlyVenue = (r: RestaurantInfo | null) => {
@@ -536,6 +611,7 @@ export default function App() {
       }
     };
     setScanPhase({ label: "Przygotowuję wysyłkę…" });
+    let scanId: string | null = null; // PRZED try → widoczny w catch (zdjęcie „⏳ w toku" przy błędzie); ustawiany w onStructure
     try {
       // Źródła lokalizacji (oba opcjonalne):
       //  1) EXIF zdjęcia — najlepsze, bo wskazuje GDZIE zrobiono zdjęcie (lokal),
@@ -605,7 +681,6 @@ export default function App() {
       // Apka tylko wysyła zdjęcia pojedynczo w kolejności `ordered`.)
 
       let merged: Menu | null = null;
-      let scanId: string | null = null;
       setScanFromCache(false);
 
       // Mini-lista nazw na ekranie skanu (live ticker struktury). RESZTA (enrich/zdjęcia/★) dochodzi
@@ -620,6 +695,56 @@ export default function App() {
       };
       let scanCuisine = pickPeekCuisine() || ""; // kuchnia (peek; nadpisze ją meta ze struktury) — kontekst karty
 
+      // #1 PRE-FILTR „czy to menu" — DOPIERO TERAZ (sampel JUŻ zapisany wyżej → nie zginie nawet przy anulowaniu).
+      // Przy WZNAWIANIU pomijamy (to już znane menu + Alert wymagałby usera; resume jest cichy w tle).
+      if (!opts.resumeScanId) {
+        const uri0 = opts.images[0]?.hiResUri || opts.images[0]?.uri;
+        if (uri0) {
+          const mlike = await clipLooksLikeMenu(uri0).catch(() => null);
+          if (mlike && mlike.confident && !mlike.isMenu) {
+            const proceed = await new Promise<boolean>((resolve) => {
+              Alert.alert("To nie wygląda na menu", "Zdjęcie nie przypomina karty menu (analiza lokalna, na telefonie). Skanować mimo to? Skan kosztuje.", [
+                { text: "Anuluj", style: "cancel", onPress: () => resolve(false) },
+                { text: "Skanuj mimo to", onPress: () => resolve(true) },
+              ]);
+            });
+            if (!proceed) { if (myGen === scanGenRef.current) setStatus("idle"); return; } // sampel pozostaje zapisany
+          }
+        }
+      }
+
+      if (opts.resumeScanId) {
+        // WZNAWIANIE: NIE tworzymy nowego wpisu/migawki — dograwamy do ISTNIEJĄCEGO (wpis już jest „⏳ w toku",
+        // sampel i zdjęcia źródłowe już zapisane przy pierwotnym uruchomieniu). Tylko celujemy handlery w ten scanId.
+        scanId = opts.resumeScanId;
+      } else {
+        // #B WPIS W HISTORII OD RAZU (przed strukturą) — „⏳ w toku", widoczny i otwieralny; onStructure go UZUPEŁNI.
+        // Dzięki temu można opuścić skan jeszcze przed rozpoznaniem menu i wrócić do niego z historii (leci w tle).
+        const emptyMenu: Menu = { restaurant_name: opts.hint.trim() || null, restaurant_address: null, restaurant_language: "", cuisine: scanCuisine, sections: [], notes: [] };
+        const saved0 = await saveScan({ menu: emptyMenu, targetLang: opts.targetLang, model: opts.models.scan, models: opts.models, location, locationSource, useExifLocation: opts.useExifLocation, useDeviceLocation: opts.useDeviceLocation, usage: ZERO_USAGE, sessionId: sessionIdRef.current, pending: true });
+        scanId = saved0.id; scanIdRef.current = saved0.id; activeCostScanRef.current = saved0.id;
+        if (myGen === scanGenRef.current) { setFreshScanId(saved0.id); } // ekran tylko aktywny
+        setScans(await listScans()); // historia od razu pokazuje „⏳ w toku"
+        if (capture) void addCaptureRun(capture.id, saved0.id).catch(() => {}); // podłącz przebieg do sampla
+        try { const sp = persistScanImages(saved0.id, ordered); if (sp.length > 0) void setScanSourcePhotos(saved0.id, sp); } catch { /* zdjęcia źródłowe best-effort */ }
+      }
+      if (scanId) activeScanIds.current.add(scanId); // ten scanId ma ŻYWY runScan w tej sesji → resume go nie ruszy
+
+      // APKA ROBI CO MOŻE: policz menu-AI (CLIP/Apple/MLKit) per zdjęcie (pełne + wycinek) i ZAKTUALIZUJ SAMPEL
+      // (analyzeCapture zapisuje wyniki NA SAMPLU → są też dosyłalne przez sync sampla). Wyniki + OCR (już w
+      // ordered[i].ocr) pójdą RAZEM z wycinkiem (/scan/photo) — serwer GROMADZI, decyzja/triaż = później.
+      // Fresh: licz i odczytaj z sampla; resume: analiza już dołączona do obrazów.
+      const analysisByHash = new Map<string, { menuAi?: unknown; menuAiCrop?: unknown }>();
+      if (capture && !opts.resumeScanId) {
+        setScanPhase({ label: "Analizuję zdjęcia lokalnie…" });
+        if (myGen === scanGenRef.current) setAnalyzeProg({ done: 0, total: ordered.length }); // wskaźnik per zdjęcie (✓/⏳/○)
+        await analyzeCapture(capture.id, false, (done, total) => { if (myGen === scanGenRef.current) setAnalyzeProg({ done, total }); }).catch(() => {});
+        if (myGen === scanGenRef.current) setAnalyzeProg(null);
+        const cc = (await listCaptures()).find((x) => x.id === capture!.id);
+        cc?.images.forEach((im) => { const h = captureSrcHash(im); if (h) analysisByHash.set(h, { menuAi: im.menuAi, menuAiCrop: im.menuAiCrop }); });
+        if (myGen === scanGenRef.current) setCaptures(await listCaptures()); // odśwież listę sampli (marker „nowe dane")
+      }
+
       // === ARCHITEKTURA B: sesja — zdjęcia wysyłamy POJEDYNCZO (odporne, retry per zdjęcie, pasek postępu),
       // serwer buforuje, tnie PO ROZMIARZE na partie modelu i streamuje strukturę (onScanItem → rolling). ===
       setScanPhase({ label: "Wysyłam zdjęcia…" });
@@ -627,7 +752,11 @@ export default function App() {
       // osobnego /restaurant?forceNearby ani nie odsyła listy (koniec ping-ponga, mniej kodu po stronie apki).
       const sessionId = await scanStart({
         targetLang: opts.targetLang,
+        // restaurantHint = TYLKO ręczna nazwa usera (pewna). Może napędzać rozpoznanie lokalu (Places) jako fallback.
         restaurantHint: opts.hint.trim() || undefined,
+        // nameGuess = NIEPEWNA nazwa z szyldu (triaż) — idzie WYŁĄCZNIE jako sceptyczny kontekst modelu (przyjmie ją
+        // tylko gdy karta potwierdza); NIGDY nie napędza sama Google Places → nie rozpozna złego lokalu.
+        nameGuess: opts.softVenueName?.trim() || undefined,
         locationHint,
         location, // serwer rozpozna lokal w pipeline (★ + karta) — bez osobnego lookupu apki
         cuisineHint: pickPeekCuisine(),
@@ -653,7 +782,10 @@ export default function App() {
           );
         });
       for (let i = 0; i < ordered.length; i++) {
-        const img = { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType, takenAt: ordered[i]!.takenAt, srcHash: ordered[i]!.srcHash };
+        const a = ordered[i]!.srcHash ? analysisByHash.get(ordered[i]!.srcHash!) : undefined; // fresh: z sampla po srcHash
+        const img = { base64: ordered[i]!.base64, mediaType: ordered[i]!.mediaType, takenAt: ordered[i]!.takenAt, srcHash: ordered[i]!.srcHash,
+          // OCR + menu-AI RAZEM z wycinkiem (resume niesie je na obrazie; fresh — z sampla). Serwer gromadzi.
+          ocr: ordered[i]!.ocr, menuAi: ordered[i]!.menuAi ?? a?.menuAi, menuAiCrop: ordered[i]!.menuAiCrop ?? a?.menuAiCrop };
         let ok = false;
         for (let attempt = 0; attempt < 2 && !ok; attempt++) {
           try { await scanUploadPhoto(sessionId, i, img); ok = true; } catch { /* 1 automatyczny retry */ }
@@ -674,41 +806,52 @@ export default function App() {
       // (warm + finał emitują 2×, kluczowanie po id NIE podwaja).
       const photosById = new Map<string, DishPhotoLite[]>(); // id → zdjęcia poglądowe (#3 done = rozmiar)
       const enrichById = new Map<string, ScanItemStub>();    // id → wzbogacona pozycja (#2 = rozmiar)
+      const venueIds = new Set<string>(); // id z ★ z lokalu — CLIP-refine ich NIE rusza (★ ma pierwszeństwo)
       const photoExpectIds = new Set<string>();              // id z photo_query (#3 total)
+      // BENCHMARK weryfikatorów zdjęć: oceń każde przysłane zdjęcie LOKALNYMI modelami i odeślij werdykty (best-effort,
+      // poza UI). dish = photo_query/full_name (klucz grupowania w LABie). Dedupe po (id,url). Apka testowa → wszystko.
+      const photoEvalSent = new Set<string>();
+      const evalDishPhotos = (id: string, photos: DishPhotoLite[]) => {
+        const dish = enrichById.get(id)?.photoQuery || enrichById.get(id)?.full_name || id;
+        const branded = !!enrichById.get(id)?.branded; // markowy produkt → ocena nie karze zdjęcia produktowego
+        const todo = photos.filter((p) => p.url && /^https?:\/\//i.test(p.url) && !photoEvalSent.has(id + " " + p.url));
+        if (!todo.length) return;
+        void (async () => {
+          const verdicts: { dish: string; url: string; evaluator: string; score: number; label?: string; meta?: unknown }[] = [];
+          for (const p of todo) {
+            photoEvalSent.add(id + " " + p.url);
+            const ctx = { branded, fromVenue: !!p.fromVenue, domain: p.domain ?? null, source: p.source ?? null, contextUrl: p.contextUrl ?? null, photoQuery: enrichById.get(id)?.photoQuery ?? dish, fullName: enrichById.get(id)?.full_name ?? null };
+            const vs = await evaluatePhoto(dish, p.url!, branded);
+            for (const v of vs) v.meta = { ...(v.meta && typeof v.meta === "object" ? (v.meta as object) : {}), ctx };
+            verdicts.push(...vs);
+            // ★ z lokalu → ZAWSZE pokazane userowi (decyzja do LABu, osobny „weryfikator" app-decision)
+            verdicts.push({ dish, url: p.url!, evaluator: "app-decision", score: 1, label: "✓ pokazane (★ z lokalu)", meta: { kept: true, venue: true, ctx } });
+          }
+          await sendPhotoFeedback(verdicts, EVAL_PLATFORM);
+        })();
+      };
 
       // FAZA A (struktura gotowa): zapis skanu, pokaż menu, wczesne przejście do listy. Reszta dochodzi po id.
       const onStructure = async (structureMenu: Menu) => {
-        if (myGen !== scanGenRef.current) return;
-        if (opts.hint.trim()) structureMenu.restaurant_name = opts.hint.trim(); // nazwa od usera ma pierwszeństwo
-        setScanProgress(null);
-        const saved = await saveScan({
-          menu: structureMenu, targetLang: opts.targetLang, model: opts.models.scan, models: opts.models,
-          location, locationSource, useExifLocation: opts.useExifLocation, useDeviceLocation: opts.useDeviceLocation,
-          usage: ZERO_USAGE, sessionId: sessionIdRef.current, // koszt CAŁEGO skanu dolicza się w finale (done.usage)
-        });
-        if (myGen !== scanGenRef.current) return;
-        scanId = saved.id; scanIdRef.current = saved.id; activeCostScanRef.current = saved.id;
-        setFreshScanId(saved.id); setScans(await listScans());
-        // Nałóż to, co rolling przysłał JUŻ PRZED strukturą (enrich + zdjęcia po id) — pozycje od razu opisane/ze
-        // zdjęciami, bez „od zera". Po strukturze kolejne enrich-item/photo łatają menu na bieżąco (menu != null).
+        if (opts.hint.trim()) structureMenu.restaurant_name = opts.hint.trim(); // ręczna nazwa usera ma pierwszeństwo
+        // Nałóż rolling (enrich + zdjęcia sprzed struktury) — ZAWSZE (też w tle), by wpis był kompletny.
         let m = structureMenu;
         enrichById.forEach((stub) => { m = patchEnrichById(m, stub); });
         photosById.forEach((photos, id) => { m = attachPhotosById(m, id, photos, false); });
+        // PERSIST do wpisu utworzonego NA STARCIE (po lokalnym scanId) — ZAWSZE (uzupełnia „⏳ w toku" o strukturę).
+        if (scanId) await updateScanMenu(scanId, m);
+        if (myGen !== scanGenRef.current) { void listScans().then(setScans).catch(() => {}); return; } // tło: odśwież historię i tyle
+        // EKRAN — tylko aktywny skan:
+        setScanProgress(null);
+        setScans(await listScans());
         setMenu(m);
-        if (scanId) void updateScanMenu(scanId, m);
         setStructureReady(true); setBrowseEarly(true); // struktura zamrożona → auto-przejście do listy
         structureFrozenRef.current = true; structureMenuRef.current = m;
-        // Karta lokalu dojdzie zdarzeniem `venue` (serwer). Kontekst do RĘCZNEJ zmiany lokalu ustawiamy już
-        // teraz (przycisk „Zły lokal?"); onVenue uzupełni bieżący lokal + kandydatów.
+        // Karta lokalu dojdzie zdarzeniem `venue` (serwer). Kontekst do RĘCZNEJ zmiany lokalu ustawiamy już teraz.
         setRestaurantCtx({ menu: structureMenu, location, scanId: scanId!, lang: opts.targetLang, apply: applyEarlyVenue, applyMenu: setMenu, current: freshVenueRef.current, candidates: [] });
-        if (capture && scanId) void addCaptureRun(capture.id, scanId).catch(() => {});
-        if (scanId) {
-          try { const sp = persistScanImages(scanId, ordered); if (sp.length > 0) void setScanSourcePhotos(scanId, sp); }
-          catch { /* zapis zdjęć źródłowych best-effort — nie blokuje skanu */ }
-        }
       };
 
-      const ctrl = scanRunPipeline(
+      const startPipeline = () => scanRunPipeline(
         sessionId,
         {
           onProgress: (p) => { if (myGen === scanGenRef.current) setScanPhase(scanPhaseLabel(p)); },
@@ -720,9 +863,10 @@ export default function App() {
           },
           onStructure,
           onEnrichItem: (stub) => {
-            if (myGen !== scanGenRef.current || !stub.id) return;
-            enrichById.set(stub.id, stub); // bufor po id — nałoży się w onStructure (gdy enrich przyszedł przed strukturą)
+            if (!stub.id) return;
+            enrichById.set(stub.id, stub); // bufor po id ZAWSZE (także gdy skan zszedł w tło) → finalne menu kompletne
             if (stub.photoQuery) photoExpectIds.add(stub.id);
+            if (myGen !== scanGenRef.current) return; // dalej tylko EKRAN aktywnego skanu
             setMenu((prev) => (prev ? patchEnrichById(prev, stub) : prev)); // po strukturze: łata od razu; przed = no-op (bufor wyżej)
             setScanItems((prev) => prev.map((x) => ((x.full_name || x.original) === (stub.full_name || stub.original) ? { ...x, translated: stub.translated || x.translated, description: stub.description || x.description, enriched: true } : x)));
             // Liczniki #2 (wzbogacone) i #3-cel (ze spodziewanym zdjęciem) — z ROZMIARU zbiorów (idempotentne na powtórki).
@@ -730,60 +874,121 @@ export default function App() {
             setPhotoProg({ done: photosById.size, total: photoExpectIds.size });
           },
           onPhoto: async (id, photos) => {
-            if (myGen !== scanGenRef.current) return;
-            const cached = await cachePhotos(photos);
-            if (myGen !== scanGenRef.current) return;
+            const cached = await cachePhotos(photos); // pobierz+cache ZAWSZE (też w tle — do finalnego menu i podglądu z historii)
             previewStartedRef.current = true;
-            if (!photosById.has(id)) photosById.set(id, cached); // poglądowe — nie nadpisuj ewentualnego ★ (idempotentne na powtórki warm+finał)
-            setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, false) : prev)); // po strukturze łata; przed = bufor (photosById) nałoży onStructure
-            setScanItems((prev) => prev.map((x) => (x.id === id && !x.photo ? { ...x, photo: cached[0]?.url } : x))); // miniatura w tickerze już w trakcie czytania
-            setPhotoProg({ done: photosById.size, total: photoExpectIds.size }); // #3 z ROZMIARÓW zbiorów (idempotentne)
+            if (!photosById.has(id)) photosById.set(id, cached); // bufor po id ZAWSZE (nie nadpisuj ewentualnego ★)
+            if (myGen === scanGenRef.current) { // EKRAN tylko aktywnego skanu
+              setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, false) : prev));
+              setScanItems((prev) => prev.map((x) => (x.id === id && !x.photo ? { ...x, photo: cached[0]?.url } : x)));
+              setPhotoProg({ done: photosById.size, total: photoExpectIds.size });
+            }
+            // OCENA LOKALNA (CLIP+Apple, 1× per zdjęcie): benchmark na serwer ORAZ ranking+odsiew tego, co widać.
+            // Najlepsze pierwsze; grafiki/produkty (Apple isUtility, gdy !branded) i prawie-zero CLIP odrzucone (zostaw ≥1).
+            // ★ z lokalu (venueIds) NIE ruszamy — zawsze z przodu, nie odrzucamy. Aktualizuje BUFOR po id → finalne menu (mergeDoneById).
+            void (async () => {
+              const dish = enrichById.get(id)?.photoQuery || enrichById.get(id)?.full_name || id;
+              const branded = !!enrichById.get(id)?.branded;
+              const todo = photos.filter((p) => p.url && /^https?:\/\//i.test(p.url) && !photoEvalSent.has(id + " " + p.url));
+              if (!todo.length) return;
+              todo.forEach((p) => photoEvalSent.add(id + " " + p.url));
+              const { scores, verdicts } = await scoreDishPhotosForRank(dish, todo, { branded, photoQuery: enrichById.get(id)?.photoQuery, fullName: enrichById.get(id)?.full_name });
+              // ranking liczymy ZAWSZE (też gdy skan w tle) → finalne menu w historii dostaje uszeregowane/odsiane zdjęcia
+              const venue = venueIds.has(id);
+              const ranked = venue ? null : rankFilterPhotos(cached, scores);
+              if (ranked && ranked.length) photosById.set(id, ranked); // ranking+odsiew → bufor (finalne menu)
+              // DECYZJA „pokazane userowi" per zdjęcie → osobny weryfikator app-decision (data + status w LABie). venue → wszystkie pokazane.
+              const shown = ranked ?? cached;
+              const keptKeys = new Set(shown.map((p) => p.remoteUrl ?? p.url));
+              const rankOf = new Map(shown.map((p, i) => [p.remoteUrl ?? p.url, i] as const));
+              const decision = todo.map((p) => ({ dish, url: p.url!, evaluator: "app-decision", score: keptKeys.has(p.url!) ? 1 : 0, label: keptKeys.has(p.url!) ? `✓ pokazane (poz ${(rankOf.get(p.url!) ?? 0) + 1})` : "✗ odsiane", meta: { kept: keptKeys.has(p.url!), rank: rankOf.get(p.url!) ?? null, branded } }));
+              void sendPhotoFeedback([...verdicts, ...decision], EVAL_PLATFORM);
+            })();
           },
           onVenuePhoto: async (id, photos) => {
-            if (myGen !== scanGenRef.current) return;
+            venueIds.add(id); // ★ z lokalu — ZAWSZE (CLIP-refine pomija tę pozycję)
+            evalDishPhotos(id, photos); // benchmark weryfikatorów (poza UI)
             const cached = await cachePhotos(photos);
-            if (myGen !== scanGenRef.current) return;
-            photosById.set(id, mergePhotos(cached, photosById.get(id) ?? [])); // ★ z przodu, poglądowe zostają
-            setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, true) : prev));
+            photosById.set(id, mergePhotos(cached, photosById.get(id) ?? [])); // ★ z przodu ZAWSZE → finalne menu (też w tle)
+            if (myGen === scanGenRef.current) setMenu((prev) => (prev ? attachPhotosById(prev, id, cached, true) : prev)); // EKRAN tylko aktywnego
           },
           onVenue: (restaurant, candidates) => {
-            if (myGen !== scanGenRef.current) return;
+            if (scanId) void updateScanRestaurant(scanId, restaurant); // persist lokalu po LOKALnym scanId ZAWSZE (też w tle)
+            if (myGen !== scanGenRef.current) return; // dalej tylko EKRAN aktywnego skanu
             setScanFoundName(restaurant.name);
             setFreshRestaurant(restaurant);
             freshVenueRef.current = restaurant;
             setRestaurantCtx((prev) => (prev
               ? { ...prev, current: restaurant, candidates }
               : { menu: structureMenuRef.current ?? { restaurant_name: restaurant.name, restaurant_address: restaurant.address ?? null, restaurant_language: "", cuisine: scanCuisine, sections: [], notes: [] }, location, scanId: scanIdRef.current ?? "", lang: opts.targetLang, apply: applyEarlyVenue, applyMenu: setMenu, current: restaurant, candidates }));
-            if (scanIdRef.current) void updateScanRestaurant(scanIdRef.current, restaurant);
           },
         },
       );
-      scanCancelRef.current = ctrl.cancel;
-      const done = await ctrl.promise;
-      if (myGen !== scanGenRef.current) return; // nowy skan w międzyczasie — porzuć ten wynik
-      setScanFromCache(done.cached); // cała struktura z cache → „bez kosztu modelu"
+      // WZNAWIANIE po zerwaniu sieci: ponawiamy /scan/run na TYM SAMYM sessionId (zdjęcia już wgrane → zero re-uploadu;
+      // kroki z cache → ≈0 kosztu). Max 2 ponowienia, TYLKO dla błędów sieci, z backoffem. Stan rolling (po id) jest
+      // idempotentny (re-stream nakłada to samo), a photoEvalSent dedupuje ocenę zdjęć → bez podwójnej pracy/kosztu.
+      let done: Awaited<ReturnType<typeof startPipeline>["promise"]>;
+      for (let attempt = 0; ; attempt++) {
+        const ctrl = startPipeline();
+        if (myGen === scanGenRef.current) scanCancelRef.current = ctrl.cancel; // cancel-ref tylko aktywnego
+        try { done = await ctrl.promise; break; }
+        catch (e) {
+          // Skan w tle TEŻ retryuje/dokańcza (nie porzucamy go po nowym skanie) — tylko status pokazujemy na ekranie aktywnego.
+          const msg = String((e as Error)?.message ?? e);
+          // RETRY tylko dla TRANSIENT: sieć/timeout ORAZ przeciążenie/limit po stronie API (Overloaded/5xx/429/rate).
+          const isNet = /Network request failed|Błąd sieci|Failed to fetch/i.test(msg);
+          const transient = isNet || /timeout|trwał za długo|overload|Overloaded|HTTP 5\d\d|\b5(0\d|2\d)\b|429|too many|rate.?limit|przeciąż|Chwilowy błąd serwera|ECONNRESET|socket hang/i.test(msg);
+          // SAFETY SWITCH: deterministyczne/nieznane błędy (400/invalid, budżet/limit konta, auth) → NIE ponawiamy
+          // (żeby tokenożerny/błędny problem nie kręcił się w kółko). + twardy cap prób.
+          const nonRetry = /invalid_request|temperature|budżet|budget|limit.*(konta|kredyt|API)|HTTP 4\d\d|\b40[0-9]\b|nieprawidłow|autoryzacj/i.test(msg);
+          if (!transient || nonRetry) throw e; // pokaż od razu (re-send ręczny)
+          if (attempt >= 6) throw e; // ~1 min ponawiania nie pomógł → łagodny komunikat niżej (inline)
+          // Status (tylko aktywny ekran): sieć vs serwer-zajęty; user widzi, że „trwa dłużej niż zwykle".
+          if (myGen === scanGenRef.current) setScanPhase({ label: isNet ? "📶 Słaby internet — odzyskuję połączenie…" : "⏳ Trwa dłużej niż zwykle — serwer zajęty, ponawiam…" });
+          await new Promise<void>((r) => setTimeout(r, Math.min(15000, 2000 * 2 ** attempt))); // 2,4,8,15,15,15 s (coraz dłużej)
+        }
+      }
       // FINALIZACJA: autorytatywne, wzbogacone menu z serwera (done) + dociągnięte zdjęcia (po id).
       const finalMenu = mergeDoneById(done.menu, photosById);
-      setMenu(finalMenu);
-      // NAJPIERW flip na „done" (zdejmuje spinnery enrich/zdjęcia) — DOPIERO POTEM odśwież listę skanów (async),
-      // żeby między setMenu a setStatus nie było renderu w stanie „scanning" z menu bez flag enriched.
-      setScanPhase(null);
-      setScanItems([]);
-      setPhotoProg(null); // pipeline (z fotkami) skończony → znika pasek „Pobieram zdjęcia…"
-      setStatus("done"); // pipeline gotowy → akcje mutujące odblokowane
-      if (scanIdRef.current) {
-        await updateScanMenu(scanIdRef.current, finalMenu); // serializowane w storage → koszt poniżej NIE nadpisze menu ze zdjęciami
-        await addScanUsage(scanIdRef.current, done.usage); // koszt całego skanu (struktura+enrich+zdjęcia) raz
-        if (appCfg.autoDescriptions) void fillDescriptions(finalMenu, scanIdRef.current, opts.targetLang, setMenu);
+      // PERSIST po LOKALnym scanId — ZAWSZE (także gdy skan zszedł w tło): finalne menu + koszt + zdejmij „⏳ w toku".
+      if (scanId) {
+        await updateScanMenu(scanId, finalMenu); // serializowane w storage → koszt poniżej NIE nadpisze menu ze zdjęciami
+        await addScanUsage(scanId, done.usage); // koszt całego skanu (struktura+enrich+zdjęcia) raz
+        await setScanPending(scanId, false); // skan ukończony → historia zdejmuje „⏳ w toku"
+        if (appCfg.autoDescriptions && myGen === scanGenRef.current) void fillDescriptions(finalMenu, scanId, opts.targetLang, setMenu);
       }
-      setScans(await listScans());
+      // EKRAN — tylko aktywny skan (w tle nic nie ruszamy na ekranie nowego skanu).
+      if (myGen === scanGenRef.current) {
+        setScanFromCache(done.cached); // cała struktura z cache → „bez kosztu modelu"
+        setMenu(finalMenu);
+        setScanPhase(null);
+        setScanItems([]);
+        setPhotoProg(null); // pipeline (z fotkami) skończony → znika pasek „Pobieram zdjęcia…"
+        setStatus("done"); // pipeline gotowy → akcje mutujące odblokowane
+      }
+      setScans(await listScans()); // odśwież historię ZAWSZE → ukończony wpis / zdjęte „⏳" wskakuje (live)
+      // ★ (app-driven) po skanie AKTYWNYM, gdy lokal znany + online: pula → lokalna analiza WSZYSTKIMI modelami →
+      // serwer decyduje + matchuje podzbiór. W TLE/wznawianiu pomijamy — ★ doczepi się, gdy user wejdzie w menu.
+      if (myGen === scanGenRef.current && scanId) {
+        const sv = (await listScans()).find((s) => s.id === scanId);
+        if (sv?.restaurant?.name && !sv.venueTried) void completeVenuePhotos(sv);
+      }
     } catch (e) {
       reportError(e instanceof Error ? e.message : String(e), { stack: e instanceof Error ? e.stack : undefined, label: "scan", context: { images: opts.images.length, model: opts.models.scan } });
-      setError(friendlyMessage(e instanceof Error ? e.message : undefined));
-      setStatus("error");
-      setScanProgress(null);
-      setScanPhase(null);
-      setScanItems([]);
+      // Przy WZNAWIANIU zostaw „⏳ w toku" → kolejny start/powrót do apki spróbuje dograć ponownie (cache-backed).
+      // Normalny skan: zdejmij „⏳" (serwer i tak policzył+zcachował → ręczny replay z cache jest darmowy).
+      if (scanId && !opts.resumeScanId) void setScanPending(scanId, false);
+      if (scanId) void listScans().then(setScans).catch(() => {});
+      if (myGen === scanGenRef.current) { // błąd na EKRANIE tylko aktywnego skanu (w tle/wznawianiu nie psujemy ekranu)
+        // Jasny komunikat „nie udało się zeskanować menu" + powód; zdjęcia zostają w formularzu → user może wysłać ponownie.
+        setError("Nie udało się dokończyć skanu menu. " + friendlyMessage(e instanceof Error ? e.message : undefined));
+        setStatus("error");
+        setScanProgress(null);
+        setAnalyzeProg(null);
+        setScanPhase(null);
+        setScanItems([]);
+      }
+    } finally {
+      if (scanId) activeScanIds.current.delete(scanId); // runScan tego scanId już nie żyje → resume może go znów podjąć (gdy pending)
     }
   }
 
@@ -842,8 +1047,10 @@ export default function App() {
   // (modele/język w Ustawieniach), a potem sam kliknąć „Przetłumacz menu". Skan pójdzie wtedy
   // wg AKTUALNYCH ustawień (porównania tego samego wejścia różnymi modelami).
   async function replayCapture(c: ScanCapture) {
+    await recomputeCaptureOcr(c.id).catch(() => {}); // świeży OCR przed kadrami (crop do modelu) + do wysyłki
+    const cc = (await listCaptures()).find((x) => x.id === c.id) ?? c;
     const imgs: PreparedImage[] = [];
-    for (const im of c.images) {
+    for (const im of cc.images) {
       const base64 = await captureImageBase64(im, true); // replay: crop DO MODELU jak w żywym skanie z aparatu (sampel = pełny)
       if (!base64) continue;
       imgs.push({
@@ -852,12 +1059,14 @@ export default function App() {
         mediaType: "image/jpeg",
         exifLocation: im.exifLocation,
         srcHash: captureSrcHash(im), // md5 pliku sampla (verbatim oryginał) = ten sam klucz cache co świeży skan
+        ocr: im.ocr, // OCR sampla → triaż działa też przy replayu (bez tego replay nie miał per-zdjęcie OCR)
       });
     }
     if (imgs.length === 0) {
       Alert.alert("Brak zdjęć", "Pliki tej migawki nie są już dostępne na urządzeniu.");
       return;
     }
+    void analyzeCapture(c.id, true).catch(() => {}); // świeża analiza menu-AI (mlkit/apple/clip) w tle → marker + wysyłka
     // Przełącz na ekran skanu i przygotuj go w trybie wyboru (resetScan → idle).
     setShowCaptures(false);
     setShowDiag(false);
@@ -877,10 +1086,106 @@ export default function App() {
     setReplayLocation({ location: c.location, locationSource: c.locationSource, locationHint: c.locationHint });
   }
 
+  // WZNAWIANIE niedokończonych skanów: po starcie apki / powrocie do niej dograj z serwera (z CACHE) resztę dla
+  // wpisów „⏳ w toku", których runScan NIE żyje w tej sesji (apka była zamknięta / utracono sieć). Cicho, w tle,
+  // celowane w istniejący scanId (resumeScanId) — serwer i tak doliczył+zcachował → ponowny run ≈ 0 zł (srcHash cache).
+  async function resumePendingScans() {
+    let all: SavedScan[];
+    try { all = await listScans(); } catch { return; }
+    const DAY = 24 * 3600 * 1000;
+    const pend = all.filter((s) => s.pending && s.models && Date.now() - s.createdAt < DAY
+      && !activeScanIds.current.has(s.id) && !resumingRef.current.has(s.id));
+    if (pend.length === 0) return;
+    let caps: ScanCapture[];
+    try { caps = await listCaptures(); } catch { return; }
+    for (const s of pend) {
+      if (activeScanIds.current.has(s.id) || resumingRef.current.has(s.id)) continue;
+      const cap = caps.find((c) => c.runs?.some((r) => r.scanId === s.id) || c.scanId === s.id);
+      if (!cap) continue; // brak źródłowego sampla → nie wznowimy (zostaje „⏳"; user może wczytać sampla ręcznie)
+      resumingRef.current.add(s.id);
+      try {
+        const imgs: PreparedImage[] = [];
+        for (const im of cap.images) {
+          const base64 = await captureImageBase64(im, true); // crop DO MODELU + srcHash = ten sam klucz cache → ~0 zł
+          if (!base64) continue;
+          imgs.push({ uri: resolveCaptureUri(im.path) ?? im.path, base64, mediaType: "image/jpeg", exifLocation: im.exifLocation, srcHash: captureSrcHash(im), ocr: im.ocr, menuAi: im.menuAi, menuAiCrop: im.menuAiCrop });
+        }
+        if (imgs.length === 0) continue; // pliki sampla zniknęły z urządzenia
+        await runScan({
+          images: imgs,
+          targetLang: s.targetLang,
+          models: s.models!,
+          hint: s.restaurantName ?? cap.restaurantHint ?? "",
+          useExifLocation: cap.useExifLocation,
+          useDeviceLocation: cap.useDeviceLocation,
+          fixedLocation: { location: s.location ?? cap.location, locationSource: cap.locationSource, locationHint: cap.locationHint },
+          recordCapture: false, // nie twórz nowej migawki
+          resumeScanId: s.id, // dograj do ISTNIEJĄCEGO wpisu (cicho, w tle)
+        });
+      } catch { /* zostaje pending → kolejny start/powrót do apki spróbuje znów */ }
+      finally { resumingRef.current.delete(s.id); }
+    }
+  }
+  resumeRef.current = () => { void resumePendingScans(); }; // każdy render → AppState/timer dostają najświeższą wersję
+
+  // ★ ZDJĘCIA Z LOKALU — TRYB APP-DRIVEN (po skanie / przy powrocie do menu). Harvest puli (serwer, tani, bez wizji) →
+  // lokalna analiza WSZYSTKIMI modelami (food + per-danie CLIP, do porównania z wizją) → SERWER decyduje i matchuje
+  // (płatna wizja na PODZBIORZE) → doczep ★ do menu. Odroczone: apka niedostępna → dokończy się przy następnym wejściu.
+  async function completeVenuePhotos(scan: SavedScan, opts: { silent?: boolean } = {}) {
+    if (venueRunningRef.current.has(scan.id)) return;
+    const cur = (await listScans().catch(() => [] as SavedScan[])).find((s) => s.id === scan.id) ?? scan; // najświeższy stan
+    const r = cur.restaurant;
+    if (!r || !r.name || cur.venueTried) return; // brak lokalu / już próbowane
+    const keyToIds = new Map<string, string[]>(); // klucz dania (full_name||original) → [id pozycji]
+    for (const sec of cur.menu.sections) for (const it of sec.items) {
+      if (!it.id || !it.original) continue;
+      const key = it.full_name || it.original;
+      (keyToIds.get(key) ?? keyToIds.set(key, []).get(key)!).push(it.id);
+    }
+    const dishKeys = [...keyToIds.keys()];
+    if (!dishKeys.length) return;
+    venueRunningRef.current.add(scan.id);
+    const showProg = !opts.silent && (openScan?.id === scan.id || (tab === "scan" && freshScanId === scan.id));
+    try {
+      const taPhotos = (r.tripAdvisor?.photos ?? []).map((p) => ({ url: p.url, caption: p.caption ?? null }));
+      const pool = await fetchVenuePool({ name: r.name, website: r.website ?? undefined, city: r.city ?? undefined, photoNames: r.photoNames ?? [], taPhotos });
+      if (!pool.length) { await setVenueTried(scan.id, true); return; }
+      // Lokalna analiza puli WSZYSTKIMI modelami — z postępem (pula bywa duża → kilkadziesiąt zdjęć).
+      if (showProg) setVenuePhotoProg({ done: 0, total: pool.length });
+      const withSignals: Parameters<typeof postVenueMatch>[0] = [];
+      for (let i = 0; i < pool.length; i++) {
+        const p = pool[i]!;
+        const url = p.url ?? (p.photoName ? placePhotoUrl(p.photoName, 400) : undefined);
+        if (url) { const f = await venuePoolFood(url, dishKeys).catch(() => null); withSignals.push(f ? { ...p, clipFood: f.clipFood, appleFood: f.appleFood, mlkitFood: f.mlkitFood, clipDishes: f.clipDishes, local: f.raw } : { ...p }); }
+        else withSignals.push({ ...p });
+        if (showProg) setVenuePhotoProg({ done: i + 1, total: pool.length });
+      }
+      const certain = r.nameVerified !== false && !r.guessedByLocation;
+      const { byDish } = await postVenueMatch(withSignals, dishKeys, { cuisine: cur.menu.cuisine, certain, name: r.name, website: r.website ?? undefined, city: r.city ?? undefined });
+      let m = cur.menu; let any = false;
+      for (const [key, ids] of keyToIds) {
+        const photos = byDish[key] as DishPhotoLite[] | undefined;
+        if (!photos || !photos.length) continue;
+        const cached = await cachePhotos(photos); // pobierz ★ na dysk (offline) — jak onVenuePhoto
+        for (const id of ids) { m = attachPhotosById(m, id, cached, true); any = true; } // ★ z przodu, nie odrzucamy
+      }
+      if (any) {
+        await updateScanMenu(scan.id, m);
+        setOpenScan((prev) => (prev && prev.id === scan.id ? { ...prev, menu: m } : prev)); // live, gdy otwarty
+        if (freshScanId === scan.id) setMenu(m); // świeży skan na ekranie
+        setScans(await listScans());
+      }
+      await setVenueTried(scan.id, true);
+    } catch { /* nie oznaczaj `venueTried` → spróbuje przy następnym wejściu w menu (offline/sieć) */ }
+    finally { venueRunningRef.current.delete(scan.id); if (showProg) setVenuePhotoProg(null); }
+  }
+
   function resetScan() {
     replayCaptureIdRef.current = null; // ręczny „nowy skan" → to nie replay (świeża migawka)
     scanGenRef.current += 1; // unieważnij ewentualną SPÓŹNIONĄ pompę poprzedniego skanu (nie nadpisze statusu)
     setPhotoProg(null);
+    setAnalyzeProg(null);
+    setScanProgress(null);
     newSession(); // nowa SESJA usera (od „nowy skan" do „nowy skan") — wspólny tag wszystkich ops
     setImages([]);
     setReplayLocation(null);
@@ -1202,10 +1507,15 @@ export default function App() {
     if (!scan.restaurant && scan.menu.restaurant_name) {
       lookupRestaurant(scan.menu, scan.location, scan.id, scan.targetLang, apply, { applyMenu });
     }
+    // ★ ZDJĘCIA Z LOKALU (app-driven): domknij fazę przy wejściu w menu, gdy lokal znany i jeszcze nie próbowano.
+    // Tak realizuje się „faza dokańcza się później, gdy user wróci do menu" (offline w trakcie skanu / serwer czekał).
+    if (scan.restaurant?.name && !scan.venueTried) void completeVenuePhotos(scan);
   }
 
   async function removeSaved(id: string) {
-    const sp = scans.find((s) => s.id === id)?.sourcePhotos;
+    const scan = scans.find((s) => s.id === id);
+    if (scan) await recordDeletedCost(scan); // KOSZT to wydatek → zapisz do statystyki lokalnej PRZED skasowaniem menu
+    const sp = scan?.sourcePhotos;
     if (sp && sp.length > 0) deleteScanImages(sp); // posprzątaj pliki zdjęć źródłowych
     await deleteScan(id);
     setScans(await listScans());
@@ -1214,6 +1524,16 @@ export default function App() {
 
   // Scala zdjęcia: LEPSZE (świeże) z przodu, dotychczasowe na końcu — bez duplikatów i bez
   // znikania już wyszukanych. Dedup po remoteUrl/url (te same źródła = ten sam plik cache).
+  // Ranking + odsiew zdjęć dania wg lokalnej oceny (CLIP+Apple): najlepsze pierwsze, odrzuć `drop` (grafika/produkt/
+  // prawie-zero), ale ZAWSZE zostaw ≥1 (danie nigdy bez zdjęcia). Klucz oceny = remoteUrl (przed cache) lub url.
+  function rankFilterPhotos(photos: DishPhotoLite[], scores: Map<string, { score: number; drop: boolean }>): DishPhotoLite[] {
+    const keyOf = (p: DishPhotoLite) => p.remoteUrl ?? p.url;
+    const withS = photos.map((p) => ({ p, s: scores.get(keyOf(p)) }));
+    withS.sort((a, b) => (b.s?.score ?? 0) - (a.s?.score ?? 0)); // najlepsze pierwsze; bez oceny → 0 (na koniec)
+    const kept = withS.filter((x) => !x.s?.drop);
+    return (kept.length ? kept : withS.slice(0, 1)).map((x) => x.p);
+  }
+
   function mergePhotos(fresh: DishPhotoLite[], old: DishPhotoLite[]): DishPhotoLite[] {
     const key = (p: DishPhotoLite) => p.remoteUrl ?? p.url;
     const seen = new Set<string>();
@@ -1368,6 +1688,18 @@ export default function App() {
     const dis = scanning;
     return (
       <View>
+        {scanning && ss?.pending ? ( // wpis otwarty z historii, wciąż dogrywany w tle/wznawianiu → wskaźnik na żywo
+          <View style={styles.pendingBanner}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.pendingBannerText}>Skan w toku — pozycje i zdjęcia dochodzą na żywo…</Text>
+          </View>
+        ) : null}
+        {venuePhotoProg ? ( // app-driven ★: lokalna analiza puli z lokalu (food + per-danie CLIP) przed płatną wizją
+          <View style={styles.pendingBanner}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.pendingBannerText}><Icon name="star" size={12} color={colors.accent} /> Dobieram zdjęcia z lokalu… {venuePhotoProg.done}/{venuePhotoProg.total} (analiza lokalna)</Text>
+          </View>
+        ) : null}
         {r || args.restaurantLoading ? (
           <View style={styles.confirmBox}>
             {renderRestaurant(r)}
@@ -2033,8 +2365,9 @@ export default function App() {
                   Historia{scans.length ? ` (${scans.length})` : ""}
                 </Text>
               </Pressable>
-              {/* „Nowy skan" PRZYKLEJONY w pasku — gdy patrzysz na wynik skanu LUB jesteś w Historii. */}
-              {tab === "history" || (tab === "scan" && status === "done" && menu) ? (
+              {/* „Nowy skan" PRZYKLEJONY w pasku — gdy patrzysz na wynik, jesteś w Historii LUB TRWA skan (też wczesny,
+                  przed rozpoznaniem menu): start nowego NIE anuluje bieżącego — leci w tle, jest już w historii „⏳ w toku". */}
+              {tab === "history" || (tab === "scan" && (status === "done" || status === "scanning")) ? (
                 <Pressable onPress={() => { resetScan(); setTab("scan"); }} style={styles.tabsNewScan}>
                   <Text style={styles.navText}>＋ Nowy skan</Text>
                 </Pressable>
@@ -2103,8 +2436,10 @@ export default function App() {
                 targetLang: openScan.targetLang,
                 onItemPress: onDetailItemPress,
                 onSearchMore: onDetailSearchMore,
-                scanning: false,
-                enriching: false,
+                // Wpis „w toku" (dogrywany w tle/wznawianiu): pozycje wchodzą NA ŻYWO, a akcje mutujące zablokowane
+                // do końca (odblokują się, gdy „⏳" zniknie) → brak edycji niegotowego menu i kolizji z resyncem.
+                scanning: !!openScan.pending,
+                enriching: !!openScan.pending,
               })
             : null}
 
@@ -2121,7 +2456,7 @@ export default function App() {
           {/* SKANOWANIE */}
           {!showingDetail && tab === "scan" ? (
             <>
-              {status === "idle" ? (
+              {status === "idle" || status === "error" ? ( // error → pokaż wejście (zdjęcia zostają) + komunikat + „Przetłumacz" = wyślij ponownie
                 <View>
                   {/* 1) ZDJĘCIA — główna akcja na górze. Pusto → wyraźny drop-zone. */}
                   {images.length === 0 ? (
@@ -2184,6 +2519,21 @@ export default function App() {
                     </>
                   )}
 
+                  {/* Opcja TRIAŻ — ZAWSZE widoczna (nie tylko przy dodanych zdjęciach), wyraźny box. Domyślnie OFF = wyślij
+                      wszystko (stara ścieżka). ON = pomijaj zdjęcia nie-menu + nazwa z szyldu jako hint. */}
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: triageScan ? colors.accent : colors.badgeBg, backgroundColor: colors.card }}>
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                      <Text style={{ fontSize: 14, fontWeight: "800", color: colors.text }}>🔀 Triaż zdjęć (test){triageScan ? " — WŁ." : ""}</Text>
+                      <Text style={{ fontSize: 11, color: colors.muted, marginTop: 2 }}>
+                        {triageScan ? "Skanuję tylko karty menu; nie-menu pomijam, nazwę biorę z szyldu jako podpowiedź." : "Domyślnie: wysyłam wszystkie zdjęcia do modelu (stara ścieżka)."}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={triageScan}
+                      onValueChange={(v) => { setTriageScan(v); void AsyncStorage.setItem(TRIAGE_SCAN_KEY, v ? "1" : "0"); }}
+                    />
+                  </View>
+
                   {/* 2) TŁUMACZ — primary, od razu pod zdjęciami. */}
                   <Pressable
                     style={[styles.button, styles.primary, images.length === 0 && styles.disabled]}
@@ -2203,7 +2553,24 @@ export default function App() {
               {status === "scanning" && !browseEarly ? (
                 <View style={styles.center}>
                   <ActivityIndicator size="large" color={colors.accent} />
-                  {scanProgress ? (
+                  {analyzeProg ? (
+                    <>
+                      <Text style={styles.scanning}>
+                        Analizuję zdjęcia lokalnie… {analyzeProg.done}/{analyzeProg.total}
+                      </Text>
+                      <View style={styles.aiDotsRow}>
+                        {Array.from({ length: analyzeProg.total }).map((_, i) => (
+                          <Text
+                            key={i}
+                            style={[styles.aiDot, i < analyzeProg.done ? styles.aiDotDone : i === analyzeProg.done ? styles.aiDotNow : styles.aiDotWait]}
+                          >
+                            {i < analyzeProg.done ? "✓" : i === analyzeProg.done ? "⏳" : "○"}
+                          </Text>
+                        ))}
+                      </View>
+                      <Text style={styles.scanningSub}>CLIP / Apple / ML Kit — pełne zdjęcie i wycinek. Wyniki lecą z wycinkiem na serwer.</Text>
+                    </>
+                  ) : scanProgress ? (
                     <>
                       <Text style={styles.scanning}>
                         Analizuję strony {scanProgress.done}/{scanProgress.total}…
@@ -2617,7 +2984,14 @@ const styles = StyleSheet.create({
   metaHint: { fontSize: 11, color: colors.muted, marginTop: 8, lineHeight: 16 },
   center: { alignItems: "center", paddingVertical: 48 },
   scanning: { fontSize: 18, fontWeight: "700", color: colors.text, marginTop: 16, textAlign: "center" },
+  pendingBanner: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.accent, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 12 },
+  pendingBannerText: { flex: 1, fontSize: 13, fontWeight: "700", color: colors.text },
   scanningSub: { fontSize: 13, color: colors.muted, marginTop: 6, textAlign: "center" },
+  aiDotsRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6, marginTop: 12, maxWidth: 280 },
+  aiDot: { width: 26, height: 26, lineHeight: 26, textAlign: "center", borderRadius: 13, fontSize: 13, fontWeight: "800", overflow: "hidden" },
+  aiDotDone: { backgroundColor: "#D7EFD7", color: "#2E7D32" }, // zaliczone
+  aiDotNow: { backgroundColor: colors.badgeBg, color: colors.accent }, // w toku
+  aiDotWait: { backgroundColor: colors.card, color: colors.muted }, // czeka
   scanThumbsWrap: { alignItems: "center", marginTop: 14, alignSelf: "stretch" },
   scanThumbsRow: { paddingHorizontal: 16, gap: 8 },
   scanThumb: { width: 84, height: 110, borderRadius: 10, backgroundColor: colors.badgeBg, borderWidth: 1, borderColor: colors.accent },

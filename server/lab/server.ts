@@ -324,6 +324,20 @@ interface MetaImage {
   file: string;
   mediaType?: string;
   exifLocation?: { lat: number; lng: number };
+  /** SUROWY on-device OCR (ML Kit) zrobiony na telefonie przy samplowaniu — do eksperymentów z algorytmami
+   *  układu menu na komputerze (LAB), bez ponownego OCR. Znormalizowane 0..1. null/brak = bez OCR. */
+  ocr?: { w: number; h: number; blocks: { frame: unknown; corners?: unknown; text: string; lines?: unknown[] }[] } | null;
+  /** SUROWA analiza zdjęcia MENU lokalnymi modelami (mlkit/apple-vision/clip) zrobiona na telefonie — query+response
+   *  bez interpretacji; do dopracowania reguł w LABie. Marker „🧠" w miniaturkach. null/brak = bez analizy. */
+  menuAi?: MenuAiRaw | null;
+  /** Ta sama analiza na WYCIĘTYM kadrze do modelu (crop boxa OCR) — porównanie pełne vs kadr. */
+  menuAiCrop?: MenuAiRaw | null;
+}
+interface MenuAiRaw {
+  mlkit?: { labels: { text: string; conf: number }[] } | null;
+  appleVision?: { labels: { text: string; conf: number }[]; aesthetics: number | null; isUtility: boolean | null } | null;
+  clip?: { prompts: { text: string; cos: number }[] } | null;
+  at?: number;
 }
 interface MetaCapture {
   id: string;
@@ -380,19 +394,39 @@ async function ingest(captures: MetaCapture[], readImage: (file: string) => Prom
   const existing = loadMeta();
   let added = 0,
     skipped = 0,
-    updated = 0;
+    updated = 0,
+    ocr = 0, // ile sampli dostało OCR w TYM imporcie (nowy z OCR lub dociągnięty do istniejącego)
+    menuAi = 0; // jw. dla analizy menu-AI (mlkit/apple/clip)
   for (const cap of captures) {
     const key = cap.sig || cap.id;
     const ex = existing.find((c) => (c.sig || c.id) === key);
     if (ex) {
       // Podmień to, co pochodzi z apki (wynik + wejście); NIE ruszaj nazwy (lab mógł poprawić) ani labScan.
-      const changed = JSON.stringify(ex.result ?? null) !== JSON.stringify(cap.result ?? null);
+      // OCR i analizę menu-AI dociągamy do ISTNIEJĄCYCH zdjęć po indeksie (telefon doliczył i wysłał update) — bez kopiowania plików.
+      let ocrChanged = false, aiChanged = false;
+      (cap.images ?? []).forEach((im, i) => {
+        if (im.ocr && ex.images[i] && JSON.stringify(ex.images[i].ocr ?? null) !== JSON.stringify(im.ocr)) {
+          ex.images[i].ocr = im.ocr;
+          ocrChanged = true;
+        }
+        if (im.menuAi && ex.images[i] && JSON.stringify(ex.images[i].menuAi ?? null) !== JSON.stringify(im.menuAi)) {
+          ex.images[i].menuAi = im.menuAi;
+          aiChanged = true;
+        }
+        if (im.menuAiCrop && ex.images[i] && JSON.stringify(ex.images[i].menuAiCrop ?? null) !== JSON.stringify(im.menuAiCrop)) {
+          ex.images[i].menuAiCrop = im.menuAiCrop;
+          aiChanged = true;
+        }
+      });
+      const changed = ocrChanged || aiChanged || JSON.stringify(ex.result ?? null) !== JSON.stringify(cap.result ?? null);
       ex.result = cap.result ?? ex.result;
       if (cap.restaurantHint !== undefined) ex.restaurantHint = cap.restaurantHint;
       if (cap.locationHint !== undefined) ex.locationHint = cap.locationHint;
       if (cap.location !== undefined) ex.location = cap.location;
       if (cap.installId !== undefined) ex.installId = cap.installId;
       ex.importedAt = Date.now();
+      if (ocrChanged) ocr++;
+      if (aiChanged) menuAi++;
       if (changed) updated++; else skipped++;
       continue;
     }
@@ -405,10 +439,12 @@ async function ingest(captures: MetaCapture[], readImage: (file: string) => Prom
       newImages.push({ ...im, file: `images/${base}` });
     }
     existing.push({ ...cap, images: newImages, importedAt: Date.now() });
+    if (newImages.some((im) => im.ocr)) ocr++;
+    if (newImages.some((im) => im.menuAi)) menuAi++;
     added++;
   }
   saveMeta(existing);
-  return { added, skipped, updated };
+  return { added, skipped, updated, ocr, menuAi };
 }
 
 async function ingestFolder(dir: string) {
@@ -701,6 +737,29 @@ app.use("/*", cors());
 
 app.get("/", (c) => c.html(readFileSync(join(HERE, "public", "index.html"), "utf8")));
 
+// TRIAŻ zdjęcia (grupa: menu/szyld/danie/śmieć/niepewne) — port z mobile/src/triage.ts, liczony NA ŻYWO z OCR+menuAi
+// (bez modeli). Lekki: OCR (gęsty tekst+ceny=menu) + Apple (scena), CLIP pomocniczo. Tunowalny edycją tej funkcji.
+function triageOf(im: MetaImage): { group: string; label: string; emoji: string } {
+  const PRICE = /(\d+[.,]\d{2})|(\d+\s?(zł|pln|eur|usd|gbp|€|\$|£))/i;
+  const M: Record<string, { label: string; emoji: string }> = { menu: { label: "menu", emoji: "📋" }, sign: { label: "szyld/lokal", emoji: "🪧" }, dish: { label: "danie", emoji: "🍽️" }, junk: { label: "śmieć?", emoji: "🗑️" }, unsure: { label: "niepewne", emoji: "❔" } };
+  const mk = (g: string) => ({ group: g, ...M[g]! });
+  let lines = 0, words = 0, prices = 0;
+  const blocks = (im.ocr?.blocks ?? []) as Array<{ lines?: Array<{ text?: string; words?: unknown[] }> }>;
+  for (const b of blocks) { const ls = b.lines ?? []; lines += ls.length; for (const l of ls) { words += l.words?.length ?? 0; if (l.text && PRICE.test(l.text)) prices++; } }
+  if (lines >= 8 || prices >= 2) return mk("menu");
+  const appleLabels = (im.menuAi?.appleVision?.labels ?? []).map((l) => l.text.toLowerCase());
+  const hasA = (kws: string[]) => appleLabels.some((t) => kws.some((k) => t.includes(k)));
+  const food = hasA(["food", "dish", "meal", "plate", "drink", "cuisine", "dessert", "produce", "fruit", "vegetable"]);
+  const building = hasA(["building", "outdoor", "facade", "storefront", "house", "architecture", "street", "sign", "door", "window"]);
+  const clip = im.menuAi?.clip?.prompts ?? [];
+  const cmax = (subs: string[]) => Math.max(-1, ...clip.filter((p) => subs.some((s) => p.text.includes(s))).map((p) => p.cos));
+  const cSign = cmax(["storefront", "sign or banner", "street with shops"]), cDish = cmax(["single dish or plate"]), cMenu = cmax(["a restaurant menu", "printed menu page"]);
+  if (lines <= 2 && words <= 3) { if (food || cDish > cSign + 0.02) return mk("dish"); if (building || cSign > cDish + 0.02) return mk("sign"); return mk("junk"); }
+  if (building && lines <= 4) return mk("sign");
+  if (cMenu > 0.22 || lines >= 5) return mk("menu");
+  return mk("unsure");
+}
+
 app.get("/api/state", (c) => {
   const meta = loadMeta();
   const captures = meta.map((cap) => ({
@@ -714,6 +773,12 @@ app.get("/api/state", (c) => {
     importedAt: cap.importedAt ?? null,
     exifLocations: cap.images.map((im) => im.exifLocation ?? null),
     images: cap.images.length,
+    // Per zdjęcie: liczba bloków on-device OCR (null = brak OCR) — marker „🔤" w miniaturkach i na karcie sampla.
+    ocrPerImage: cap.images.map((im) => (im.ocr ? im.ocr.blocks.length : null)),
+    // Per zdjęcie: liczba modeli, które zwróciły analizę menu-AI (null = brak) — marker „🧠".
+    menuAiPerImage: cap.images.map((im) => (im.menuAi ? (im.menuAi.mlkit ? 1 : 0) + (im.menuAi.appleVision ? 1 : 0) + (im.menuAi.clip ? 1 : 0) : null)),
+    // Per zdjęcie: grupa triażu (menu/szyld/danie/śmieć/niepewne) — etykieta na miniaturce; null gdy brak OCR i menuAi.
+    triagePerImage: cap.images.map((im) => ((im.ocr || im.menuAi) ? triageOf(im) : null)),
     result: cap.result
       ? { restaurantName: cap.result.restaurantName ?? null, cuisine: cap.result.cuisine ?? null }
       : null,
@@ -787,6 +852,23 @@ app.get("/api/image", (c) => {
   if (!im) return c.text("not found", 404);
   const buf = readFileSync(join(LIBRARY, im.file));
   return c.body(buf, 200, { "Content-Type": im.mediaType || "image/jpeg" });
+});
+
+// PEŁNY surowy OCR jednego zdjęcia (bloki+linie, ramki+cornerPoints, tekst) — do nakładki w galerii.
+app.get("/api/ocr", (c) => {
+  const id = c.req.query("id");
+  const n = Number(c.req.query("n") ?? "0");
+  const im = loadMeta().find((x) => x.id === id)?.images[n];
+  return c.json({ ocr: im?.ocr ?? null });
+});
+
+// PEŁNA surowa analiza menu-AI jednego zdjęcia (mlkit etykiety, apple etykiety+estetyka, clip cosine per prompt) —
+// query+response bez interpretacji; do podglądu w galerii i dopracowania reguł.
+app.get("/api/menuai", (c) => {
+  const id = c.req.query("id");
+  const n = Number(c.req.query("n") ?? "0");
+  const im = loadMeta().find((x) => x.id === id)?.images[n];
+  return c.json({ menuAi: im?.menuAi ?? null, menuAiCrop: im?.menuAiCrop ?? null });
 });
 
 app.post("/api/places-search", async (c) => {
@@ -1793,6 +1875,53 @@ app.get("/api/session-detail", async (c) => {
       return { ts: Date.parse(e.created_at) || 0, op: e.op || e.type, totalCost: cost, meta: { data: d, dish: d.dish } };
     });
     return c.json({ sessionId: sid, entries });
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+
+// Zdjęcia WEJŚCIOWE skanu sesji (≤24h na serwerze) — lista indeksów + proxy obrazów (token trzymamy po stronie
+// LABu, nie wystawiamy go do przeglądarki). Podgląd „co faktycznie poszło do analizy".
+app.get("/api/session-images", async (c) => {
+  const sid = c.req.query("sid");
+  if (!sid) return c.json({ error: "brak sid" }, 400);
+  try {
+    const r = await prodFetch(`/session-images?sid=${encodeURIComponent(sid)}`);
+    return c.json(await r.json());
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+app.get("/api/session-image", async (c) => {
+  const sid = c.req.query("sid");
+  const n = c.req.query("n") ?? "0";
+  if (!sid) return c.text("brak sid", 400);
+  try {
+    const r = await prodFetch(`/session-image?sid=${encodeURIComponent(sid)}&n=${encodeURIComponent(n)}`);
+    if (!r.ok) return c.text("brak / wygasło", 404);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return c.body(buf, 200, { "Content-Type": r.headers.get("content-type") || "image/jpeg" });
+  } catch (e) {
+    return c.text("błąd: " + (e as Error).message, 502);
+  }
+});
+
+// Benchmark weryfikatorów zdjęć — proxy do prod (token po stronie LABu). Lista werdyktów + zapis ground-truth.
+app.get("/api/photo-verdicts", async (c) => {
+  const dish = c.req.query("dish");
+  const limit = c.req.query("limit") || "1500";
+  try {
+    const r = await prodFetch(`/photo-verdicts?limit=${encodeURIComponent(limit)}${dish ? `&dish=${encodeURIComponent(dish)}` : ""}`);
+    return c.json(await r.json());
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 502);
+  }
+});
+app.post("/api/photo-verdict", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const r = await prodFetch(`/photo-verdict`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return c.json(await r.json());
   } catch (e) {
     return c.json({ error: (e as Error).message }, 502);
   }

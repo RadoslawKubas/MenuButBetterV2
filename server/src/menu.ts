@@ -45,6 +45,8 @@ export interface ExtractOptions {
   targetLang: string;
   /** Podpowiedź o lokalu (nazwa/miasto), jeśli znana — poprawia kontekst. */
   restaurantHint?: string;
+  /** NIEPEWNA nazwa odczytana z SZYLDU (triaż w apce) — sceptyczny kontekst: użyj TYLKO gdy karta potwierdza. */
+  nameGuess?: string;
   /** „Miasto, Kraj" z GPS (EXIF/telefon) — pewny kontekst lokalizacji lokalu. */
   locationHint?: string;
   /** Wstępnie rozpoznana kuchnia (z „szybkiego podglądu") — mocna wskazówka kontekstu. */
@@ -198,14 +200,18 @@ export const SYSTEM = [
   "MINIMUM słów (zwykle 2–3), tak jak LUDZIE WYSZUKUJĄ to danie, z typem dania dla jednoznaczności (np.",
   "'mango chicken curry', 'pad thai noodles', 'patatas bravas', 'acai bowl', 'frappe coffee'). NIE rozwlekaj",
   "składnikami ('… with fruits and granola') ani kuchnią/narodowością ('indian', 'brunch cafe') — krótka,",
-  "celna nazwa trafia LEPIEJ (też w wyszukiwarki tytułowe jak Wikimedia). Nie używaj markowej/lokalnej nazwy z menu.",
+  "celna nazwa trafia LEPIEJ (też w wyszukiwarki tytułowe jak Wikimedia). Nie używaj markowej/lokalnej nazwy z menu",
+  "(WYJĄTEK: pozycje `branded:true` — tam ZACHOWAJ nazwę marki, patrz niżej).",
   "Dla pola `photo_query_local` podaj nazwę dania do szukania zdjęć W JĘZYKU KRAJU, w którym jest",
   "lokal (kraj z lokalizacji/kontekstu) — tak jak ludzie szukają tego dania w tym kraju. Gdy język",
   "menu = język kraju, zwykle = original; gdy menu jest w innym języku (np. po angielsku, a lokal",
   "w Polsce), podaj nazwę w języku kraju (np. 'kurczak maślany'). Gdy się nie da — powtórz photo_query.",
-  "Pole `branded` ustaw na true dla markowych/paczkowanych produktów o znanym, stałym wyglądzie",
-  "(Coca-Cola, Sprite, Fanta, butelkowana woda, gotowy batonik) — wtedy lepsze jest generyczne",
-  "zdjęcie produktu niż zdjęcie z lokalu. Dla potraw przyrządzanych w kuchni ustaw false.",
+  "Pole `branded` ustaw na true dla MARKOWYCH/paczkowanych produktów o znanym, stałym wyglądzie",
+  "(Coca-Cola, Sprite, Fanta, butelkowana woda, gotowy batonik, a TAKŻE butelkowane/puszkowe PIWA, ALKOHOLE i napoje",
+  "markowe — również lokalne marki, np. 'Bombay Sapphire', 'Jack Daniel's', lokalne piwo z nazwą) — wtedy lepsze jest",
+  "generyczne zdjęcie produktu niż zdjęcie z lokalu. Dla potraw przyrządzanych w kuchni ustaw false.",
+  "Dla `branded:true`: `photo_query` ZACHOWAJ NAZWĘ MARKI + formę (np. 'Bombay Sapphire gin bottle', 'Coca-Cola can'),",
+  "a `description` rób krótko i FAKTYCZNIE (typ + marka), bez wymyślania receptury; składniki/alergeny tylko gdy pewne.",
   "",
   "Jedno ze zdjęć może być FOTOGRAFIĄ LOKALU Z ZEWNĄTRZ (szyld, witryna, fasada) albo",
   "wnętrza — odczytaj NAZWĘ i adres także z szyldu/witryny. Takie zdjęcie zwykle nie",
@@ -304,7 +310,8 @@ export const ENRICH_SYSTEM = [
   "gdy poprawia trafienie ('bottle', 'glass', 'can') — butelka wygląda inaczej niż szklanka. Celuj w podaną porcję.",
   "`photo_query_local`: nazwa dania do zdjęć W JĘZYKU KRAJU lokalu (jak ludzie tam szukają tej potrawy). Gdy się nie da",
   "— powtórz nazwę kanoniczną. Celuj w GOTOWĄ, PODANĄ potrawę (jak na talerzu), nie w surowe składniki/opakowanie/przepis.",
-  "`branded`: true dla markowych/paczkowanych produktów o stałym wyglądzie (Coca-Cola, butelkowana woda), false dla potraw.",
+  "`branded`: true dla MARKOWYCH/paczkowanych produktów o stałym wyglądzie — NIE tylko Coca-Cola/woda, ale też butelkowane/puszkowe PIWA, ALKOHOLE i napoje markowe, TAKŻE lokalne marki (np. 'Bombay Sapphire', 'Jack Daniel's', lokalne piwo z nazwą); false dla potraw przyrządzanych w lokalu.",
+  "DLA POZYCJI `branded:true` NIE FABRYKUJ: `description` = krótka FAKTYCZNA nota (typ produktu + marka, np. 'gin markowy', 'cola gazowana'), BEZ wymyślania receptury/pochodzenia/historii; `ingredients`/`allergens` tylko gdy POWSZECHNIE znane dla TEGO produktu, inaczej PUSTE; nie zgaduj `dietary`/`spice_level` (zostaw zachowawczo/puste). `photo_query` dla branded ZACHOWAJ NAZWĘ MARKI + formę (np. 'Bombay Sapphire gin bottle', 'Coca-Cola can') — WYJĄTEK od reguły 'opisowo, bez marki', bo chcemy trafić DOKŁADNIE ten produkt.",
 ].join(" ");
 
 // Wspólny blok instrukcji kontekstowej (ten sam dla Claude i OpenAI).
@@ -312,6 +319,10 @@ export function contextText(opts: ExtractOptions, n: number): string {
   return (
     `Język docelowy: ${opts.targetLang}.\n` +
     `Lokal (podpowiedź): ${opts.restaurantHint ?? "nieznany"}.\n` +
+    (opts.nameGuess
+      ? `Możliwa nazwa lokalu odczytana z SZYLDU/frontu (NIEPEWNA — OCR mógł się pomylić lub to nie ten lokal): „${opts.nameGuess}". ` +
+        `Użyj jej do pola restaurant_name TYLKO jeśli zgadza się z tym, co widać na karcie menu; jeśli karta wskazuje inną nazwę lub tej nie potwierdza — ZIGNORUJ tę podpowiedź.\n`
+      : "") +
     (opts.locationHint ? `Lokalizacja lokalu (GPS): ${opts.locationHint}.\n` : "") +
     (opts.cuisineHint
       ? `Wstępnie rozpoznana kuchnia (z szybkiego podglądu): ${opts.cuisineHint}. ` +
@@ -908,7 +919,7 @@ export const ONEPASS_SYSTEM = [
   "— TŁUMACZENIE I WZBOGACENIE (równocześnie) —",
   "Dla KAŻDEJ pozycji i sekcji przetłumacz nazwy na język docelowy (`translated`, `name_translated`) oraz adnotacje (`text_translated`). Wszystko MUSI pasować do ustalonej kuchni i regionu lokalu.",
   "`menu_description_translated`: wierne tłumaczenie opisu z karty (gdy był), inaczej pusty. `description`: ZWIĘŹLE (1 zdanie, max 2), RZECZOWO czym jest danie — oprzyj na opisie z karty/typowym przyrządzaniu w tej kuchni; NIE upiększaj, nie dodawaj nietypowych składników.",
-  "`photo_query`: KANONICZNA, rozpoznawalna nazwa potrawy (zromanizowana), MINIMUM słów (2-3), jak ludzie wyszukują (np. 'patatas bravas', 'mango chicken curry', 'caesar salad') — opisz CZYM danie jest, nie markową/lokalną nazwą; nie rozwlekaj składnikami ani narodowością. `photo_query_local`: w języku kraju lokalu. `branded`: true dla markowych/paczkowanych (Coca-Cola, butelkowana woda).",
+  "`photo_query`: KANONICZNA, rozpoznawalna nazwa potrawy (zromanizowana), MINIMUM słów (2-3), jak ludzie wyszukują (np. 'patatas bravas', 'mango chicken curry', 'caesar salad') — opisz CZYM danie jest, nie markową/lokalną nazwą; nie rozwlekaj składnikami ani narodowością. `photo_query_local`: w języku kraju lokalu. `branded`: true dla markowych/paczkowanych (Coca-Cola, woda butelkowana, a TAKŻE butelkowane/puszkowe piwa/alkohole/napoje markowe, też lokalne marki). DLA branded: `photo_query` ZACHOWAJ markę + formę ('Bombay Sapphire gin bottle', 'Coca-Cola can'), `description` krótka i faktyczna (typ+marka, bez wymyślania receptury), składniki/alergeny tylko gdy pewne.",
   "`ingredients` tylko pewne/typowe; `allergens`, `dietary`, `spice_level` szacuj zachowawczo; `category` z dozwolonej listy.",
 ].join(" ");
 

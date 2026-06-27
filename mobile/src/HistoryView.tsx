@@ -138,7 +138,10 @@ export function HistoryView({
           )}
         </Pressable>
         <Pressable style={styles.rowMain} onPress={() => onOpen(scan)}>
-          <Text style={styles.name}>{scan.restaurantName || scan.restaurant?.name || "Menu bez nazwy"}</Text>
+          <Text style={styles.name}>
+            {scan.pending ? <Text style={styles.pending}>⏳ w toku · </Text> : null}
+            {scan.restaurantName || scan.restaurant?.name || "Menu bez nazwy"}
+          </Text>
           <Text style={styles.meta}>
             {formatDate(scan.createdAt)} · {itemCount(scan)} pozycji · {scan.targetLang}
             {loc}
@@ -265,6 +268,7 @@ const styles = StyleSheet.create({
   thumbGlyph: { fontSize: 22, opacity: 0.4 },
   rowMain: { flex: 1 },
   name: { fontSize: 17, fontWeight: "700", color: colors.text },
+  pending: { fontSize: 13, fontWeight: "800", color: colors.accent },
   meta: { fontSize: 13, color: colors.muted, marginTop: 3 },
   cost: { fontSize: 12, color: colors.muted, marginTop: 3, fontWeight: "600" },
   del: { paddingLeft: 12, paddingVertical: 4 },

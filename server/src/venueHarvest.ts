@@ -125,14 +125,21 @@ function mediaFromCt(ct: string): ImgMedia {
   return /png/.test(ct) ? "image/png" : /webp/.test(ct) ? "image/webp" : /gif/.test(ct) ? "image/gif" : "image/jpeg";
 }
 async function fetchB64(url: string): Promise<{ media_type: ImgMedia; data: string } | null> {
+  // TWARDY TIMEOUT (8 s): bez tego pojedynczy wiszący URL portalu/strony lokalu blokował CAŁY harvest ★, a że
+  // pipeline czeka na ★ przed `done`, cały skan wisiał („Dopasowuję zdjęcia z lokalu…" w nieskończoność). Abort
+  // przerywa i połączenie, i odczyt body (wolny stream). Best-effort: timeout/błąd = pomiń ten URL (null).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const r = await fetch(url, { headers: { "User-Agent": "MenuButBetter/1.0 (venue harvest; rk@appwithkiss.com)" } });
+    const r = await fetch(url, { headers: { "User-Agent": "MenuButBetter/1.0 (venue harvest; rk@appwithkiss.com)" }, signal: ctrl.signal });
     if (!r.ok) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length === 0 || buf.length > 4_500_000) return null;
     return { media_type: mediaFromCt(r.headers.get("content-type") || ""), data: buf.toString("base64") };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

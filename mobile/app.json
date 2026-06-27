@@ -32,12 +32,15 @@
       [
         "expo-build-properties",
         {
-          "ios": { "deploymentTarget": "15.5" }
+          "ios": {
+            "deploymentTarget": "15.5"
+          }
         }
       ]
     ],
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "143",
       "bundleIdentifier": "com.appwithkiss.menubutbetter.lab",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false

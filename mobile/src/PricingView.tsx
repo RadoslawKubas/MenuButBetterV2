@@ -2,9 +2,11 @@
 // (każdy skan trzyma usage.costUsd/tokeny ustawione przez serwer z x-session-cost). NIE bierzemy nic z /stats
 // serwera (tam suma WSZYSTKICH instalacji). Sekcje: ostatnia sesja, dziś, łącznie (koszt/skany/dania/śr./tokeny),
 // trend dzienny. Rozbicie per‑operacja/model i dzienny budżet to dane serwerowe (globalne) — tu ich świadomie nie ma.
+import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { Icon } from "./Icon";
-import type { SavedScan } from "./storage";
+import type { SavedScan, CostLedgerEntry } from "./storage";
+import { listDeletedCost } from "./storage";
 import { colors } from "./theme";
 
 function fmtUsd(n: number): string {
@@ -39,28 +41,41 @@ function fmtDay(day: string): string {
 }
 
 export function PricingView({ scans }: { scans: SavedScan[] }) {
+  // Koszt SKASOWANYCH skanów (trwały rejestr) — wydatek nie znika po skasowaniu menu; doliczamy do sum/trendu. [[recordDeletedCost]]
+  const [deleted, setDeleted] = useState<CostLedgerEntry[]>([]);
+  useEffect(() => { listDeletedCost().then(setDeleted).catch(() => {}); }, [scans]);
+
   // Ostatnia sesja = koszt NAJNOWSZEGO zapisanego skanu (serwer ustawił go z x-session-cost).
   const lastScan = scans.length ? scans.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)) : null;
   const lastCost = lastScan?.usage?.costUsd ?? 0;
 
-  // Wszystko poniżej = suma po skanach TEGO telefonu.
+  // Wszystko poniżej = ta instancja: żywe skany + rejestr skasowanych (koszt to wydatek).
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
-  const today = scans.reduce((a, s) => a + (s.createdAt >= startOfToday.getTime() ? (s.usage?.costUsd ?? 0) : 0), 0);
-  const totalCost = scans.reduce((a, s) => a + (s.usage?.costUsd ?? 0), 0);
-  const totalScans = scans.length;
-  const totalDishes = scans.reduce((a, s) => a + (s.menu?.sections?.reduce((b, sec) => b + (sec.items?.length ?? 0), 0) ?? 0), 0);
-  const totalIn = scans.reduce((a, s) => a + (s.usage?.inputTokens ?? 0), 0);
-  const totalOut = scans.reduce((a, s) => a + (s.usage?.outputTokens ?? 0), 0);
+  const today = scans.reduce((a, s) => a + (s.createdAt >= startOfToday.getTime() ? (s.usage?.costUsd ?? 0) : 0), 0)
+    + deleted.reduce((a, d) => a + (d.createdAt >= startOfToday.getTime() ? d.costUsd : 0), 0);
+  const totalCost = scans.reduce((a, s) => a + (s.usage?.costUsd ?? 0), 0) + deleted.reduce((a, d) => a + d.costUsd, 0);
+  const totalScans = scans.length + deleted.length;
+  const totalDishes = scans.reduce((a, s) => a + (s.menu?.sections?.reduce((b, sec) => b + (sec.items?.length ?? 0), 0) ?? 0), 0); // dań skasowanych nie odzyskamy
+  const totalIn = scans.reduce((a, s) => a + (s.usage?.inputTokens ?? 0), 0) + deleted.reduce((a, d) => a + (d.inputTokens ?? 0), 0);
+  const totalOut = scans.reduce((a, s) => a + (s.usage?.outputTokens ?? 0), 0) + deleted.reduce((a, d) => a + (d.outputTokens ?? 0), 0);
   const avgPerScan = totalScans > 0 ? totalCost / totalScans : 0;
-  const since = scans.length ? localDay(Math.min(...scans.map((s) => s.createdAt))) : null;
+  const allCreated = [...scans.map((s) => s.createdAt), ...deleted.map((d) => d.createdAt)];
+  const since = allCreated.length ? localDay(Math.min(...allCreated)) : null;
 
-  // Trend dzienny: grupuj skany po LOKALNYM dniu, ostatnie 14.
+  // Trend dzienny: grupuj skany (żywe + skasowane) po LOKALNYM dniu, ostatnie 14.
   const byDayMap = new Map<string, { cost: number; scans: number }>();
   for (const s of scans) {
     const k = localDay(s.createdAt);
     const e = byDayMap.get(k) ?? { cost: 0, scans: 0 };
     e.cost += s.usage?.costUsd ?? 0;
+    e.scans += 1;
+    byDayMap.set(k, e);
+  }
+  for (const d of deleted) {
+    const k = localDay(d.createdAt);
+    const e = byDayMap.get(k) ?? { cost: 0, scans: 0 };
+    e.cost += d.costUsd;
     e.scans += 1;
     byDayMap.set(k, e);
   }

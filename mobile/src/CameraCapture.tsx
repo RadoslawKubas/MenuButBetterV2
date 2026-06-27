@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { Icon } from "./Icon";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { MAX_IMAGES, setModelCropInsets } from "./image";
+import { MAX_IMAGES } from "./image";
 import { detectMenuRegion, type MenuRegion } from "./menuRegion";
 import { MenuRegionOverlay } from "./MenuRegionOverlay";
 import type { PeekResult } from "./api";
@@ -63,13 +63,8 @@ export function CameraCapture({
   onRemoveShot: (uri: string) => void;
 }) {
   const { width, height } = useWindowDimensions();
-  // Crop „do modelu" = obszar między scrimami paska górnego/dolnego: mierzymy ich realne wysokości (px) i podajemy
-  // jako ułamki wysokości ekranu → kadr trafiający do OCR = dokładnie to, co widać między ciemnymi paskami.
-  const [topH, setTopH] = useState(0);
-  const [barH, setBarH] = useState(0);
-  useEffect(() => {
-    if (topH > 0 && barH > 0 && height > 0) setModelCropInsets(topH / height, barH / height);
-  }, [topH, barH, height]);
+  // Crop DO MODELU robi teraz on-device OCR (box menu, `boxFromOcr` w image.ts) na PEŁNEJ klatce — NIE pasy ze
+  // scrimów. Paski górny/dolny to już tylko UI aparatu (nie wpływają na to, co dostaje model).
   const ref = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false); // robienie zdjęcia
@@ -256,10 +251,10 @@ export function CameraCapture({
               <Image source={{ uri: pending.uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
             ) : null}
             {/* On-device OCR: prostokąt + perspektywiczna siatka menu na zamrożonym zdjęciu (auto, jak w Migawkach). */}
-            {pending && camRegion ? <MenuRegionOverlay region={camRegion} boxW={width} boxH={height} /> : null}
+            {pending && camRegion ? <MenuRegionOverlay region={camRegion} boxW={width} boxH={height} finalCrop /> : null}
 
             {/* Górny pasek: latarka + przełącznik „szybkiego podglądu" + banner z kontekstem. */}
-            <View style={styles.topBar} onLayout={(e) => setTopH(e.nativeEvent.layout.height)}>
+            <View style={styles.topBar}>
               <Pressable
                 style={[styles.peekToggle, torch && styles.peekToggleOn]}
                 onPress={() => setTorch((t) => !t)}
@@ -306,7 +301,7 @@ export function CameraCapture({
                 })}
               </View>
               {/* Pasek aparatu: Gotowe / migawka / licznik. */}
-              <View style={styles.bar} onLayout={(e) => setBarH(e.nativeEvent.layout.height)}>
+              <View style={styles.bar}>
                 <Pressable style={styles.side} onPress={onClose}>
                   <Text style={styles.doneText}>Gotowe ({count})</Text>
                 </Pressable>

@@ -85,6 +85,7 @@
     <button class="tab" id="tabBtn-services" onclick="switchTab('services')">🔌 Serwisy</button>
     <button class="tab" id="tabBtn-deploy" onclick="switchTab('deploy')">🚀 Deploy</button>
     <button class="tab" id="tabBtn-stats" onclick="switchTab('stats')">📊 Statystyki</button>
+    <button class="tab" id="tabBtn-verifiers" onclick="switchTab('verifiers')">🔬 Weryfikatory</button>
   </nav>
   <span class="mut small" id="dir"></span>
   <span style="flex:1"></span>
@@ -355,6 +356,28 @@
   </div>
 </div>
 
+<div id="tab-verifiers" class="tabpane scrollpane" style="display:none">
+  <div class="panel">
+    <h3>🔬 Weryfikatory zdjęć — benchmark lokalnych modeli</h3>
+    <div class="mut small" style="margin-bottom:8px">Każdy lokalny model (ML Kit, CLIP, Apple Vision…) ocenia te same zdjęcia dań. Tu porównujesz ich oceny obok siebie i oznaczasz „dobre/złe" (ground-truth) — z tego liczona jest <b>zgodność z Tobą</b> dla każdego weryfikatora. Nic nie kasujemy.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+      <button onclick="loadPhotoVerdicts(this)" style="padding:4px 10px">↻ odśwież</button>
+      <input type="text" id="verifQuery" placeholder="🔍 filtruj po daniu / url…" style="flex:1; min-width:160px" oninput="renderPhotoVerdicts()" />
+      <select id="verifDecision" onchange="renderPhotoVerdicts()" title="filtr: czy zdjęcie trafiło do usera" style="padding:4px 8px">
+        <option value="">status: wszystkie</option>
+        <option value="shown">✓ pokazane</option>
+        <option value="rejected">✗ odrzucone</option>
+      </select>
+      <select id="verifVenue" onchange="renderPhotoVerdicts()" title="filtr: czy zdjęcie było z lokalu (★)" style="padding:4px 8px">
+        <option value="">z lokalu: wszystkie</option>
+        <option value="venue">⭐ z lokalu</option>
+        <option value="web">tylko z sieci</option>
+      </select>
+    </div>
+    <div id="verifSummary" style="margin-bottom:10px"></div>
+    <div id="verifList"><div class="mut small">Ładuję…</div></div>
+  </div>
+</div>
 <div id="tab-stats" class="tabpane scrollpane" style="display:none">
   <div class="panel">
     <h3>📊 Statystyki kosztów — ile realnie kosztują skany</h3>
@@ -411,15 +434,23 @@
 </div>
 
 <div class="modal" id="imgLightbox" onclick="if(event.target===this)closeGallery()">
-  <div style="display:flex; flex-direction:column; align-items:center; max-width:94vw; max-height:90vh">
-    <img id="glImg" style="max-width:94vw; max-height:78vh; object-fit:contain; border-radius:8px; background:#000" />
+  <div style="display:flex; flex-direction:row; align-items:flex-start; justify-content:center; gap:14px; max-width:97vw; max-height:92vh">
+   <div style="display:flex; flex-direction:column; align-items:center; max-width:94vw; max-height:92vh">
+    <div id="glWrap" style="position:relative; display:inline-block; line-height:0">
+      <img id="glImg" style="max-width:94vw; max-height:78vh; object-fit:contain; border-radius:8px; background:#000" />
+      <svg id="glOcr" viewBox="0 0 1 1" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none"></svg>
+    </div>
     <div id="glCap" class="mut" style="margin-top:8px; text-align:center; max-width:94vw; font-size:13px; min-height:18px"></div>
     <div style="margin-top:8px; display:flex; gap:14px; align-items:center">
       <button onclick="galleryNav(-1)" style="font-size:18px; padding:4px 14px">‹</button>
       <span id="glCounter" class="mut"></span>
       <button onclick="galleryNav(1)" style="font-size:18px; padding:4px 14px">›</button>
-      <button onclick="closeGallery()" style="margin-left:10px">✕ Zamknij</button>
+      <button id="glOcrBtn" onclick="toggleGlOcr()" style="margin-left:10px" title="pokaż/ukryj obszary zwrócone przez OCR (bloki + linie)">🔤 surowe OCR</button>
+      <button id="glPropBtn" onclick="toggleGlProp()" title="pokaż/ukryj PROPOZYCJĘ algorytmu: crop osiowy + perspektywa OBB/siatka + klastry grup">📐 propozycja</button>
+      <button onclick="closeGallery()" style="margin-left:4px">✕ Zamknij</button>
     </div>
+   </div>
+   <div id="glSide" style="display:none; width:380px; max-width:40vw; max-height:90vh; overflow:auto; text-align:left; background:rgba(20,20,28,0.65); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:11px"></div>
   </div>
 </div>
 
@@ -648,16 +679,14 @@ function renderCaptures() {
   document.getElementById('captures').innerHTML = vis.length ? vis.map(c => {
     const gt = c.groundTruth;
     return `<div class="cap ${SELECTED.has(c.id)?'sel':''}" id="cap-${c.id}" style="${c.archived?'opacity:.6':''}">
-      <div class="row">
-        ${capThumb(c.id, c.images, 54, 68)}
-        <div class="meta" onclick="toggleSel('${c.id}')">
-          <div class="nm">${c.archived?'🗄 ':''}${c.name || new Date(c.createdAt).toLocaleString()}</div>
-          <div class="sub">${c.images} zdj · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
-          <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
-          ${c.labScan?`<div class="sub" style="color:var(--acc)">💾 zapisany skan: ${c.labScan.scanModel} · ${c.labScan.itemCount} poz.${c.labScan.hasVenue?' · +lokal':''}${c.labScan.unreadable?' · ✗ nieczytelne':c.labScan.poorQuality?' · ⚠ słaba jakość':''}</div>`:''}
-          <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
-        </div>
+      <div class="meta" onclick="toggleSel('${c.id}')">
+        <div class="nm">${c.archived?'🗄 ':''}${c.name || new Date(c.createdAt).toLocaleString()}</div>
+        <div class="sub">${c.images} zdj · ${ocrSummary(c)} · ${menuAiSummary(c)} · ${c.locationHint||'—'} · ${c.location?`📍${c.location.lat.toFixed(4)},${c.location.lng.toFixed(4)} (${c.locationSource||'?'})`:'bez pozycji'}</div>
+        <div class="sub">${c.result?`wynik: ${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}`:'brak zapisanego wyniku'}</div>
+        ${c.labScan?`<div class="sub" style="color:var(--acc)">💾 zapisany skan: ${c.labScan.scanModel} · ${c.labScan.itemCount} poz.${c.labScan.hasVenue?' · +lokal':''}${c.labScan.unreadable?' · ✗ nieczytelne':c.labScan.poorQuality?' · ⚠ słaba jakość':''}</div>`:''}
+        <div class="gt ${gt?'set':'unset'}">${gt?`✓ prawda: ${gt.name}`:'✗ brak ground‑truth'}</div>
       </div>
+      <div style="margin-top:8px">${capThumb(c, 56, 70)}</div>
       <div style="margin-top:8px; display:flex; gap:6px">
         <button onclick="toggleSel('${c.id}')">${SELECTED.has(c.id)?'✓ w teście':'+ do testu'}</button>
         <button onclick="openAnnotate('${c.id}')">📍 Lokal</button>
@@ -676,13 +705,13 @@ async function deletePermanent(id){ if(!confirm('Usunąć ten sample NA STAŁE z
 async function importZip(input){ const f=input.files[0]; if(!f) return; const info=document.getElementById('impInfo'); info.textContent='importuję ZIP… ('+f.name+')';
   const fd=new FormData(); fd.append('file', f);
   try{ const r=await fetch('/api/import-zip',{method:'POST', body:fd}).then(x=>x.json());
-    info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated} (nowy wynik)`:''}, pominięto ${r.skipped}`;
+    info.innerHTML = r.error ? ('błąd: '+esc(r.error)) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated}`:''}, pominięto ${r.skipped}${r.ocr?` · <span style="color:var(--ok)">🔤 OCR dociągnięty do ${r.ocr} sampli</span>`:''}${r.menuAi?` · <span style="color:#a78bfa">🧠 analiza AI do ${r.menuAi} sampli</span>`:''}`;
     if(!r.error) await afterImport(r.added);
   }catch(e){ info.textContent='błąd: '+e.message; } finally { input.value=''; }
 }
 async function importPath(){ const p=document.getElementById('impPath').value.trim(); const info=document.getElementById('impInfo'); if(!p){ info.textContent='⚠️ Podaj ścieżkę folderu z metadata.json lub pliku .zip (albo użyj „📥 Importuj ZIP").'; return; } info.textContent='importuję…';
   const r=await api('/api/import-path',{path:p});
-  info.textContent = r.error ? ('błąd: '+r.error) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated} (nowy wynik)`:''}, pominięto ${r.skipped}`;
+  info.innerHTML = r.error ? ('błąd: '+esc(r.error)) : `✓ dodano ${r.added}${r.updated?`, zaktualizowano ${r.updated}`:''}, pominięto ${r.skipped}${r.ocr?` · <span style="color:var(--ok)">🔤 OCR dociągnięty do ${r.ocr} sampli</span>`:''}${r.menuAi?` · <span style="color:#a78bfa">🧠 analiza AI do ${r.menuAi} sampli</span>`:''}`;
   if(!r.error){ document.getElementById('impPath').value=''; await afterImport(r.added); }
 }
 // Po każdym imporcie: odśwież dane i listę Sample lokalnych (najnowsze na górze, oznaczone NEW).
@@ -709,13 +738,41 @@ function closeModal(){ document.getElementById('annotateModal').style.display='n
 /* ---- Galeria zdjęć migawki (miniatura z licznikiem + przeglądanie wszystkich) ---- */
 let GAL={id:null,n:0,total:1};
 // Miniatura z badge'em liczby zdjęć; klik → galeria wszystkich powiązanych zdjęć.
-function capThumb(id, count, w, h){
-  const c=Math.max(1, count||1);
-  const badge = c>1 ? `<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.72);color:#fff;font-size:10px;font-weight:800;padding:1px 5px;border-radius:6px">📷 ${c}</span>` : '';
-  return `<div style="position:relative;flex:none;cursor:pointer" title="${c} zdj — klik, by przejrzeć" onclick="event.stopPropagation();openCaptureGallery('${id}',${c})">
-    <img src="/api/image?id=${id}&n=0" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:6px;background:#000;display:block">${badge}</div>`;
+// Miniaturki migawki: WSZYSTKIE zdjęcia w rzędzie (zawijane), każde z osobnym markerem on-device OCR
+// (🔤 + liczba bloków, zielony = jest OCR; przyciemniony „·" = brak). Klik = galeria od tego zdjęcia.
+function capThumb(cap, w, h){
+  const count=Math.max(1, (typeof cap==='object'?cap.images:cap)||1);
+  const id=typeof cap==='object'?cap.id:cap;
+  const ocr=(typeof cap==='object'&&cap.ocrPerImage)||[];
+  const ai=(typeof cap==='object'&&cap.menuAiPerImage)||[];
+  const tri=(typeof cap==='object'&&cap.triagePerImage)||[];
+  let out=`<div style="display:flex;gap:4px;flex-wrap:wrap">`;
+  for(let i=0;i<count;i++){
+    const b=ocr[i];
+    const has = b!=null;
+    const mk = `<span style="position:absolute;left:2px;top:2px;font-size:9px;font-weight:800;padding:0 4px;border-radius:5px;${has?'background:rgba(34,197,94,.92);color:#fff':'background:rgba(0,0,0,.6);color:#bbb'}" title="${has?`on-device OCR: ${b} bloków`:'bez OCR'}">${has?`🔤${b}`:'🔤·'}</span>`;
+    const a=ai[i]; const aiHas=a!=null;
+    const amk = aiHas ? `<span style="position:absolute;right:2px;top:2px;font-size:9px;font-weight:800;padding:0 4px;border-radius:5px;background:rgba(167,139,250,.95);color:#1a1033" title="analiza menu-AI: ${a} modeli (mlkit/apple/clip)">🧠${a}</span>` : '';
+    const t=tri[i]; const tmk = t ? `<span style="position:absolute;left:0;right:0;bottom:0;font-size:9px;font-weight:800;padding:1px 2px;text-align:center;background:rgba(0,0,0,.72);color:#fff;border-radius:0 0 6px 6px" title="triaż: do której grupy trafiło">${t.emoji} ${esc(t.label)}</span>` : '';
+    out+=`<div style="position:relative;cursor:pointer;flex:none" title="zdjęcie ${i+1}/${count}${has?` · OCR ${b} bl.`:' · bez OCR'}${aiHas?` · 🧠 ${a} modeli`:''}${t?` · ${t.emoji} ${t.label}`:''}" onclick="event.stopPropagation();openCaptureGallery('${id}',${count},${i})">`
+      +`<img src="/api/image?id=${id}&n=${i}" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:6px;background:#000;display:block">${mk}${amk}${tmk}</div>`;
+  }
+  return out+'</div>';
 }
-function openCaptureGallery(id,total){ GAL={mode:'cap', id, n:0, total:Math.max(1,total||1)}; document.getElementById('imgLightbox').style.display='flex'; showGallery(); }
+function openCaptureGallery(id,total,start){ GAL={mode:'cap', id, n:Math.max(0,Math.min(start||0,Math.max(0,(total||1)-1))), total:Math.max(1,total||1)}; document.getElementById('imgLightbox').style.display='flex'; showGallery(); }
+// Podsumowanie OCR na karcie sampla: ile zdjęć ma on-device OCR i suma bloków (do eksperymentów w LABie).
+function ocrSummary(c){
+  const arr=(c&&c.ocrPerImage)||[]; const n=arr.filter(x=>x!=null).length; const total=Math.max(1,c.images||arr.length||1);
+  if(!n) return `<span class="mut" title="brak on-device OCR — policz w apce („Policz OCR…") i wyślij na serwer">🔤 brak OCR</span>`;
+  const blocks=arr.reduce((s,x)=>s+(x||0),0);
+  return `<span style="color:var(--ok)" title="on-device OCR (ML Kit) zapisany przy zdjęciach">🔤 OCR ${n}/${total} · ${blocks} bl.</span>`;
+}
+// Podsumowanie analizy menu-AI na karcie sampla: ile zdjęć ma surową analizę lokalnymi modelami.
+function menuAiSummary(c){
+  const arr=(c&&c.menuAiPerImage)||[]; const n=arr.filter(x=>x!=null).length; const total=Math.max(1,c.images||arr.length||1);
+  if(!n) return `<span class="mut" title="brak analizy — „Analizuj zdjęcia (AI)" w apce i wyślij na serwer">🧠 brak analizy</span>`;
+  return `<span style="color:#a78bfa" title="surowa analiza zdjęcia menu lokalnymi modelami (mlkit/apple/clip) — klik zdjęcia pokaże surowe wyniki">🧠 AI ${n}/${total}</span>`;
+}
 // Galeria zdjęć dań Z OCENĄ: rejestrujemy grupę (strip) i otwieramy ją od klikniętego indeksu — przegląd
 // lewo/prawo (strzałki / ‹ ›) bez wychodzenia z LAB, z podpisem ocena/werdykt/finał pod zdjęciem.
 function regPhotoGroup(items){ (window.__pg=window.__pg||[]).push(items); return window.__pg.length-1; }
@@ -724,9 +781,134 @@ function photoCapHtml(c){ if(!c) return '<span class="mut">nieoceniony (poza pul
   const pct=c.s!=null?Math.round(c.s*100)+'%':'?', col=c.fv?'#f1c40f':c.p?'#7fd6a0':'#ff8a80', verdict=c.fv?'★ z lokalu':c.p?'✓ trafione':'✗ odrzucone';
   return `<b style="color:${col}">ocena ${pct} · ${verdict}</b>${c.fin?' · <b>⭐ w finalnej liście</b>':''}${c.src?` · <span class="mut">${esc(c.src)}</span>`:''}${c.fvr?`<br><span class="mut" style="font-size:11px">${esc(c.fvr)}</span>`:''}`;
 }
+let GL_OCR_ON=true, GL_PROP_ON=true;
 function showGallery(){ const img=document.getElementById('glImg'), cnt=document.getElementById('glCounter'), cap=document.getElementById('glCap');
-  if(GAL.mode==='photo'){ const it=GAL.items[GAL.n]; img.referrerPolicy='no-referrer'; img.src=it.u; cnt.textContent=`${GAL.n+1} / ${GAL.items.length}`; cap.innerHTML=photoCapHtml(it.c); }
-  else { img.referrerPolicy=''; img.src=`/api/image?id=${GAL.id}&n=${GAL.n}`; cnt.textContent=`${GAL.n+1} / ${GAL.total}`; cap.innerHTML=''; }
+  const svg=document.getElementById('glOcr'); if(svg) svg.innerHTML=''; // wyczyść nakładkę przy każdej zmianie
+  const ob=document.getElementById('glOcrBtn'), pb=document.getElementById('glPropBtn');
+  const isCap = GAL.mode==='cap'; if(ob) ob.style.display=isCap?'':'none'; if(pb) pb.style.display=isCap?'':'none'; // przełączniki tylko dla migawek
+  if(GAL.mode==='photo'){ const it=GAL.items[GAL.n]; img.referrerPolicy='no-referrer'; img.src=it.u; cnt.textContent=`${GAL.n+1} / ${GAL.items.length}`; cap.innerHTML=it.capHtml || photoCapHtml(it.c); loadGlMenuAi(null,0,false); }
+  else { img.referrerPolicy=''; img.src=`/api/image?id=${GAL.id}&n=${GAL.n}`; cnt.textContent=`${GAL.n+1} / ${GAL.total}`;
+    const cc=(STATE?.captures||[]).find(x=>x.id===GAL.id); const b=cc&&cc.ocrPerImage&&cc.ocrPerImage[GAL.n];
+    const ai=cc&&cc.menuAiPerImage&&cc.menuAiPerImage[GAL.n];
+    const tri=cc&&cc.triagePerImage&&cc.triagePerImage[GAL.n];
+    const triTxt = tri ? `<b style="color:#fbbf24">${tri.emoji} triaż: ${esc(tri.label)}</b> · ` : '';
+    const legend = b!=null ? ` · <span style="color:#60a5fa">▢ blok</span> <span style="color:#4ade80">▱ linia</span>${GL_PROP_ON?' · <span style="color:#fff">┄ crop</span> <span style="color:#fbbf24">▦ perspektywa</span> <span style="color:#e879f9">▢ grupy</span>':''}` : '';
+    cap.innerHTML = triTxt + (b!=null ? `<b style="color:var(--ok)">🔤 OCR: ${b} bloków</b>` : `<span class="mut">🔤 bez OCR (policz w apce i wyślij na serwer)</span>`) + legend;
+    if(ob){ ob.style.opacity=b!=null?'1':'.45'; ob.textContent=GL_OCR_ON?'🔤 surowe OCR':'🔤 surowe OCR (off)'; }
+    if(pb){ pb.style.opacity=b!=null?'1':'.45'; pb.textContent=GL_PROP_ON?'📐 propozycja':'📐 propozycja (off)'; }
+    drawGlOcr(GAL.id, GAL.n, b!=null);
+    loadGlMenuAi(GAL.id, GAL.n, ai!=null); }
+}
+// Surowa analiza menu-AI w panelu PO PRAWEJ od zdjęcia (query+response każdego modelu, bez interpretacji). Gdy brak
+// analizy / tryb photo → panel ukryty, a zdjęcie zajmuje pełną szerokość.
+async function loadGlMenuAi(id,n,has){
+  const side=document.getElementById('glSide'); const img=document.getElementById('glImg'); if(!side) return;
+  const show=v=>{ side.style.display=v?'block':'none'; if(img) img.style.maxWidth=v?'56vw':'94vw'; };
+  if(!has){ side.innerHTML=''; show(false); return; }
+  side.innerHTML='<span class="mut">🧠 ładuję analizę…</span>'; show(true);
+  let d; try{ d=await fetch(`/api/menuai?id=${encodeURIComponent(id)}&n=${n}`).then(r=>r.json()); }catch{ side.innerHTML='<span class="mut">🧠 błąd ładowania analizy</span>'; return; }
+  if(!GAL||GAL.mode!=='cap'||GAL.id!==id||GAL.n!==n) return; // zmieniło się w międzyczasie
+  const m=d&&d.menuAi, mc=d&&d.menuAiCrop;
+  if(!m&&!mc){ side.innerHTML='<span class="mut">🧠 brak analizy</span>'; show(true); return; }
+  side.innerHTML = `<div style="font-weight:800;color:#a78bfa;margin-bottom:6px">🧠 analiza AI</div>`
+    + (m?`<div style="font-weight:700;color:#a78bfa">pełne zdjęcie</div>${renderMenuAi(m)}`:'')
+    + (mc?`<div style="font-weight:700;color:#a78bfa;margin-top:8px">✂️ kadr po OCR (do modelu)</div>${renderMenuAi(mc)}`:'');
+}
+// Surowe wyniki jednego modelu-zestawu (pełne ALBO crop). CLIP w kontenerze flex-wrap → zawija się (spany nowrap
+// sklejone bez spacji nie mają inaczej miejsca na złamanie).
+function renderMenuAi(m){
+  const parts=[];
+  if(m.clip&&m.clip.prompts){ const ps=[...m.clip.prompts].sort((a,b)=>(b.cos||0)-(a.cos||0));
+    parts.push(`<div style="margin-top:3px"><b style="color:#a78bfa">CLIP</b> <span class="mut">(cosine, malejąco)</span><div style="display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:2px">${ps.map(p=>`<span style="white-space:nowrap">${esc(p.text)} <b>${(+p.cos).toFixed(3)}</b></span>`).join('')}</div></div>`); }
+  if(m.mlkit&&m.mlkit.labels){ const ls=[...m.mlkit.labels].sort((a,b)=>(b.conf||0)-(a.conf||0));
+    parts.push(`<div style="margin-top:4px"><b style="color:#4ade80">ML Kit</b><div style="display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:2px">${ls.length?ls.map(l=>`<span style="white-space:nowrap">${esc(l.text)} <b>${(+l.conf).toFixed(2)}</b></span>`).join(''):'<span class="mut">—</span>'}</div></div>`); }
+  if(m.appleVision){ const av=m.appleVision; const ls=(av.labels||[]).slice().sort((a,b)=>(b.conf||0)-(a.conf||0)).slice(0,10);
+    parts.push(`<div style="margin-top:4px"><b style="color:#60a5fa">Apple Vision</b>${av.aesthetics!=null?` · estetyka <b>${(+av.aesthetics).toFixed(2)}</b>`:''}${av.isUtility!=null?` · isUtility <b>${av.isUtility?'TAK':'nie'}</b>`:''}<div style="display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:2px">${ls.length?ls.map(l=>`<span style="white-space:nowrap">${esc(l.text)} <b>${(+l.conf).toFixed(2)}</b></span>`).join(''):'<span class="mut">—</span>'}</div></div>`); }
+  if(m.at) parts.push(`<div class="mut" style="font-size:10px;margin-top:3px">policzono ${new Date(m.at).toLocaleString()}</div>`);
+  return `<div style="text-align:left;font-size:11px;margin:2px 0 0;background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.3);border-radius:8px;padding:6px 8px">${parts.join('')||'<span class="mut">brak danych</span>'}</div>`;
+}
+function toggleGlOcr(){ GL_OCR_ON=!GL_OCR_ON; if(GAL&&GAL.mode==='cap') showGallery(); }
+function toggleGlProp(){ GL_PROP_ON=!GL_PROP_ON; if(GAL&&GAL.mode==='cap') showGallery(); }
+// Nakładka SVG (viewBox 0..1, preserveAspectRatio="none" → mapuje znormalizowane na obrys obrazu). DWIE warstwy:
+//  • SUROWE OCR: bloki = ramka osiowa (niebieski), linie = czworokąt z cornerPoints (zielony, widać skos).
+//  • PROPOZYCJA (computeProposed = port detectMenuRegion): crop osiowy (biały ┄), perspektywa OBB + siatka (amber),
+//    klastry stykających się bloków (kolory cyklicznie). To wynik algorytmu na zapisanych danych OCR.
+async function drawGlOcr(id, n, has){
+  const svg=document.getElementById('glOcr'); if(!svg) return; svg.innerHTML='';
+  if((!GL_OCR_ON && !GL_PROP_ON) || !has) return;
+  let d; try{ d=await fetch(`/api/ocr?id=${encodeURIComponent(id)}&n=${n}`).then(r=>r.json()); }catch{ return; }
+  if(!GAL || GAL.mode!=='cap' || GAL.id!==id || GAL.n!==n) return; // zmieniło się w międzyczasie
+  const ocr=d&&d.ocr; if(!ocr||!ocr.blocks){ return; }
+  const parts=[];
+  if(GL_OCR_ON){
+    const quad=(c,f)=> (c&&c.length>=3) ? c : (f?[{x:f.x,y:f.y},{x:f.x+f.w,y:f.y},{x:f.x+f.w,y:f.y+f.h},{x:f.x,y:f.y+f.h}]:[]);
+    for(const bl of ocr.blocks){
+      if(bl.frame) parts.push(`<rect x="${bl.frame.x}" y="${bl.frame.y}" width="${bl.frame.w}" height="${bl.frame.h}" fill="rgba(96,165,250,0.08)" stroke="#60a5fa" stroke-width="2" vector-effect="non-scaling-stroke"/>`);
+      for(const ln of (bl.lines||[])){ const pts=quad(ln.corners, ln.frame);
+        if(pts.length>=3) parts.push(`<polygon points="${pts.map(p=>p.x+','+p.y).join(' ')}" fill="rgba(74,222,128,0.14)" stroke="#4ade80" stroke-width="1.3" vector-effect="non-scaling-stroke"/>`); }
+    }
+  }
+  if(GL_PROP_ON){
+    const prop=computeProposed(ocr);
+    if(prop){
+      const lerp=(A,B,t)=>({x:A.x+(B.x-A.x)*t,y:A.y+(B.y-A.y)*t});
+      const seg=(a,b,bold)=>parts.push(`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(251,191,36,${bold?0.95:0.5})" stroke-width="${bold?2.2:1.2}" vector-effect="non-scaling-stroke"/>`);
+      const Q=prop.quad;
+      for(let i=0;i<=prop.cols;i++){const t=i/prop.cols; seg(lerp(Q.tl,Q.tr,t),lerp(Q.bl,Q.br,t),i===0||i===prop.cols);}
+      for(let j=0;j<=prop.rows;j++){const t=j/prop.rows; seg(lerp(Q.tl,Q.bl,t),lerp(Q.tr,Q.br,t),j===0||j===prop.rows);}
+      const GC=["#e879f9","#22d3ee","#fb7185","#c084fc","#2dd4bf"];
+      prop.groups.forEach((g,i)=>{const c=GC[i%GC.length]; parts.push(`<rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" fill="${c}" fill-opacity="0.10" stroke="${c}" stroke-width="2" vector-effect="non-scaling-stroke"/>`);});
+      parts.push(`<rect x="${prop.box.x}" y="${prop.box.y}" width="${prop.box.w}" height="${prop.box.h}" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>`);
+    }
+  }
+  svg.innerHTML=parts.join('');
+}
+// Klastry stykających się ramek (union-find) — port clusterPx z apki. fr=[{left,top,width,height}] w px; gap w px.
+function clusterPxLab(fr, gap){
+  const parent=fr.map((_,i)=>i);
+  const find=i=>{let x=i;while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;};
+  const near=(a,b)=>a.left<=b.left+b.width+gap&&b.left<=a.left+a.width+gap&&a.top<=b.top+b.height+gap&&b.top<=a.top+a.height+gap;
+  for(let i=0;i<fr.length;i++)for(let j=i+1;j<fr.length;j++)if(near(fr[i],fr[j]))parent[find(i)]=find(j);
+  const by=new Map();
+  for(let i=0;i<fr.length;i++){const r=find(i);if(!by.has(r))by.set(r,[]);by.get(r).push(fr[i]);}
+  return [...by.values()].map(g=>{let l=1/0,t=1/0,r=-1/0,b=-1/0;for(const f of g){l=Math.min(l,f.left);t=Math.min(t,f.top);r=Math.max(r,f.left+f.width);b=Math.max(b,f.top+f.height);}return {left:l,top:t,width:r-l,height:b-t};});
+}
+// Port detectMenuRegion (mobile/src/menuRegion.ts) na OcrData (znormalizowane 0..1, +w/h px). Zwraca propozycję
+// w znormalizowanych: box (osiowy crop), quad (OBB perspektywiczny), groups (klastry), cols/rows (siatka kafelków).
+const TILE_MAX_PX_LAB=1500;
+function computeProposed(ocr, gapMult=1.2){
+  const W=ocr.w, H=ocr.h; if(!W||!H) return null;
+  const frames=[], pts=[], lineH=[], angles=[];
+  for(const b of (ocr.blocks||[])){
+    if(b.frame&&b.frame.w>0&&b.frame.h>0) frames.push({left:b.frame.x*W,top:b.frame.y*H,width:b.frame.w*W,height:b.frame.h*H});
+    for(const ln of (b.lines||[])){
+      if(ln.frame&&ln.frame.h) lineH.push(ln.frame.h*H);
+      const cps=(ln.corners&&ln.corners.length>=2)?ln.corners.map(p=>({x:p.x*W,y:p.y*H})):null;
+      if(cps){ for(const p of cps) pts.push(p); const a=Math.atan2(cps[1].y-cps[0].y,cps[1].x-cps[0].x); if(isFinite(a))angles.push(a); }
+      else if(ln.frame){ const f=ln.frame; pts.push({x:f.x*W,y:f.y*H},{x:(f.x+f.w)*W,y:f.y*H},{x:(f.x+f.w)*W,y:(f.y+f.h)*H},{x:f.x*W,y:(f.y+f.h)*H}); }
+    }
+  }
+  if(!frames.length||!pts.length) return null;
+  let minL=1/0,minT=1/0,maxR=-1/0,maxB=-1/0;
+  for(const f of frames){minL=Math.min(minL,f.left);minT=Math.min(minT,f.top);maxR=Math.max(maxR,f.left+f.width);maxB=Math.max(maxB,f.top+f.height);}
+  const padX=W*0.015,padY=H*0.01, bx=Math.max(0,(minL-padX)/W), by=Math.max(0,(minT-padY)/H);
+  const box={x:bx,y:by,w:Math.min(1-bx,(maxR+padX)/W-bx),h:Math.min(1-by,(maxB+padY)/H-by)};
+  const angle=angles.length?angles.slice().sort((a,b)=>a-b)[Math.floor(angles.length/2)]:0;
+  let cx=0,cy=0; for(const p of pts){cx+=p.x;cy+=p.y;} cx/=pts.length; cy/=pts.length;
+  const rot=(p,ang)=>{const c=Math.cos(ang),s=Math.sin(ang),dx=p.x-cx,dy=p.y-cy;return {x:cx+dx*c-dy*s,y:cy+dx*s+dy*c};};
+  const rpts=pts.map(p=>rot(p,-angle));
+  const xs=rpts.map(p=>p.x).sort((a,b)=>a-b), ys=rpts.map(p=>p.y).sort((a,b)=>a-b);
+  const at=(arr,t)=>arr[Math.min(arr.length-1,Math.max(0,Math.round((arr.length-1)*t)))];
+  const minX=at(xs,0.01),maxX=at(xs,0.99),minY=at(ys,0.01),maxY=at(ys,0.99);
+  const nrm=p=>({x:p.x/W,y:p.y/H});
+  const tlP=rot({x:minX,y:minY},angle),trP=rot({x:maxX,y:minY},angle),brP=rot({x:maxX,y:maxY},angle),blP=rot({x:minX,y:maxY},angle);
+  const quad={tl:nrm(tlP),tr:nrm(trP),br:nrm(brP),bl:nrm(blP)};
+  const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const wPx=Math.max(dist(tlP,trP),dist(blP,brP)), hPx=Math.max(dist(tlP,blP),dist(trP,brP));
+  const cols=Math.max(1,Math.ceil(wPx/TILE_MAX_PX_LAB)), rows=Math.max(1,Math.ceil(hPx/TILE_MAX_PX_LAB));
+  const medH=lineH.length?lineH.slice().sort((a,b)=>a-b)[Math.floor(lineH.length/2)]:(maxB-minT)*0.05;
+  const groups=clusterPxLab(frames,Math.max(1,medH*gapMult)).map(g=>({x:g.left/W,y:g.top/H,w:g.width/W,h:g.height/H}));
+  return {box,quad,groups,cols,rows};
 }
 function galleryNav(d){ if(!GAL) return; const len=GAL.mode==='photo'?GAL.items.length:GAL.total; if(len>1){ GAL.n=(GAL.n+d+len)%len; showGallery(); } }
 function closeGallery(){ GAL=null; document.getElementById('imgLightbox').style.display='none'; }
@@ -1212,7 +1394,7 @@ let COST_PERIOD='all', COST_LIMIT=10000, COST_GROUPS=[], EGRESS_RATE=0.1, CURREN
 function setCostLimit(v){ COST_LIMIT=+v||3000; loadCostLog(); }
 function switchTab(name){
   CURRENT_TAB=name;
-  ['lab','flow','logs','cache','samples','errors','instances','prices','config','services','deploy','stats'].forEach(t=>{
+  ['lab','flow','logs','cache','samples','errors','instances','prices','config','services','deploy','stats','verifiers'].forEach(t=>{
     document.getElementById('tab-'+t).style.display = (t===name)?'':'none';
     document.getElementById('tabBtn-'+t).classList.toggle('on', t===name);
   });
@@ -1223,6 +1405,7 @@ function switchTab(name){
   else if(name==='services'){ loadServices(); }
   else if(name==='deploy'){ loadDeploy(); }
   else if(name==='stats'){ renderStatsPeriod(); loadStats(); }
+  else if(name==='verifiers'){ loadPhotoVerdicts(); }
   else if(name==='cache'){ loadCacheStats(); renderCacheKindChips(); loadCacheSize(); loadCacheBrowse(); }
   else if(name==='samples'){ ensureInstNames().finally(()=>{ loadServerSamples(); renderLocalSamples(); loadAppSamples(); }); }
   else if(name==='errors'){ loadClientErrors(); }
@@ -1560,12 +1743,13 @@ async function loadDeploy(btn){
         <button onclick="deleteBuild('${esc(b.ipa)}')" ${busy?'disabled':''} style="padding:4px 10px; font-size:11px">🗑 usuń</button>
       </div>
     </div>`).join('') : '<span class="mut">Brak gotowych .ipa. Zbuduj: <code>cd mobile &amp;&amp; ./build-only.sh</code></span>';
-  document.getElementById('deployHistory').innerHTML = (r.uploads||[]).length ? r.uploads.map(u=>`
+  const ups24h = (r.uploads||[]).filter(u=>Date.now()-u.ts < 24*3600*1000); // tylko ostatnie 24h — starsze nieistotne
+  document.getElementById('deployHistory').innerHTML = ups24h.length ? ups24h.map(u=>`
     <div class="small" style="padding:6px 8px; margin-bottom:3px; border-radius:6px; ${u.ok?'opacity:0.9':'background:rgba(122,31,31,0.18); border-left:3px solid #7a1f1f'}">
       <div>${u.ok?'✅':'❌ ODRZUCONE'} · ${new Date(u.ts).toLocaleString()} · <b>build #${u.buildNumber||'?'}</b> <span class="mut" style="font-size:10px">${esc(u.ipa)}</span></div>
       ${u.note?`<div class="mut" style="margin-top:2px; font-size:11px">${esc(u.note)}</div>`:''}
       ${u.error?`<div style="margin-top:2px; ${u.ok?'opacity:0.7':'color:#ff8a80'}">${u.ok?'':'↳ Apple: '}${esc(u.error)}</div>`:''}
-    </div>`).join('') : '<span class="mut">Brak wgrań.</span>';
+    </div>`).join('') : '<span class="mut">Brak wgrań w ostatnich 24h.</span>';
   const chEl=document.getElementById('deployChangelogs');
   if(chEl) chEl.innerHTML = (r.changelogs||[]).length ? (r.changelogs||[]).map(c=>`
     <div class="small" style="padding:6px 8px; margin-bottom:3px; border-radius:6px; background:rgba(255,255,255,0.03)">
@@ -1668,10 +1852,13 @@ function sessionStats(g){
     else if(e.op==='dish-photos'||e.op==='dish-photo-refresh'){ photoOps++; photosFetched+=(d.resultCount||0); } }
   return {images,dishes,photosFetched,photoOps,byOp};
 }
-let STATS_OPEN={}; let STATS_KEYS=[]; let SESSION_DETAIL={}; // detal (zdarzenia) sesji — dociągany DOPIERO po kliknięciu
+let STATS_OPEN={}; let STATS_KEYS=[]; let SESSION_DETAIL={}; let SESSION_INPUTS={}; // detal (zdarzenia) + zdjęcia wejściowe sesji — dociągane DOPIERO po kliknięciu
 async function toggleSession(i){ const k=STATS_KEYS[i]; if(!k) return; STATS_OPEN[k]=!STATS_OPEN[k];
   if(STATS_OPEN[k] && !SESSION_DETAIL[k]){ // klik → wyłuskaj zdarzenia tej sesji z BAZY (lazy)
     try{ const r=await api('/api/session-detail?sessionId='+encodeURIComponent(k)); SESSION_DETAIL[k]=r.entries||[]; }catch(e){ SESSION_DETAIL[k]=[]; }
+  }
+  if(STATS_OPEN[k] && !SESSION_INPUTS[k]){ // równolegle: zdjęcia FAKTYCZNIE wysłane do analizy (≤24h na serwerze)
+    try{ const r=await api('/api/session-images?sid='+encodeURIComponent(k)); SESSION_INPUTS[k]=r.images||[]; }catch(e){ SESSION_INPUTS[k]=[]; }
   }
   renderStatsSessions();
 }
@@ -1720,9 +1907,111 @@ function renderStatsSessions(){
       ${byOpBar(s.byOp,13)}
       <div class="mut" style="margin-top:4px; font-size:10px; line-height:1.6">koszt wg typu: ${byOpLegend(s.byOp,true)}</div>
       <div style="margin-top:6px">${provChips}</div>
+      ${open?inputImagesBox(g.key):''}
       ${detail}
     </div>`;
   }).join('') : '<span class="mut">Brak sesji w tym okresie/filtrze.</span>';
+}
+// Miniatury zdjęć FAKTYCZNIE wysłanych do analizy (z serwera, ≤24h). Klik = pełny rozmiar (galeria). Lazy w toggleSession.
+function inputImagesBox(key){
+  const inputs=SESSION_INPUTS[key];
+  let body;
+  if(inputs===undefined) body=`<div class="mut small">⏳ ładuję zdjęcia…</div>`;
+  else if(inputs.length){
+    const gid=regPhotoGroup(inputs.map(im=>({u:'/api/session-image?sid='+encodeURIComponent(key)+'&n='+im.idx})));
+    body=`<div style="display:flex; gap:4px; flex-wrap:wrap">${inputs.map((im,idx)=>`<img src="/api/session-image?sid=${encodeURIComponent(key)}&n=${im.idx}" loading="lazy" onclick="openPhotoGallery(${gid},${idx})" onerror="this.style.opacity=0.12;this.style.background='#222'" title="zdjęcie ${idx+1} wysłane do analizy — klik = pełny rozmiar" style="width:54px; height:68px; object-fit:cover; border-radius:4px; border:1px solid var(--line); cursor:pointer">`).join('')}</div>`;
+  }
+  else body=`<div class="mut small" style="opacity:.7">brak (zdjęcia kasują się po 24h od skanu)</div>`;
+  return `<div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.18)"><div class="mut small" style="margin-bottom:4px">📷 Zdjęcia wysłane do analizy <span class="mut" style="font-size:10px">(dostępne 24h od skanu)</span>:</div>${body}</div>`;
+}
+
+/* ---- 🔬 Weryfikatory zdjęć: benchmark lokalnych modeli (porównanie + ground-truth) ---- */
+let PHOTO_VERDICTS=[];
+async function loadPhotoVerdicts(btn){
+  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='↻…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},700); }
+  try{ const r=await api('/api/photo-verdicts?limit=2000'); PHOTO_VERDICTS = (r&&!r.error&&r.verdicts)?r.verdicts.map(v=>({...v, ts:Number(v.ts)||0})):[]; } // ts z PG bywa stringiem → Number
+  catch(e){ document.getElementById('verifList').innerHTML='✗ błąd: '+esc(String(e)); return; }
+  renderPhotoVerdicts();
+}
+function pvGroups(){ // grupuj po (dish,url); per weryfikator weź NAJNOWSZY (lista ts malejąco)
+  const m=new Map();
+  for(const v of PHOTO_VERDICTS){ const k=v.dish+' '+v.url; let g=m.get(k);
+    if(!g){ g={dish:v.dish,url:v.url,ev:{},ts:0}; m.set(k,g); }
+    if(!(v.evaluator in g.ev)) g.ev[v.evaluator]={score:v.score,label:v.label,meta:v.meta};
+    g.ts=Math.max(g.ts,v.ts||0); }
+  return [...m.values()].sort((a,b)=>b.ts-a.ts);
+}
+function renderPhotoVerdicts(){
+  const groups=pvGroups();
+  const evs=[...new Set(PHOTO_VERDICTS.map(v=>v.evaluator).filter(e=>e!=='human' && e!=='app-decision'))].sort();
+  const acc={}; for(const e of evs) acc[e]={ok:0,n:0}; let labeled=0;
+  for(const g of groups){ const h=g.ev['human']; if(!h||h.score==null) continue; labeled++; const good=h.score>=0.5;
+    for(const e of evs){ const s=g.ev[e]; if(!s||s.score==null) continue; acc[e].n++; if((s.score>=0.5)===good) acc[e].ok++; } }
+  document.getElementById('verifSummary').innerHTML = evs.length
+    ? `<div class="step"><b>Zgodność z Tobą</b> <span class="mut small">(oznaczonych zdjęć: ${labeled})</span><div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px">${evs.map(e=>{ const a=acc[e]; const pct=a.n?Math.round(a.ok/a.n*100):null; return `<span class="badge" style="font-size:12px">${esc(e)}: <b>${pct==null?'—':pct+'%'}</b> <span class="mut">(${a.ok}/${a.n})</span></span>`; }).join('')}</div></div>`
+    : '<div class="mut small">Brak werdyktów modeli — najpierw apka musi wysłać oceny (Faza 1). Możesz już oznaczać zdjęcia, gdy się pojawią.</div>';
+  const q=(document.getElementById('verifQuery')?.value||'').toLowerCase().trim();
+  const fDec=document.getElementById('verifDecision')?.value||''; // ''|shown|rejected
+  const fVen=document.getElementById('verifVenue')?.value||'';     // ''|venue|web
+  const gctx=g=>{ const v=g.ev['clip']||g.ev['apple-vision']||g.ev['mlkit-label']; return (v&&v.meta&&v.meta.ctx)||null; };
+  const list = groups.filter(g=>{
+    if(q && !((g.dish||'')+' '+g.url).toLowerCase().includes(q)) return false;
+    if(fDec){ const d=g.ev['app-decision']; if(!d||d.score==null) return false; const shown=d.score>=0.5; if(fDec==='shown'?!shown:shown) return false; }
+    if(fVen){ const c=gctx(g); const fv=!!(c&&c.fromVenue); if(fVen==='venue'?!fv:fv) return false; }
+    return true;
+  });
+  const col=s=> s==null?'#888': s>=0.66?'#7fd6a0': s>=0.4?'#f1c40f':'#ff8a80';
+  const vis = list.slice(0,400);
+  // galeria do POWIĘKSZANIA (klik miniatury) — z podpisem: danie + oceny modeli, by łatwiej ocenić
+  const vgid = regPhotoGroup(vis.map(g=>({u:g.url, capHtml:`🔎 <b>${esc(g.dish||'—')}</b>`+evs.map(e=>{const s=g.ev[e]; return s?` · ${esc(e)} <b style="color:${col(s.score)}">${s.score!=null?Math.round(s.score*100)+'%':'—'}</b>`:'';}).join('')})));
+  document.getElementById('verifList').innerHTML = vis.length ? vis.map((g,idx)=>{
+    const h=g.ev['human']; const hv = h&&h.score!=null ? (h.score>=0.5?'good':'bad') : null;
+    const chips = evs.map(e=>{ const s=g.ev[e]; if(!s) return ''; const agree = hv? ((s.score>=0.5)===(hv==='good')) : null;
+      return `<span style="display:inline-block; margin:0 4px 4px 0; padding:1px 6px; border-radius:5px; border:1px solid ${agree==null?'rgba(255,255,255,0.12)':agree?'#7fd6a0':'#ff8a80'}; background:rgba(255,255,255,0.04)"><b style="color:${col(s.score)}">${esc(e)} ${s.score!=null?Math.round(s.score*100)+'%':'—'}</b>${s.label?` <span class="mut" style="font-size:10px">${esc(String(s.label).slice(0,24))}</span>`:''}</span>`; }).join('');
+    return `<div class="step" style="margin-bottom:8px; display:flex; gap:10px">
+      <img src="${esc(g.url)}" referrerpolicy="no-referrer" loading="lazy" onclick="openPhotoGallery(${vgid},${idx})" title="klik = powiększ (strzałki ‹ › przewijają)" onerror="this.style.opacity=0.12;this.style.background='#222'" style="width:84px; height:64px; object-fit:cover; border-radius:6px; flex:none; cursor:pointer">
+      <div style="flex:1; min-width:0">
+        <div><span class="mut small">🔎 szukane:</span> <b>${esc(g.dish||'—')}</b> <span class="mut small">(CLIP dostaje „a photo of …")</span></div>
+        ${(()=>{ const dec=g.ev['app-decision']; const decBadge = dec ? `<span style="font-size:11px; font-weight:800; padding:2px 8px; border-radius:999px; ${dec.score>=0.5?'background:#143d24; color:#7fd6a0':'background:#3d1414; color:#ff8a80'}" title="decyzja apki: czy zdjęcie trafiło do usera">${esc(dec.label||(dec.score>=0.5?'✓ pokazane':'✗ odsiane'))}</span>` : `<span class="mut small">status apki: — (werdykt sprzed tej wersji)</span>`; return `<div style="margin:3px 0; display:flex; gap:8px; align-items:center; flex-wrap:wrap">${decBadge}<span class="mut small">📅 ${g.ts? new Date(g.ts).toLocaleString() : '—'}</span></div>`; })()}
+        <div class="mut" style="font-size:10px; word-break:break-all; margin:2px 0">${esc(g.url)}</div>
+        <div style="margin-top:4px">${chips||'<span class="mut small">brak ocen modeli</span>'}</div>
+        <div style="margin-top:6px; display:flex; gap:6px">
+          <button onclick="markHuman('${encodeURIComponent(g.dish||'')}','${encodeURIComponent(g.url)}',true,this)" style="padding:3px 10px; ${hv==='good'?'background:#1e6b3a; color:#fff; font-weight:700':''}">✓ dobre</button>
+          <button onclick="markHuman('${encodeURIComponent(g.dish||'')}','${encodeURIComponent(g.url)}',false,this)" style="padding:3px 10px; ${hv==='bad'?'background:#7a1f1f; color:#fff; font-weight:700':''}">✗ złe</button>
+        </div>
+        ${renderVerdictRaw(g, evs)}
+      </div>
+    </div>`;
+  }).join('') + (list.length>400?`<div class="mut small">…+${list.length-400} więcej</div>`:'') : '<span class="mut">Brak werdyktów dla filtra.</span>';
+}
+// Pełne SUROWE wyniki każdego modelu (query + response) obok naszej interpretacji — rozwijane pod chipsami.
+// Tylko werdykty z build 118+ niosą meta.raw; starsze pokażą się bez tej sekcji.
+function renderVerdictRaw(g, evs){
+  const blocks = evs.map(e=>{ const s=g.ev[e]; if(!s||!s.meta) return ''; return `<div style="margin-top:6px"><b style="color:var(--acc)">${esc(e)}</b>${renderOneVerdictMeta(s.meta)}</div>`; }).filter(Boolean).join('');
+  if(!blocks) return '';
+  return `<details style="margin-top:6px"><summary style="cursor:pointer; color:var(--acc); font-size:12px">🔬 surowe wyniki modeli (query + response)</summary><div style="font-size:11px; text-align:left; margin-top:2px">${blocks}</div></details>`;
+}
+function renderOneVerdictMeta(m){
+  const parts=[];
+  if(m.ctx){ const c=m.ctx; parts.push(`<div class="mut">kontekst: ${c.branded?'🏷️ marka · ':''}${c.fromVenue?'⭐ z lokalu · ':''}${c.domain?esc(c.domain)+' · ':''}${c.source?esc(c.source)+' · ':''}${c.photoQuery?'🔎 '+esc(c.photoQuery):''}</div>`); }
+  if(m.comp) parts.push(`<div class="mut">interpretacja (comp): ${esc(JSON.stringify(m.comp))}</div>`);
+  if(m.dishScore!=null) parts.push(`<div class="mut">dishScore <b>${(+m.dishScore).toFixed(3)}</b> · bestPos ${(+m.bestPos).toFixed(3)} · bestNeg ${(+m.bestNeg).toFixed(3)}</div>`);
+  const raw=m.raw;
+  if(raw){
+    if(raw.query) parts.push(`<div><span class="mut">query:</span> ${esc(Array.isArray(raw.query)?raw.query.join('  |  '):String(raw.query))}</div>`);
+    const resp=raw.response||{};
+    if(resp.labels) parts.push(`<div style="display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:2px">${resp.labels.length?resp.labels.map(l=>`<span style="white-space:nowrap">${esc(l.text)} <b>${(+l.conf).toFixed(2)}</b></span>`).join(''):'<span class="mut">—</span>'}</div>`);
+    if(resp.aesthetics!=null||resp.isUtility!=null) parts.push(`<div class="mut">${resp.aesthetics!=null?`estetyka <b>${(+resp.aesthetics).toFixed(2)}</b>`:''}${resp.isUtility!=null?` · isUtility <b>${resp.isUtility?'TAK':'nie'}</b>`:''}</div>`);
+    if(resp.cosines){ const cs=[...resp.cosines].sort((a,b)=>(b.score||0)-(a.score||0)); parts.push(`<div style="display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:2px">${cs.map(c=>`<span style="white-space:nowrap">${esc(c.label)} <b>${(+c.score).toFixed(3)}</b></span>`).join('')}</div>`); }
+  }
+  return `<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 6px;margin-top:2px">${parts.join('')||'<span class="mut">brak surowych danych (werdykt sprzed build 118)</span>'}</div>`;
+}
+async function markHuman(dishEnc, urlEnc, good){
+  const dish=decodeURIComponent(dishEnc), url=decodeURIComponent(urlEnc);
+  try{ const r=await api('/api/photo-verdict',{dish,url,good}); if(r&&r.error){ alert(r.error); return; } }
+  catch(e){ alert('błąd: '+e); return; }
+  PHOTO_VERDICTS.unshift({dish,url,evaluator:'human',score:good?1:0,ts:Date.now()}); // odzwierciedl od razu (najnowszy)
+  renderPhotoVerdicts();
 }
 
 /* ---- Sample online + archiwum (zakładka 📦 Sample) ---- */
@@ -1764,19 +2053,27 @@ async function importAllServerSamples(btn){
   if(!SRV_SAMPLES.length) return alert('Brak sampli do importu.');
   if(!confirm(`Zaimportować ${SRV_SAMPLES.length} sampli?`)) return;
   if(btn) btn.disabled=true;
-  for(const x of [...SRV_SAMPLES]){ await api('/api/server-samples/import',{id:x.id}).catch(()=>{}); }
+  const info=document.getElementById('srvSampleInfo'); const list=[...SRV_SAMPLES];
+  let added=0,updated=0,skipped=0,ocr=0,menuAi=0,err=0,i=0;
+  for(const x of list){ i++;
+    if(info) info.innerHTML=`⏳ importuję ${i}/${list.length}…`;
+    try{ const r=await api('/api/server-samples/import',{id:x.id});
+      if(r&&r.error){ err++; } else { added+=r.added||0; updated+=r.updated||0; skipped+=r.skipped||0; ocr+=r.ocr||0; menuAi+=r.menuAi||0; }
+    }catch{ err++; }
+  }
+  if(info) info.innerHTML=`✓ import zakończony: +${added} nowych · ${updated} zaktualizowanych · ${skipped} bez zmian${err?` · <span style="color:var(--err)">${err} błędów</span>`:''}${ocr?` · <span style="color:var(--ok)">🔤 OCR do ${ocr} sampli</span>`:''}${menuAi?` · <span style="color:#a78bfa">🧠 analiza AI do ${menuAi} sampli</span>`:''}`;
   if(btn) btn.disabled=false;
-  await afterImport(SRV_SAMPLES.length); await loadServerSamples();
+  await afterImport(list.length); await loadServerSamples();
 }
 let SAMPLE_SHOW_ARCH=false;
 function sampleCard(c, archived){
   const res = c.result ? `${c.result.restaurantName||'—'} · ${c.result.cuisine||'—'}` : 'brak zapisanego wyniku';
   const isNew = !archived && c.importedAt && (Date.now()-c.importedAt < 12*3600*1000);
-  return `<div class="cand" style="display:flex; gap:10px; align-items:flex-start">
-    ${capThumb(c.id, c.images, 54, 68)}
-    <div style="flex:1; min-width:0">
+  return `<div class="cand">
+    <div style="min-width:0">
       <div style="font-weight:700">${archived?'🗄 ':''}${isNew?'<span class="badge pass" style="margin-right:4px">NEW</span>':''}${esc(c.name||new Date(c.createdAt).toLocaleString())}</div>
-      <div class="mut small">${c.images||0} zdj · ${esc(c.locationHint||'—')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
+      <div style="margin:6px 0">${capThumb(c, 56, 70)}</div>
+      <div class="mut small">${c.images||0} zdj · ${ocrSummary(c)} · ${menuAiSummary(c)}${esc(c.locationHint?` · ${c.locationHint}`:'')}${c.location?` · 📍${c.location.lat.toFixed(3)},${c.location.lng.toFixed(3)}`:''}</div>
       <div class="mut small">id: ${idChip(c.id,18)}</div>
       ${c.installId?`<div class="mut small" style="cursor:pointer; color:var(--acc)" title="otwórz instancję" onclick="openInstance('${esc(c.installId)}')">📱 z instancji: ${instLabel(c.installId)}</div>`:''}
       <div class="mut small" style="cursor:pointer" title="kliknij, by poprawić/usunąć wynik" onclick="editCaptureResult('${c.id}')">wynik: ${esc(res)} ✏️</div>
@@ -1804,7 +2101,7 @@ function renderLocalSamples(){
   const btn=document.getElementById('archToggleBtn'); if(btn) btn.textContent = SAMPLE_SHOW_ARCH ? '← aktywne' : `🗄 archiwum (${arch.length})`;
   const hdr=document.getElementById('localSamplesHdr'); if(hdr) hdr.textContent = SAMPLE_SHOW_ARCH ? '🗄 Archiwum lokalne' : '🗂 Sample lokalne (aktywne)';
   const q=(document.getElementById('sampleQuery')?.value||'').trim();
-  const list=(SAMPLE_SHOW_ARCH?arch:active).filter(c=>matchCapture(c,q)).slice().sort((a,b)=>(b.importedAt||b.createdAt||0)-(a.importedAt||a.createdAt||0));
+  const list=(SAMPLE_SHOW_ARCH?arch:active).filter(c=>matchCapture(c,q)).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); // od NAJNOWSZEGO po dacie UTWORZENIA sampla (nie importu/aktualizacji)
   box.innerHTML = list.length ? list.map(c=>sampleCard(c,SAMPLE_SHOW_ARCH)).join('') : `<div class="mut small">${SAMPLE_SHOW_ARCH?'Archiwum puste.':'Brak aktywnych sampli.'}</div>`;
 }
 function toggleSampleArchive(){ SAMPLE_SHOW_ARCH=!SAMPLE_SHOW_ARCH; renderLocalSamples(); }
@@ -1829,11 +2126,17 @@ async function editCaptureResult(id){
 }
 /* ---- Kolejka lab → apka: push sampla na serwer dla apki + podgląd/kasowanie ---- */
 async function pushToApp(id, btn){
-  if(btn){ btn.disabled=true; const t=btn.textContent; btn.textContent='☁…'; setTimeout(()=>{btn.textContent=t;btn.disabled=false;},1500); }
-  const r=await api('/api/push-to-app',{captureId:id});
-  if(r&&r.error){ alert('Push do apki: '+r.error); return; }
-  const st = r.status==='updated'?'zaktualizowano' : r.status==='exists'?'już było (bez zmian)' : 'wysłano';
-  alert('☁→apka: '+st+'. Apka zaciągnie to przez „Importuj sample z serwera".');
+  // Bez popupu — feedback w przycisku (można klikać wiele sampli naraz). W trakcie „wysyłam…", potem flash wyniku.
+  const orig = btn ? btn.textContent : '';
+  const flash = (txt, ok) => { if(!btn) return; btn.textContent=txt; btn.style.color = ok?'var(--ok)':'var(--err)';
+    setTimeout(()=>{ btn.textContent=orig; btn.style.color=''; btn.disabled=false; }, 2500); };
+  if(btn){ btn.disabled=true; btn.style.color=''; btn.title='wysyłam…'; btn.textContent='☁ wysyłam…'; }
+  let r; try{ r=await api('/api/push-to-app',{captureId:id}); }
+  catch(e){ if(btn) btn.title='Błąd: '+e; flash('⚠ błąd', false); return; }
+  if(r&&r.error){ if(btn) btn.title='Błąd: '+r.error; flash('⚠ błąd', false); return; }
+  const st = r.status==='updated'?'✓ zaktualizowano' : r.status==='exists'?'✓ bez zmian' : '✓ wysłano';
+  if(btn) btn.title='☁→apka: '+st+' — apka zaciągnie przez „Importuj sample z serwera".';
+  flash(st, true);
   loadAppSamples();
 }
 async function loadAppSamples(btn){

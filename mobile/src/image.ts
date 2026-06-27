@@ -7,6 +7,7 @@ import * as Location from "expo-location";
 import { File } from "expo-file-system";
 import { write as writeExif } from "@lodev09/react-native-exify";
 import type { GeoPoint } from "./types";
+import { recognizeOcr, boxFromOcr, type OcrData, type MenuBox } from "./menuRegion";
 
 export interface PreparedImage {
   uri: string; // skompresowany plik — do podglądu miniatury
@@ -23,6 +24,13 @@ export interface PreparedImage {
   exifLocation?: GeoPoint;
   /** Czas wykonania zdjęcia (EXIF DateTimeOriginal, epoch ms) — do sortowania stron najstarsze→najnowsze. */
   takenAt?: number;
+  /** SUROWY on-device OCR PEŁNEGO zdjęcia (ML Kit) — liczony raz w `compress`: (a) z niego crop DO MODELU
+   *  (box menu, „biały przerywany"), (b) zapisywany do sampla ZAWSZE razem ze zdjęciem (do eksperymentów w LABie). */
+  ocr?: OcrData;
+  /** Analiza menu-AI (CLIP/Apple/MLKit) PEŁNEGO zdjęcia i WYCINKA — liczona przez `runScan` przed wysyłką (fresh) lub
+   *  dołączona z sampla (resume). Wysyłana RAZEM z wycinkiem na serwer (serwer GROMADZI; użycie/triaż = później). */
+  menuAi?: unknown;
+  menuAiCrop?: unknown;
 }
 
 // EXIF DateTimeOriginal („YYYY:MM:DD HH:MM:SS") → epoch ms. Brak/niepoprawne → undefined.
@@ -67,44 +75,41 @@ export function setModelImageSpec(spec: {
   applySpec(peekSpec, spec.peekImageMaxEdge, spec.peekImageQuality);
 }
 
-// Crop „DO MODELU" = DOKŁADNIE obszar między scrimami paska górnego/dolnego w aparacie (to, co zostaje po
-// odcięciu przyciemnionych kawałków góra/dół) PRZED skalowaniem do maxEdge → menu wypełnia więcej budżetu pikseli
-// = lepszy OCR. CameraCapture mierzy realne wysokości pasków i ustawia te insety przez setModelCropInsets; domyślne
-// ≈ typowe wysokości (na wypadek replayu zanim aparat się zmierzy). Boki PEŁNE. TYLKO zdjęcia z aparatu (crop=true).
-let modelCropInsets = { top: 0.12, bottom: 0.16 }; // ułamek wysokości EKRANU ucinany z góry / z dołu
-export function setModelCropInsets(top: number, bottom: number): void {
-  const clamp = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(0.4, v)) : 0); // nigdy nie zjedz całego kadru
-  modelCropInsets = { top: clamp(top), bottom: clamp(bottom) };
-}
-function cropRect(w: number, h: number): { originX: number; originY: number; width: number; height: number } {
-  const { top, bottom } = modelCropInsets;
-  if (h >= w) {
-    // pion (upright aparat/sampel): tnij górę/dół WYSOKOŚCI, boki pełne
-    return { originX: 0, originY: Math.round(h * top), width: w, height: Math.round(h * (1 - top - bottom)) };
-  }
-  // landscape-stored (orientacja nieznormalizowana): tnij symetrycznie końce DŁUŻSZEJ osi (= góra/dół po obrocie)
-  const e = (top + bottom) / 2;
-  return { originX: Math.round(w * e), originY: 0, width: Math.round(w * (1 - 2 * e)), height: h };
-}
+// Crop „DO MODELU" = INTELIGENTNY box menu z on-device OCR (union ramek tekstu + mały margines; `boxFromOcr`).
+// To dokładnie „biały przerywany" z nakładki LABu. Przycinamy PEŁNĄ klatkę do tego boxa PRZED skalowaniem do
+// maxEdge → menu wypełnia więcej budżetu pikseli = lepszy OCR. ZAMIAST starego cięcia pasów góra/dół (scrimy).
+// Sampel zostaje PEŁNĄ klatką (bez cropu). Boki też przycinane (box jest 2D, nie tylko góra/dół).
 
-/** Koduje zdjęcie pod dany `spec`: (opcjonalny crop środka dla aparatu) → resize po DŁUŻSZEJ krawędzi do
- *  `spec.maxEdge` (BEZ upscalingu) + JPEG `spec.quality`. `dims` (z assetu) pozwala pominąć sondujący render. */
-async function encodeAt(uri: string, dims: { width?: number | null; height?: number | null } | undefined, spec: ImgSpec, crop = false): Promise<{ uri: string; base64: string }> {
+/** Koduje zdjęcie pod dany `spec`: (opcjonalny crop do `cropBox` znormalizowanego 0..1) → resize po DŁUŻSZEJ
+ *  krawędzi do `spec.maxEdge` (BEZ upscalingu) + JPEG `spec.quality`. `dims` (z assetu) pomija sondujący render. */
+async function encodeAt(uri: string, dims: { width?: number | null; height?: number | null } | undefined, spec: ImgSpec, cropBox?: MenuBox | null, rotate = 0): Promise<{ uri: string; base64: string }> {
   let w = typeof dims?.width === "number" ? dims.width : undefined;
   let h = typeof dims?.height === "number" ? dims.height : undefined;
   let source: string | ImageRef = uri;
-  if (!w || !h) {
+  if (rotate) {
+    // OBRÓĆ NAJPIERW (sampel zostaje w oryginalnej orientacji; do MODELU/analizy idzie pionowy). Po obrocie wymiary
+    // się zmieniają, a cropBox jest w przestrzeni PIONOWEJ → sonduj wymiary po obrocie, potem crop.
+    const rotated = await ImageManipulator.manipulate(uri).rotate(rotate).renderAsync();
+    w = rotated.width; h = rotated.height; source = rotated;
+  } else if (!w || !h) {
     const probe = await ImageManipulator.manipulate(uri).renderAsync(); // dekoduj raz → poznaj wymiary
     w = probe.width;
     h = probe.height;
     source = probe; // reużyj zdekodowanego obrazu (manipulate przyjmuje ImageRef) — bez drugiego dekodowania
   }
   let ctx = ImageManipulator.manipulate(source);
-  if (crop) {
-    const r = cropRect(w, h);
-    ctx = ctx.crop(r);
-    w = r.width;
-    h = r.height;
+  if (cropBox) {
+    const r = {
+      originX: Math.max(0, Math.round(cropBox.x * w)),
+      originY: Math.max(0, Math.round(cropBox.y * h)),
+      width: Math.min(w, Math.round(cropBox.w * w)),
+      height: Math.min(h, Math.round(cropBox.h * h)),
+    };
+    if (r.width > 0 && r.height > 0 && (r.width < w || r.height < h)) {
+      ctx = ctx.crop(r);
+      w = r.width;
+      h = r.height;
+    }
   }
   if (Math.max(w, h) > spec.maxEdge) {
     ctx = w >= h ? ctx.resize({ width: spec.maxEdge }) : ctx.resize({ height: spec.maxEdge });
@@ -114,11 +119,33 @@ async function encodeAt(uri: string, dims: { width?: number | null; height?: num
   return { uri: r.uri, base64: r.base64 ?? "" };
 }
 
-/** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU (scan) → base64. */
-export async function downscaleForModel(uri: string, crop = false): Promise<string | null> {
+/** Pomniejsza dowolny plik (np. hi-res sampel przy replayu) do rozmiaru DO MODELU (scan) → base64. `ocr` (zapisany
+ *  w samplu) → crop DO MODELU = box menu (ten sam kadr co świeży skan); brak → pełna klatka, tylko pomniejszona. */
+export async function downscaleForModel(uri: string, ocr?: OcrData | null, rotation = 0): Promise<string | null> {
   try {
-    const r = await encodeAt(uri, undefined, scanSpec, crop); // crop=true przy replayu → ten sam kadr DO MODELU co świeży skan z aparatu
+    const box = ocr ? boxFromOcr(ocr) : null;
+    const r = await encodeAt(uri, undefined, scanSpec, box, rotation);
     return r.base64 || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Zwraca plik DO PIONU (obrócony o `rotation`) — bez cropu, pełna klatka. Do analizy menu-AI na poprawnie
+ *  zorientowanym obrazie, gdy sampel jest zapisany krzywo. rotation=0 → oryginalny uri (bez kosztu). */
+export async function uprightFile(uri: string, rotation = 0): Promise<string> {
+  if (!rotation) return uri;
+  try { return (await (await ImageManipulator.manipulate(uri).rotate(rotation).renderAsync()).saveAsync({ compress: 1, format: SaveFormat.JPEG })).uri; }
+  catch { return uri; }
+}
+
+/** Jak downscaleForModel, ale zwraca PLIK (file:// uri) wyciętego kadru DO MODELU (crop boxa OCR + pomniejszenie) —
+ *  dla natywnych modeli (ML Kit/Apple/CLIP), które czytają z uri. null = błąd. */
+export async function cropFileForModel(uri: string, ocr?: OcrData | null, rotation = 0): Promise<string | null> {
+  try {
+    const box = ocr ? boxFromOcr(ocr) : null;
+    const r = await encodeAt(uri, undefined, scanSpec, box, rotation);
+    return r.uri || null;
   } catch {
     return null;
   }
@@ -156,29 +183,71 @@ function exifToGeo(exif: Record<string, unknown> | undefined | null): GeoPoint |
   return { lat: latitude, lng: longitude };
 }
 
+// ML Kit czyta TYLKO pionowy tekst — menu obrócone o 90°/180° daje śmieci albo nic. Próbujemy 4 obrotów (detekcja
+// na POMNIEJSZONEJ kopii = szybkie OCR-y), wybieramy ten z NAJWIĘCEJ rozpoznanego tekstu = prawidłowa orientacja.
+// Szybka ścieżka: gdy 0° jest już czytelne (próg znaków), nie próbujemy reszty. Potem obracamy PEŁNY obraz raz do
+// pionu i robimy FINALNE OCR (pełna rozdzielczość = dobre ramki). Zwraca: obraz DO PIONU (do modelu i sampla),
+// OCR w tej pionowej ramce, wybrany kąt. Brak tekstu w żadnej orientacji → kąt 0, oryginał, ocr=null.
+export async function ocrAutoOrient(uri: string): Promise<{ ocr: OcrData | null; rotation: number; uri: string }> {
+  const textLen = (o: OcrData | null) => (o ? o.blocks.reduce((s, b) => s + b.text.replace(/\s/g, "").length, 0) : 0);
+  // Pomniejszona baza do detekcji (orientacja nie zależy od rozdzielczości; mniejsze = szybsze OCR i obroty).
+  let smallUri = uri;
+  try {
+    const probe = await ImageManipulator.manipulate(uri).renderAsync();
+    const big = Math.max(probe.width, probe.height) > 1200;
+    const ctx = big ? ImageManipulator.manipulate(probe).resize(probe.width >= probe.height ? { width: 1200 } : { height: 1200 }) : ImageManipulator.manipulate(probe);
+    smallUri = (await (await ctx.renderAsync()).saveAsync({ compress: 0.6, format: SaveFormat.JPEG })).uri;
+  } catch { /* zostaje oryginał do detekcji */ }
+  let best = { sc: -1, rotation: 0 };
+  for (const rot of [0, 90, 180, 270]) {
+    let testUri = smallUri;
+    if (rot) {
+      try { testUri = (await (await ImageManipulator.manipulate(smallUri).rotate(rot).renderAsync()).saveAsync({ compress: 0.6, format: SaveFormat.JPEG })).uri; }
+      catch { continue; }
+    }
+    const sc = textLen(await recognizeOcr(testUri).catch(() => null));
+    if (sc > best.sc) best = { sc, rotation: rot };
+    if (rot === 0 && best.sc >= 150) break; // 0° WYRAŹNIE czytelne → obraz już pionowy (próg wysoki, by bok z odrobiną tekstu nie udawał pionu)
+  }
+  // Zastosuj wybrany obrót do PEŁNEGO obrazu (raz) i policz finalne OCR na pełnej rozdzielczości.
+  let finalUri = uri;
+  if (best.rotation) {
+    try { finalUri = (await (await ImageManipulator.manipulate(uri).rotate(best.rotation).renderAsync()).saveAsync({ compress: 1, format: SaveFormat.JPEG })).uri; }
+    catch { finalUri = uri; }
+  }
+  const ocr = await recognizeOcr(finalUri).catch(() => null);
+  return { ocr, rotation: best.rotation, uri: finalUri };
+}
+
 async function compress(
   uri: string,
   exif?: Record<string, unknown> | null,
   dims?: { width?: number | null; height?: number | null },
-  crop = false, // true = zdjęcie Z APARATU (kadrowane ramką) → wytnij środek do wersji DO MODELU (sampel zostaje pełny)
 ): Promise<PreparedImage> {
-  // STABILNY hash ŹRÓDŁA — md5 ORYGINAŁU (przed jakąkolwiek modyfikacją). Natywnie, synchronicznie.
-  // Best-effort: gdy plik niedostępny → brak hasha → serwer po prostu nie cache'uje struktury tej fotki.
+  // ORIENTACJA + OCR (raz): ML Kit czyta tylko pionowy tekst → wykryj prawidłowy obrót (najwięcej rozpoznanego
+  // tekstu), ustaw obraz DO PIONU i policz OCR. Upright obraz służy i do modelu (crop boxa), i do sampla (pełna klatka).
+  const oriented = await ocrAutoOrient(uri).catch(() => ({ ocr: null as OcrData | null, rotation: 0, uri }));
+  const fullUri = oriented.uri; // pełny obraz JUŻ DO PIONU (=oryginał, gdy kąt 0)
+  const ocr = oriented.ocr;
+  // STABILNY hash ŹRÓDŁA — md5 obrazu DO PIONU (po korekcie). Replay trzyma sampel = ten sam pionowy obraz, więc
+  // liczy ten sam md5 → cache struktury trafia. Best-effort: brak pliku → brak hasha → brak cache tej fotki.
   let srcHash: string | undefined;
-  try { srcHash = new File(uri).md5 ?? undefined; } catch { /* brak hasha = brak cache struktury */ }
-  // DO MODELU (scan) — (crop środka dla aparatu) → pomniejszone do spec serwera (dł. krawędź) + base64.
-  const model = await encodeAt(uri, dims, scanSpec, crop);
+  try { srcHash = new File(fullUri).md5 ?? undefined; } catch { /* brak hasha = brak cache struktury */ }
+  const cropBox = ocr ? boxFromOcr(ocr) : null;
+  // DO MODELU (scan) — crop do boxa OCR → pomniejszone do spec serwera (dł. krawędź ≤ maxEdge) + base64. dims
+  // tylko gdy bez obrotu (po obrocie wymiary się zmieniają → encodeAt sam je sonduje).
+  const model = await encodeAt(fullUri, oriented.rotation === 0 ? dims : undefined, scanSpec, cropBox);
   if (!model.base64) throw new Error("Nie udało się przygotować zdjęcia.");
-  // DO SAMPLA — ORYGINAŁ VERBATIM (plik z aparatu/pickera, już JPEG). BEZ przekodowania: md5(sampla)=srcHash,
-  // więc replay liczy ten sam hash z pliku (nie zapisujemy go w migawce). persistImage kopiuje ten plik 1:1.
+  // DO SAMPLA — PEŁNA klatka DO PIONU (bez cropu). persistImage kopiuje ten plik 1:1; md5(sampla)=srcHash.
   return {
     uri: model.uri,
     base64: model.base64,
-    hiResUri: uri,
+    hiResUri: fullUri,
     srcHash,
     mediaType: "image/jpeg",
     exifLocation: exifToGeo(exif),
     takenAt: exifToTime(exif),
+    ocr: ocr ?? undefined,
   };
 }
 
@@ -242,7 +311,7 @@ export async function captureFromCamera(): Promise<PreparedImage | null> {
   const a = res.assets[0];
   await geotagOwnPhoto(a.uri); // NASZE zdjęcie → wpisz device GPS w EXIF PRZED zapisem do galerii i do sampla
   void saveToGallery(a.uri); // tryb testowy: zachowaj oryginał w galerii (równolegle)
-  return compress(a.uri, a.exif, { width: a.width, height: a.height }, true); // aparat → crop środka do modelu
+  return compress(a.uri, a.exif, { width: a.width, height: a.height }); // model: crop do boxa OCR; sampel: pełna klatka
 }
 
 /** Przetwarza zdjęcie zrobione WŁASNYM aparatem (tryb seryjny, expo-camera): kompresja
@@ -253,7 +322,7 @@ export async function prepareCameraPhoto(
 ): Promise<PreparedImage> {
   await geotagOwnPhoto(uri); // NASZE zdjęcie → device GPS w EXIF PRZED galerią i samplem
   void saveToGallery(uri); // równolegle, best-effort
-  return compress(uri, exif ?? null, undefined, true); // aparat → crop środka do modelu (sampel pełny)
+  return compress(uri, exif ?? null, undefined); // model: crop do boxa OCR; sampel: pełna klatka
 }
 
 /** Wybiera z galerii — MOŻNA WIELE. Zwraca [] gdy anulowano. */

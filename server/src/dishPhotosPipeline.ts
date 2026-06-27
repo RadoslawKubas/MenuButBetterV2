@@ -16,6 +16,7 @@ import { scoreDishPhotos, MATCH_THRESHOLD } from "./verifyPhotos.ts";
 import { stepEnabled, type ToggleStep } from "./runtimeConfig.ts";
 import { ZERO_USAGE, addUsage, type Usage } from "./usage.ts";
 import { cacheGet, cacheSet, cacheKey, singleFlight } from "./cache.ts";
+import { weakUrls } from "./photoVerdicts.ts";
 
 export interface DishPhotosParams {
   dish: string;
@@ -318,7 +319,21 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     searched: [],
     resultCount: 0,
   };
-  const finish = (photos: OutPhoto[], usage: Usage): DishPhotosResult => {
+  const finish = async (photos: OutPhoto[], usage: Usage): Promise<DishPhotosResult> => {
+    // SERVER-SIDE PAMIĘĆ SŁABYCH: spychamy na KONIEC zdjęcia znane-słabe z lokalnych werdyktów (Apple isUtility/niski
+    // CLIP). ★ z lokalu (fromVenue) NIGDY nie ruszamy. Best-effort — brak DB/danych → kolejność bez zmian.
+    try {
+      const rest = photos.filter((ph) => !ph.fromVenue && ph.url);
+      if (rest.length > 1) {
+        const weak = await weakUrls(p.photoQuery?.trim() || dish, rest.map((ph) => ph.url));
+        if (weak.size) {
+          const venue = photos.filter((ph) => ph.fromVenue);
+          const strong = rest.filter((ph) => !weak.has(ph.url));
+          const weakRest = rest.filter((ph) => weak.has(ph.url));
+          photos = [...venue, ...strong, ...weakRest];
+        }
+      }
+    } catch { /* best-effort */ }
     dbg.resultCount = photos.length;
     return { photos, usage, debug: dbg };
   };
@@ -443,7 +458,7 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
   // Tryb poglądowy (do tła po skanie): z cache albo Serper/Wikimedia/Openverse (weryfikowane).
   if (p.representativeOnly) {
     const { photos, usage } = await cachedRepresentatives(p.verify !== false);
-    return finish(photos, usage);
+    return await finish(photos, usage);
   }
 
   let total: Usage = ZERO_USAGE;
@@ -562,5 +577,5 @@ export async function runDishPhotos(p: DishPhotosParams): Promise<DishPhotosResu
     pushPhotos(weakVenue.map((ph) => outPhoto(ph, { verified: true, representative: false })));
   }
 
-  return finish(result, total);
+  return await finish(result, total);
 }

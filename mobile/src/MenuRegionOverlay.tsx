@@ -3,7 +3,7 @@
 // żeby kod rysowania był JEDEN. Mapuje znormalizowane punkty na wyświetlany (resizeMode contain) obraz
 // w kontenerze boxW×boxH (z letterboxem). Linie bez SVG: każda to cienki obrócony View.
 import { type ReactNode } from "react";
-import { View } from "react-native";
+import { Text, View } from "react-native";
 import { clusterGroups, type MenuRegion, type MenuBox } from "./menuRegion";
 
 function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number; y: number }; bold?: boolean }) {
@@ -27,7 +27,7 @@ function GridLine({ a, b, bold }: { a: { x: number; y: number }; b: { x: number;
   );
 }
 
-export function MenuRegionOverlay({ region, boxW, boxH, groupMult }: { region: MenuRegion; boxW: number; boxH: number; groupMult?: number }) {
+export function MenuRegionOverlay({ region, boxW, boxH, groupMult, finalCrop }: { region: MenuRegion; boxW: number; boxH: number; groupMult?: number; finalCrop?: boolean }) {
   const scale = Math.min(boxW / region.imgW, boxH / region.imgH);
   const dW = region.imgW * scale, dH = region.imgH * scale;
   const offX = (boxW - dW) / 2, offY = (boxH - dH) / 2;
@@ -59,7 +59,18 @@ export function MenuRegionOverlay({ region, boxW, boxH, groupMult }: { region: M
   return (
     <View pointerEvents="none" style={{ position: "absolute", left: 0, top: 0, width: boxW, height: boxH }}>
       {frameRects}
-      <View style={{ position: "absolute", left: rect.left, top: rect.top, width: rect.width, height: rect.height, borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 }} />
+      {finalCrop ? (
+        // FINALNY KADR do modelu (dokładnie ten `box` wycinamy w compress) — biały przerywany, bez wypełnienia,
+        // z etykietą, żeby od razu było widać CO zostanie wysłane do modelu.
+        <>
+          <View pointerEvents="none" style={{ position: "absolute", left: rect.left, top: rect.top, width: rect.width, height: rect.height, borderWidth: 2.5, borderColor: "#fff", borderStyle: "dashed" }} />
+          <View pointerEvents="none" style={{ position: "absolute", left: rect.left, top: Math.max(0, rect.top - 17), backgroundColor: "rgba(0,0,0,0.62)", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+            <Text style={{ color: "#fff", fontSize: 9, fontWeight: "800" }}>kadr do modelu</Text>
+          </View>
+        </>
+      ) : (
+        <View style={{ position: "absolute", left: rect.left, top: rect.top, width: rect.width, height: rect.height, borderWidth: 2.5, borderColor: "#4ade80", backgroundColor: "rgba(74,222,128,0.12)", borderRadius: 3 }} />
+      )}
       {groupRects}
       {lines}
     </View>

@@ -9,8 +9,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Directory, File, Paths } from "expo-file-system";
 import JSZip from "jszip";
-import { downscaleForModel, type PreparedImage } from "./image";
+import { downscaleForModel, cropFileForModel, ocrAutoOrient, uprightFile, type PreparedImage } from "./image";
 import { recognizeOcr, type OcrData } from "./menuRegion";
+import { analyzeMenuPhoto, type MenuAi } from "./photoEval";
 import { getInstallId } from "./api";
 import { listScans, saveScan } from "./storage";
 import { DEFAULT_MODELS, type GeoPoint, type LocationSource, type Menu, type ModelId, type ModelRole, type Usage } from "./types";
@@ -41,6 +42,13 @@ export interface CaptureImage {
   exifLocation?: GeoPoint;
   /** SUROWY wynik on-device OCR (ML Kit) tego zdjęcia — do eksperymentów z algorytmami w LABie bez ponownego OCR. */
   ocr?: OcrData;
+  /** SUROWA analiza zdjęcia MENU lokalnymi modelami (mlkit/apple-vision/clip) — bez interpretacji; do dopracowania w LABie. */
+  menuAi?: MenuAi;
+  /** Ta sama analiza, ale na WYCIĘTYM kadrze DO MODELU (crop boxa OCR) — porównanie pełne vs kadr. Brak OCR = brak crop-u. */
+  menuAiCrop?: MenuAi;
+  /** Obrót (0/90/180/270) sprowadzający KRZYWO zapisany sampel DO PIONU — w tej orientacji policzono `ocr`. SAMPEL
+   *  zostaje w oryginalnej orientacji (dobry test), a do MODELU/analizy obracamy w locie. Brak/0 = sampel już pionowy. */
+  ocrRotation?: number;
 }
 
 /** Migawka jednego skanu — komplet danych potrzebny do ponownego wysłania. */
@@ -147,7 +155,9 @@ function persistImage(captureId: string, idx: number, img: PreparedImage): Captu
   } else if (!tryCopyFile(img.uri, dest)) {
     throw new Error("brak źródła zdjęcia do zapisu migawki");
   }
-  return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation };
+  // OCR PEŁNEGO zdjęcia policzony w `compress` → zapisz do sampla RAZEM ze zdjęciem (zawsze). saveCapture
+  // dolicza go tylko awaryjnie, gdy z jakiegoś powodu go nie ma.
+  return { path: `captures/${name}`, mediaType: img.mediaType, exifLocation: img.exifLocation, ocr: img.ocr };
 }
 
 /** Stabilny srcHash zdjęcia migawki = md5 PLIKU sampla. Sampel to verbatim oryginał (image.ts), więc md5
@@ -188,23 +198,109 @@ export function deleteScanImages(photos: { path: string }[]): void {
   }
 }
 
-/** JEDNORAZOWO: policz on-device OCR dla KAŻDEGO zdjęcia migawek, których jeszcze nie ma, i zapisz do sampla.
- *  OCR liczony POZA lockiem (wolny), zapis race-safe (serializowany re-load + apply). Wynik leci na serwer przy
- *  kolejnym udostępnieniu/uploadzie (eksport niesie `ocr`). onProgress(done,total) do paska postępu. */
-export async function ocrAllCaptures(onProgress?: (done: number, total: number) => void): Promise<{ done: number; total: number }> {
+/** Policz on-device OCR dla zdjęć migawek i zapisz do sampla. Domyślnie tylko te BEZ OCR; `force=true` =
+ *  REGENERACJA (nadpisz wszystkie, np. po wzbogaceniu formatu OCR o słowa/język). OCR liczony POZA lockiem (wolny),
+ *  zapis race-safe (serializowany re-load + apply). Wynik leci na serwer przy uploadzie/eksporcie (niesie `ocr`). */
+export async function ocrAllCaptures(onProgress?: (done: number, total: number) => void, force = false): Promise<{ done: number; total: number }> {
   const all = await listCaptures();
   const targets: { id: string; idx: number; path: string }[] = [];
-  for (const c of all) for (let i = 0; i < c.images.length; i++) if (!c.images[i]!.ocr) targets.push({ id: c.id, idx: i, path: c.images[i]!.path });
-  const results: { id: string; idx: number; ocr: OcrData }[] = [];
+  for (const c of all) for (let i = 0; i < c.images.length; i++) if (force || !c.images[i]!.ocr) targets.push({ id: c.id, idx: i, path: c.images[i]!.path });
+  const results: { id: string; idx: number; ocr: OcrData; rotation: number }[] = [];
   let n = 0;
   for (const t of targets) {
     const f = fileFor(t.path);
-    if (f) { try { const ocr = await recognizeOcr(f.uri); if (ocr) results.push({ id: t.id, idx: t.idx, ocr }); } catch { /* pomiń zdjęcie */ } }
+    if (f) { try { const { ocr, rotation } = await ocrOrientFile(f); if (ocr) results.push({ id: t.id, idx: t.idx, ocr, rotation }); } catch { /* pomiń zdjęcie */ } }
     onProgress?.(++n, targets.length);
   }
   await serialize(async () => {
     const fresh = await listCaptures();
-    for (const r of results) { const im = fresh.find((x) => x.id === r.id)?.images[r.idx]; if (im) im.ocr = r.ocr; }
+    for (const r of results) { const im = fresh.find((x) => x.id === r.id)?.images[r.idx]; if (im) { im.ocr = r.ocr; im.ocrRotation = r.rotation || undefined; } }
+    await AsyncStorage.setItem(KEY, JSON.stringify(fresh));
+  });
+  return { done: results.length, total: targets.length };
+}
+
+/** OCR pliku sampla Z AUTO-ORIENTACJĄ: szuka najlepszego obrotu (0/90/180/270 wg ilości tekstu, jak świeży aparat).
+ *  SAMPEL ZOSTAJE w oryginalnej orientacji (dobry test) — zwracamy OCR (w pionie) + `rotation`, a do modelu/analizy
+ *  obracamy w locie. Bez tego batch/replay liczył OCR z domyślnej, złej pozycji → crop z najgorszego OCR. */
+async function ocrOrientFile(f: File): Promise<{ ocr: OcrData | null; rotation: number }> {
+  const r = await ocrAutoOrient(f.uri);
+  return { ocr: r.ocr, rotation: r.rotation };
+}
+
+/** Przelicz OCR (force) dla zdjęć JEDNEJ migawki i zapisz (OCR pionowy + obrót) — używane przy replayu: świeży box do
+ *  modelu (crop po obrocie) + świeży OCR do wysyłki. SAMPEL zostaje krzywy. Liczone POZA lockiem, zapis race-safe. */
+export async function recomputeCaptureOcr(captureId: string): Promise<void> {
+  const c = (await listCaptures()).find((x) => x.id === captureId);
+  if (!c) return;
+  const results: { idx: number; ocr: OcrData; rotation: number }[] = [];
+  for (let i = 0; i < c.images.length; i++) {
+    const f = fileFor(c.images[i]!.path);
+    if (!f) continue;
+    try { const { ocr, rotation } = await ocrOrientFile(f); if (ocr) results.push({ idx: i, ocr, rotation }); } catch { /* pomiń zdjęcie */ }
+  }
+  if (!results.length) return;
+  await serialize(async () => {
+    const fresh = await listCaptures();
+    const fc = fresh.find((x) => x.id === captureId);
+    if (!fc) return;
+    for (const r of results) { const im = fc.images[r.idx]; if (im) { im.ocr = r.ocr; im.ocrRotation = r.rotation || undefined; } }
+    await AsyncStorage.setItem(KEY, JSON.stringify(fresh));
+  });
+}
+
+/** Analizuje JEDNO zdjęcie: pełną klatkę + (gdy jest OCR) WYCIĘTY kadr do modelu (crop boxa OCR). Surowe wyniki obu. */
+async function analyzePair(fileUri: string, ocr?: OcrData | null, rotation = 0): Promise<{ menuAi: MenuAi; menuAiCrop: MenuAi | null }> {
+  const upUri = await uprightFile(fileUri, rotation); // pełna klatka DO PIONU (jak idzie do modelu), sampel zostaje krzywy
+  const menuAi = await analyzeMenuPhoto(upUri);
+  let menuAiCrop: MenuAi | null = null;
+  if (ocr) {
+    try { const cu = await cropFileForModel(fileUri, ocr, rotation); if (cu) menuAiCrop = await analyzeMenuPhoto(cu); } catch { /* crop nieobowiązkowy */ }
+  }
+  return { menuAi, menuAiCrop };
+}
+
+/** Analiza menu-AI zdjęć JEDNEJ migawki (best-effort, POZA lockiem — modele są wolne) i race-safe zapis do sampla.
+ *  Liczy pełną klatkę I wycięty kadr po OCR. Wołane fire-and-forget przy zapisie migawki (capture-time). */
+export async function analyzeCapture(captureId: string, force = false, onProgress?: (done: number, total: number) => void): Promise<void> {
+  const c = (await listCaptures()).find((x) => x.id === captureId);
+  if (!c) return;
+  const total = c.images.length;
+  onProgress?.(0, total);
+  const results: { idx: number; menuAi: MenuAi; menuAiCrop: MenuAi | null }[] = [];
+  for (let i = 0; i < c.images.length; i++) {
+    if (!force && c.images[i]!.menuAi) { onProgress?.(i + 1, total); continue; }
+    const f = fileFor(c.images[i]!.path);
+    if (!f) { onProgress?.(i + 1, total); continue; }
+    try { results.push({ idx: i, ...(await analyzePair(f.uri, c.images[i]!.ocr, c.images[i]!.ocrRotation ?? 0)) }); } catch { /* pomiń zdjęcie */ }
+    onProgress?.(i + 1, total); // jedno zdjęcie = jeden „zaliczony" (pełne + wycinek × mlkit/apple/clip)
+  }
+  if (!results.length) return;
+  await serialize(async () => {
+    const fresh = await listCaptures();
+    const fc = fresh.find((x) => x.id === captureId);
+    if (!fc) return;
+    for (const r of results) { const im = fc.images[r.idx]; if (im) { im.menuAi = r.menuAi; im.menuAiCrop = r.menuAiCrop ?? undefined; } }
+    await AsyncStorage.setItem(KEY, JSON.stringify(fresh));
+  });
+}
+
+/** Batch: analiza menu-AI zdjęć WSZYSTKICH migawek (przycisk „Analizuj zdjęcia (AI)"). Domyślnie tylko BEZ analizy;
+ *  `force=true` = nadpisz wszystkie (np. po zmianie promptów). Liczy pełne + crop. Liczone POZA lockiem, zapis race-safe. */
+export async function analyzeAllCaptures(onProgress?: (done: number, total: number) => void, force = false): Promise<{ done: number; total: number }> {
+  const all = await listCaptures();
+  const targets: { id: string; idx: number; path: string; ocr?: OcrData; rotation: number }[] = [];
+  for (const c of all) for (let i = 0; i < c.images.length; i++) if (force || !c.images[i]!.menuAi) targets.push({ id: c.id, idx: i, path: c.images[i]!.path, ocr: c.images[i]!.ocr, rotation: c.images[i]!.ocrRotation ?? 0 });
+  const results: { id: string; idx: number; menuAi: MenuAi; menuAiCrop: MenuAi | null }[] = [];
+  let n = 0;
+  for (const t of targets) {
+    const f = fileFor(t.path);
+    if (f) { try { results.push({ id: t.id, idx: t.idx, ...(await analyzePair(f.uri, t.ocr, t.rotation)) }); } catch { /* pomiń zdjęcie */ } }
+    onProgress?.(++n, targets.length);
+  }
+  await serialize(async () => {
+    const fresh = await listCaptures();
+    for (const r of results) { const im = fresh.find((x) => x.id === r.id)?.images[r.idx]; if (im) { im.menuAi = r.menuAi; im.menuAiCrop = r.menuAiCrop ?? undefined; } }
     await AsyncStorage.setItem(KEY, JSON.stringify(fresh));
   });
   return { done: results.length, total: targets.length };
@@ -233,8 +329,9 @@ export async function saveCapture(input: {
     for (let i = 0; i < input.images.length; i++) {
       let im: CaptureImage;
       try { im = persistImage(id, i, input.images[i]!); } catch { continue; } // pojedynczy plik się nie skopiował — pomiń
-      // capture-time OCR: KAŻDE nowe zdjęcie od razu z surowym wynikiem OCR (best-effort; leci na serwer w eksporcie).
-      try { const ocr = await recognizeOcr(new File(DIR, `${id}-${i}.jpg`).uri); if (ocr) im.ocr = ocr; } catch { /* OCR nieobowiązkowe */ }
+      // OCR zwykle policzony już w `compress` (persistImage go przeniósł). AWARYJNIE (gdyby go nie było) — dolicz
+      // teraz z zapisanego pliku, żeby sampel ZAWSZE miał OCR razem ze zdjęciem.
+      if (!im.ocr) { try { const ocr = await recognizeOcr(new File(DIR, `${id}-${i}.jpg`).uri); if (ocr) im.ocr = ocr; } catch { /* OCR nieobowiązkowe */ } }
       images.push(im);
     }
     const capture: ScanCapture = {
@@ -252,6 +349,8 @@ export async function saveCapture(input: {
     };
     all.unshift(capture); // najnowsze na górze
     await AsyncStorage.setItem(KEY, JSON.stringify(all));
+    // (Analiza menu-AI NIE odpalana tu fire-and-forget — `runScan` AWAITuje `analyzeCapture` tuż przed wysyłką, żeby
+    //  wyniki poszły RAZEM z wycinkiem na serwer; podwójne liczenie odpadło. saveCapture woła tylko runScan.)
     return capture;
   });
 }
@@ -344,13 +443,14 @@ export function resolveCaptureUri(path: string): string | undefined {
   return fileFor(path)?.uri ?? path;
 }
 
-/** Odczytuje zapisane zdjęcie do ponownego wysłania (replay). Sampel jest HI-RES → pomniejszamy do
- *  rozmiaru modelu (jak przy świeżym skanie), żeby payload był taki sam. Fallback: surowy base64. */
-export async function captureImageBase64(im: CaptureImage, crop = false): Promise<string | null> {
+/** Odczytuje zapisane zdjęcie do ponownego wysłania. `forModel=true` (replay skanu) → crop DO MODELU = box menu
+ *  z zapisanego OCR (ten sam kadr co świeży skan) + pomniejszenie. `forModel=false` (eksport/upload sampla) →
+ *  PEŁNA klatka (bez cropu), tylko pomniejszona. Fallback: surowy base64. */
+export async function captureImageBase64(im: CaptureImage, forModel = false): Promise<string | null> {
   try {
     const f = fileFor(im.path);
     if (!f?.exists) return null;
-    return (await downscaleForModel(f.uri, crop)) ?? (await f.base64()); // crop tylko przy replayu (eksport/upload = pełne)
+    return (await downscaleForModel(f.uri, forModel ? im.ocr : undefined, forModel ? (im.ocrRotation ?? 0) : 0)) ?? (await f.base64());
   } catch {
     return null;
   }
@@ -360,7 +460,7 @@ export async function captureImageBase64(im: CaptureImage, crop = false): Promis
 export interface CaptureExportEntry extends Omit<ScanCapture, "images"> {
   /** GUID instancji apki, z której pochodzi eksport — lab rozpoznaje źródło migawki z pliku. */
   installId?: string;
-  images: { file: string; mediaType: string; exifLocation?: GeoPoint; ocr?: OcrData }[];
+  images: { file: string; mediaType: string; exifLocation?: GeoPoint; ocr?: OcrData; menuAi?: MenuAi; menuAiCrop?: MenuAi; ocrRotation?: number }[];
   /** WYNIK skanu (z historii): ustawienia użyte do WYNIKU + przetłumaczone menu + lokal + koszt. */
   result?: {
     targetLang?: string;
@@ -403,7 +503,7 @@ export async function exportCaptures(ids?: string[]): Promise<string | null> {
       if (!base64) continue;
       const fname = `${c.id}-${i}.jpg`;
       imagesDir.file(fname, base64, { base64: true });
-      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr });
+      images.push({ file: `images/${fname}`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr, menuAi: im.menuAi, menuAiCrop: im.menuAiCrop, ocrRotation: im.ocrRotation });
     }
     const { images: _drop, ...meta } = c;
     const scan = c.scanId ? scanById.get(c.scanId) : undefined;
@@ -462,7 +562,7 @@ export async function buildCaptureUpload(captureId: string): Promise<{ hash: str
     const base64 = await captureImageBase64(im);
     if (!base64) continue;
     imagesDir.file(`${c.id}-${i}.jpg`, base64, { base64: true });
-    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr });
+    images.push({ file: `images/${c.id}-${i}.jpg`, mediaType: im.mediaType, exifLocation: im.exifLocation, ocr: im.ocr, menuAi: im.menuAi, menuAiCrop: im.menuAiCrop, ocrRotation: im.ocrRotation });
   }
   const { images: _drop, ...metaCap } = c;
   const result: CaptureExportEntry["result"] = scan
@@ -537,7 +637,7 @@ export async function importCapturesFromZip(data: Uint8Array): Promise<{ added: 
       if (dest.exists) dest.delete();
       dest.create();
       dest.write(b64, { encoding: "base64" });
-      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation, ocr: im.ocr });
+      images.push({ path: `captures/${name}`, mediaType: "image/jpeg", exifLocation: im.exifLocation, ocr: im.ocr, menuAi: im.menuAi, menuAiCrop: im.menuAiCrop, ocrRotation: im.ocrRotation });
     }
     if (!images.length) continue;
     all.unshift({

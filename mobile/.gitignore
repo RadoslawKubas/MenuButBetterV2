@@ -42,3 +42,7 @@ yarn-error.*
 build-*.ipa
 .apple-secrets
 build-*.ipa.note
+
+# Model CLIP (MobileCLIP S0) — wagi ~103 MB, odtwarzalne z release Apple → NIE w git (repo lekkie).
+# Kod modułu (swift/ts/podspec) i tokenizer ZOSTAJĄ. Fresh clone: dograj .mlpackage osobno.
+modules/mobileclip/ios/models/*.mlpackage/

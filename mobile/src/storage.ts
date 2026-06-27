@@ -43,6 +43,12 @@ export interface SavedScan {
    *  (te same ops tagujemy tym sessionId) → statystyki grupują całość jednego menu razem, a koniec sesji
    *  przesuwa się na ostatnią akcję. */
   sessionId?: string;
+  /** Skan W TOKU (leci w tle): zapisany po strukturze, dochodzi enrich/zdjęcia/★. Po `done`/błędzie → false.
+   *  Historia pokazuje takie wpisy z badge „⏳ w toku" i sama się uzupełnia, gdy tło dojdzie. */
+  pending?: boolean;
+  /** ★ zdjęcia z lokalu: faza app-driven JUŻ próbowana (harvest+lokalna analiza+match). True = nie ponawiamy przy
+   *  powrocie do menu (nawet gdy 0 trafień). Brak/false = spróbuj dobrać ★ (gdy lokal znany i online). */
+  venueTried?: boolean;
 }
 
 const KEY = "mbb.scans.v1";
@@ -136,6 +142,8 @@ export async function saveScan(input: {
   useDeviceLocation?: boolean;
   usage?: Usage;
   sessionId?: string;
+  /** Skan w toku (leci w tle) — pokaż w historii jako „⏳ w toku" do `done`. */
+  pending?: boolean;
 }): Promise<SavedScan> {
   return serialize(async () => {
     const scan: SavedScan = {
@@ -152,6 +160,7 @@ export async function saveScan(input: {
       useDeviceLocation: input.useDeviceLocation,
       usage: input.usage ?? ZERO_USAGE,
       sessionId: input.sessionId,
+      pending: input.pending,
     };
     const all = await listScans();
     all.unshift(scan); // najnowsze na górze
@@ -186,6 +195,51 @@ export async function updateScanItem(
   });
 }
 
+/** Ustawia/zdejmuje flagę „w toku" skanu (background): false po `done`/błędzie → historia przestaje pokazywać ⏳. */
+export async function setScanPending(id: string, pending: boolean): Promise<void> {
+  return serialize(async () => {
+    const all = await listScans();
+    const scan = all.find((s) => s.id === id);
+    if (!scan) return;
+    scan.pending = pending;
+    await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  });
+}
+
+// TRWAŁY rejestr kosztu (statystyka lokalna): koszt to WYDATEK — skasowanie menu NIE może go wymazać z sum.
+// Trzymamy tu koszt SKASOWANYCH skanów (po scanId, dedup). „Dziś/Łącznie" = suma żywych skanów + ten rejestr.
+const COST_LEDGER_KEY = "mbb.costLedger.v1";
+export interface CostLedgerEntry { scanId: string; costUsd: number; inputTokens?: number; outputTokens?: number; createdAt: number; deletedAt: number }
+/** Zapisuje koszt KASOWANEGO skanu do trwałego rejestru → kasowanie menu nie zeruje statystyki wydatku. */
+export async function recordDeletedCost(scan: SavedScan): Promise<void> {
+  const cost = scan.usage?.costUsd ?? 0;
+  if (cost <= 0) return; // nic nie kosztował → nic do zapamiętania
+  return serialize(async () => {
+    const raw = await AsyncStorage.getItem(COST_LEDGER_KEY);
+    let list: CostLedgerEntry[] = [];
+    try { list = raw ? JSON.parse(raw) : []; } catch { list = []; }
+    if (list.some((o) => o.scanId === scan.id)) return; // już zapisany (dedup — nie podwajaj)
+    list.push({ scanId: scan.id, costUsd: cost, inputTokens: scan.usage?.inputTokens, outputTokens: scan.usage?.outputTokens, createdAt: scan.createdAt, deletedAt: Date.now() });
+    await AsyncStorage.setItem(COST_LEDGER_KEY, JSON.stringify(list));
+  });
+}
+/** Koszt skasowanych skanów (do doliczenia w „Dziś/Łącznie", niezależnie od istnienia menu). */
+export async function listDeletedCost(): Promise<CostLedgerEntry[]> {
+  const raw = await AsyncStorage.getItem(COST_LEDGER_KEY).catch(() => null);
+  try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+
+/** Oznacza skan jako „★ już próbowane" (app-driven faza zdjęć z lokalu) → nie ponawiamy przy powrocie do menu. */
+export async function setVenueTried(id: string, tried: boolean): Promise<void> {
+  return serialize(async () => {
+    const all = await listScans();
+    const scan = all.find((s) => s.id === id);
+    if (!scan) return;
+    scan.venueTried = tried;
+    await AsyncStorage.setItem(KEY, JSON.stringify(all));
+  });
+}
+
 /** Podmienia całe menu w zapisanym skanie (np. po dociągnięciu zdjęć w tle). */
 export async function updateScanMenu(id: string, menu: Menu): Promise<void> {
   return serialize(async () => {
@@ -193,6 +247,7 @@ export async function updateScanMenu(id: string, menu: Menu): Promise<void> {
     const scan = all.find((s) => s.id === id);
     if (!scan) return;
     scan.menu = menu;
+    if (menu.restaurant_name) scan.restaurantName = menu.restaurant_name; // wpis startowy miał pustą nazwę → po strukturze ją wstaw
     await AsyncStorage.setItem(KEY, JSON.stringify(all));
   });
 }

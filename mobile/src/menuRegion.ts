@@ -7,6 +7,7 @@
 //    → więcej kafelków → każdy fragment w pełnej rozdzielczości). TEST: na razie tylko podgląd, bez cięcia/wysyłki.
 import TextRecognition, { TextRecognitionScript } from "@react-native-ml-kit/text-recognition";
 import { Image } from "react-native";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 
 export type Pt = { x: number; y: number }; // znormalizowane 0..1 względem zdjęcia
 export type MenuBox = { x: number; y: number; w: number; h: number };
@@ -19,6 +20,21 @@ const TILE_MAX_PX = 1500;
 
 function imageSize(uri: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => Image.getSize(uri, (width, height) => resolve({ width, height }), reject));
+}
+
+// KLUCZOWE dla zgodności współrzędnych: normalizuje ORIENTACJĘ (EXIF) i zwraca plik do OCR + PRAWDZIWE wymiary
+// WYŚWIETLANEGO obrazu. ML Kit dostaje plik z „wypieczoną" orientacją (orientation=normal, piksele w kolejności
+// ekranu) → jego ramki/cornerPoints są w tej samej przestrzeni co obraz na ekranie. Bez tego ML Kit i Image.getSize
+// bywają w RÓŻNYCH orientacjach (zdjęcie z EXIF-rotacją) → nakładka „nie trafia" (ramki w złym rogu). Fallback: getSize.
+async function normalizedForOcr(uri: string): Promise<{ uri: string; width: number; height: number }> {
+  try {
+    const ref = await ImageManipulator.manipulate(uri).renderAsync();
+    const saved = await ref.saveAsync({ format: SaveFormat.JPEG });
+    return { uri: saved.uri, width: ref.width, height: ref.height };
+  } catch {
+    const s = await imageSize(uri).catch(() => ({ width: 0, height: 0 }));
+    return { uri, width: s.width, height: s.height };
+  }
 }
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -47,30 +63,53 @@ export function clusterGroups(region: MenuRegion, mult: number): MenuBox[] {
 
 // SUROWY wynik OCR per zdjęcie — zapisywany do sampla, by eksperymentować z algorytmami w LABie (na komputerze),
 // bez ponownego OCR na telefonie. Współrzędne ZNORMALIZOWANE 0..1 (+ w/h w px do ewentualnego przeliczenia).
-export type OcrLine = { frame: MenuBox; corners: Pt[]; text: string };
-export type OcrBlock = { frame: MenuBox; corners: Pt[]; text: string; lines: OcrLine[] };
+// `words` (poziom słów ML Kit) — pozycje X tokenów do wykrywania CEN i KOLUMN. `lang` (kod języka per blok) —
+// zgrubna detekcja, do odsiewu szumu / podpowiedzi tłumaczenia. (ML Kit NIE daje confidence — nie zbieramy go.)
+export type OcrWord = { frame: MenuBox; corners: Pt[]; text: string };
+export type OcrLine = { frame: MenuBox; corners: Pt[]; text: string; words: OcrWord[] };
+export type OcrBlock = { frame: MenuBox; corners: Pt[]; text: string; lines: OcrLine[]; lang?: string[] };
 export type OcrData = { w: number; h: number; blocks: OcrBlock[] };
 
-/** Surowy OCR on-device (ML Kit) → bloki/linie z ramkami + cornerPoints + tekstem (znormalizowane). null = brak. */
+/** Surowy OCR on-device (ML Kit) → bloki/linie/SŁOWA z ramkami + cornerPoints + tekstem + język per blok (znormalizowane). null = brak. */
 export async function recognizeOcr(uri: string): Promise<OcrData | null> {
-  const res = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
-  const { width, height } = await imageSize(uri);
+  const { uri: ocrUri, width, height } = await normalizedForOcr(uri);
   if (!width || !height) return null;
+  const res = await TextRecognition.recognize(ocrUri, TextRecognitionScript.LATIN);
   const fr = (f?: { left: number; top: number; width: number; height: number } | null): MenuBox =>
     f ? { x: f.left / width, y: f.top / height, w: f.width / width, h: f.height / height } : { x: 0, y: 0, w: 0, h: 0 };
   const cp = (c?: readonly { x: number; y: number }[] | null): Pt[] => (c ?? []).map((p) => ({ x: p.x / width, y: p.y / height }));
+  const langs = (ls?: readonly { languageCode?: string }[] | null): string[] | undefined => {
+    const out = (ls ?? []).map((l) => l.languageCode).filter((x): x is string => !!x && x !== "und");
+    return out.length ? out : undefined;
+  };
   const blocks: OcrBlock[] = res.blocks.map((b) => ({
-    frame: fr(b.frame), corners: cp(b.cornerPoints), text: b.text,
-    lines: b.lines.map((l) => ({ frame: fr(l.frame), corners: cp(l.cornerPoints), text: l.text })),
+    frame: fr(b.frame), corners: cp(b.cornerPoints), text: b.text, lang: langs(b.recognizedLanguages),
+    lines: b.lines.map((l) => ({
+      frame: fr(l.frame), corners: cp(l.cornerPoints), text: l.text,
+      words: (l.elements ?? []).map((e) => ({ frame: fr(e.frame), corners: cp(e.cornerPoints), text: e.text })),
+    })),
   }));
   return { w: width, h: height, blocks };
 }
 
+/** Osiowy prostokąt „CROP DO MODELU" liczony z SUROWEGO OcrData (bez ponownego OCR): union ramek bloków +
+ *  mały margines. To DOKŁADNIE `box` z detectMenuRegion (biały przerywany w nakładce LABu). null = brak tekstu.
+ *  Marginesy znormalizowane: width*0.015 / height*0.01 → 0.015 / 0.01 ułamka obrazu. */
+export function boxFromOcr(ocr: OcrData): MenuBox | null {
+  const frames = ocr.blocks.map((b) => b.frame).filter((f) => f.w > 0 && f.h > 0);
+  if (!frames.length) return null;
+  let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
+  for (const f of frames) { minL = Math.min(minL, f.x); minT = Math.min(minT, f.y); maxR = Math.max(maxR, f.x + f.w); maxB = Math.max(maxB, f.y + f.h); }
+  const padX = 0.015, padY = 0.01;
+  const x = Math.max(0, minL - padX), y = Math.max(0, minT - padY);
+  return { x, y, w: Math.min(1 - x, maxR + padX - x), h: Math.min(1 - y, maxB + padY - y) };
+}
+
 /** OCR on-device → osiowy prostokąt + perspektywiczny czworokąt menu + proponowana siatka. null = brak tekstu. */
 export async function detectMenuRegion(uri: string): Promise<MenuRegion | null> {
-  const res = await TextRecognition.recognize(uri, TextRecognitionScript.LATIN);
-  const { width, height } = await imageSize(uri);
+  const { uri: ocrUri, width, height } = await normalizedForOcr(uri);
   if (!width || !height) return null;
+  const res = await TextRecognition.recognize(ocrUri, TextRecognitionScript.LATIN);
 
   // Zbierz ramki (osiowe) + narożniki SKOŚNE wszystkich linii (cornerPoints niosą perspektywę; brak → rogi ramki).
   const frames: Fr[] = [];

@@ -19,11 +19,13 @@ import {
   buildCaptureUpload,
   importCapturesFromZip,
   ocrAllCaptures,
+  analyzeAllCaptures,
   type ScanCapture,
 } from "./captures";
 import { uploadSample, fetchSampleStatus, reportError, fetchAppServerSamples, downloadServerSampleZip, deleteServerSample } from "./api";
 import type { SavedScan } from "./storage";
 import { MODEL_OPTIONS, distinctModels } from "./types";
+import { triageGroup } from "./triage";
 import { Lightbox, type LightboxState } from "./Lightbox";
 import { Icon } from "./Icon";
 import { colors } from "./theme";
@@ -56,9 +58,22 @@ function fmtBytes(n: number): string {
 // (nowy skan/wynik, nazwa, hint, lokalizacja, liczba przebiegów). Do decyzji „czy jest co aktualizować".
 const UPLOADED_SIGS_KEY = "mbb.uploadedSigs.v1";
 function contentSig(c: ScanCapture): string {
-  // OCR też wchodzi w podpis treści — po policzeniu OCR sampel pokaże się jako „do aktualizacji" na serwerze.
-  const ocr = c.images.map((im) => (im.ocr ? im.ocr.blocks.length : 0)).join(",");
-  return `${c.scanId ?? ""}|${c.name ?? ""}|${c.restaurantHint ?? ""}|${c.locationHint ?? ""}|${c.runs?.length ?? 0}|o${ocr}`;
+  // OCR wchodzi w podpis treści (bloki.linie.słowa) — po policzeniu LUB regeneracji OCR (wzbogacenie o słowa)
+  // sampel pokaże się jako „do aktualizacji" na serwerze. `o2` = wersja formatu (słowa+język) → wymusza re-upload.
+  const ocr = c.images.map((im) => {
+    if (!im.ocr) return "0";
+    let lines = 0, words = 0;
+    for (const b of im.ocr.blocks) { lines += b.lines.length; for (const l of b.lines) words += (l.words?.length ?? 0); }
+    return `${im.ocr.blocks.length}.${lines}.${words}`;
+  }).join(",");
+  // Analiza menu-AI też wchodzi w podpis (liczba modeli + znacznik czasu) → po policzeniu/regeneracji sampel
+  // pokaże się jako „do aktualizacji" na serwerze (jak OCR). `at` w kluczu wymusza re-upload po regeneracji.
+  const ai = c.images.map((im) => {
+    if (!im.menuAi) return "0";
+    const n = (im.menuAi.mlkit ? 1 : 0) + (im.menuAi.appleVision ? 1 : 0) + (im.menuAi.clip ? 1 : 0);
+    return `${n}@${im.menuAi.at}${im.menuAiCrop ? `+c${im.menuAiCrop.at}` : ""}`;
+  }).join(",");
+  return `${c.scanId ?? ""}|${c.name ?? ""}|${c.restaurantHint ?? ""}|${c.locationHint ?? ""}|${c.runs?.length ?? 0}|o2:${ocr}|ai:${ai}`;
 }
 
 function sourceLabel(c: ScanCapture): string {
@@ -99,6 +114,8 @@ export function CapturesView({
   const [exporting, setExporting] = useState<string | null>(null);
   const [preview, setPreview] = useState<LightboxState | null>(null);
   const [ocrProg, setOcrProg] = useState<{ done: number; total: number } | null>(null); // postęp batcha OCR
+  const [aiProg, setAiProg] = useState<{ done: number; total: number } | null>(null); // postęp batcha analizy menu-AI
+  const [uploadProg, setUploadProg] = useState<{ done: number; total: number } | null>(null); // postęp wysyłki wielu sampli
   // Stan migawek na serwerze (po hashu/sygnaturze): na serwerze? zaimportowane do labu?
   const [sampleStatus, setSampleStatus] = useState<Record<string, { onServer: boolean; imported: boolean }>>({});
   const [uploading, setUploading] = useState<string | null>(null);
@@ -132,35 +149,68 @@ export function CapturesView({
     } finally { setImporting(false); }
   }
 
-  // Re-upload (aktualizacja) wielu sampli po kolei — pojedynczy błąd nie blokuje reszty.
+  // Re-upload (aktualizacja) wielu sampli po kolei — pojedynczy błąd nie blokuje reszty. Z paskiem postępu.
   async function uploadMany(caps: ScanCapture[]) {
-    for (const c of caps) { try { await uploadOne(c); } catch { /* idziemy dalej */ } }
+    setUploadProg({ done: 0, total: caps.length });
+    let i = 0;
+    for (const c of caps) { try { await uploadOne(c); } catch { /* idziemy dalej */ } setUploadProg({ done: ++i, total: caps.length }); }
+    setUploadProg(null);
     await load();
   }
 
-  // JEDNORAZOWO policz OCR dla wszystkich zdjęć migawek (on-device) i zapisz; potem zaproponuj wysłanie na serwer.
-  async function runOcrAll() {
+  // Czy sampel ma NOWE/ZMIENIONE dane do wysłania: nie ma go na serwerze ALBO treść (OCR/menu-AI/nazwa) różni się
+  // od ostatnio wysłanej (`contentSig` ≠ zapamiętany). Napędza marker „● nowe dane" i bulk „wyślij wszystkie nowe".
+  function needsSync(c: ScanCapture): boolean {
+    const hash = c.sig || c.id;
+    const st = sampleStatus[hash];
+    const onSrv = !!(st?.onServer || st?.imported);
+    return !onSrv || uploadedSigs[hash] !== contentSig(c);
+  }
+
+  // Policz OCR dla zdjęć migawek (on-device) i zapisz; potem zaproponuj wysłanie na serwer.
+  //  • force=false → tylko zdjęcia bez OCR (szybkie uzupełnienie).
+  //  • force=true  → REGENERACJA: przelicz wszystkie od nowa (np. po wzbogaceniu formatu o słowa/język).
+  async function runOcrAll(force = false) {
     if (ocrProg) return;
     setOcrProg({ done: 0, total: 0 });
     try {
-      const r = await ocrAllCaptures((done, total) => setOcrProg({ done, total }));
+      const r = await ocrAllCaptures((done, total) => setOcrProg({ done, total }), force);
       await load();
-      // Które sample są JUŻ na serwerze (świeży status) → zaproponuj wysłanie aktualizacji z OCR od razu.
+      // Zaproponuj wysyłkę WSZYSTKICH sampli (nie tylko tych już na serwerze) — niezmienione wrócą jako „bez zmian",
+      // ale nic nie zostaje po cichu pominięte. Po regeneracji treść OCR się zmienia → serwer przyjmie jako update.
       const fresh = await listCaptures();
-      const status = await fetchSampleStatus(fresh.map((c) => c.sig || c.id)).catch(() => ({} as Record<string, { onServer: boolean; imported: boolean }>));
-      const onSrv = fresh.filter((c) => { const s = status[c.sig || c.id]; return !!(s?.onServer || s?.imported); });
-      if (onSrv.length) {
-        Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma OCR. ${onSrv.length} sampli jest na serwerze — wysłać aktualizację z OCR teraz?`, [
+      if (fresh.length) {
+        Alert.alert(force ? "OCR zregenerowany" : "OCR policzony", `${r.done}/${r.total} zdjęć przeliczono. Wysłać wszystkie ${fresh.length} sampli na serwer (z OCR)?`, [
           { text: "Później", style: "cancel" },
-          { text: "Wyślij update", onPress: () => void uploadMany(onSrv) },
+          { text: "Wyślij na serwer", onPress: () => void uploadMany(fresh) },
         ]);
-      } else {
-        Alert.alert("OCR policzony", `${r.done}/${r.total} zdjęć ma teraz dane OCR. Wyślij sample na serwer, by je zsyncować (przycisk „Wyślij na serwer" pod migawką).`);
       }
     } catch (e) {
-      reportError((e as Error)?.message ?? String(e), { label: "ocr-all" });
+      reportError((e as Error)?.message ?? String(e), { label: force ? "ocr-regen" : "ocr-all" });
     } finally {
       setOcrProg(null);
+    }
+  }
+
+  // Analiza zdjęć menu lokalnymi modelami (mlkit/apple-vision/clip) — surowe wyniki do sampla; potem wysyłka na serwer.
+  // Zawsze REGENERUJE (force) — eksperymentujemy z promptami, więc chcemy świeże wyniki przy każdym uruchomieniu.
+  async function runAnalyzeAll() {
+    if (aiProg) return;
+    setAiProg({ done: 0, total: 0 });
+    try {
+      const r = await analyzeAllCaptures((done, total) => setAiProg({ done, total }), true);
+      await load();
+      const fresh = await listCaptures();
+      if (fresh.length) {
+        Alert.alert("Analiza AI policzona", `${r.done}/${r.total} zdjęć przeanalizowano (mlkit/apple/clip). Wysłać wszystkie ${fresh.length} sampli na serwer (z analizą)?`, [
+          { text: "Później", style: "cancel" },
+          { text: "Wyślij na serwer", onPress: () => void uploadMany(fresh) },
+        ]);
+      }
+    } catch (e) {
+      reportError((e as Error)?.message ?? String(e), { label: "menuai-all" });
+    } finally {
+      setAiProg(null);
     }
   }
 
@@ -310,12 +360,36 @@ export function CapturesView({
                 {exporting === "all" ? "Pakuję ZIP…" : `Wyeksportuj wszystkie (${captures.length}) do ZIP`}
               </Text>
             </Pressable>
-            <Pressable style={[styles.export, !!ocrProg && styles.disabled]} disabled={!!ocrProg} onPress={runOcrAll}>
+            <Pressable style={[styles.export, !!ocrProg && styles.disabled]} disabled={!!ocrProg} onPress={() => void runOcrAll(true)}>
               <Text style={styles.exportText}>
                 <Icon name={ocrProg ? "hourglass" : "searchAlt"} size={14} color={colors.accent} />{" "}
-                {ocrProg ? `Liczę OCR… ${ocrProg.done}/${ocrProg.total}` : "Policz OCR dla wszystkich (on-device)"}
+                {ocrProg ? `Generuję OCR… ${ocrProg.done}/${ocrProg.total}` : "Generuj OCR dla wszystkich (on-device)"}
               </Text>
             </Pressable>
+            <Pressable style={[styles.export, !!aiProg && styles.disabled]} disabled={!!aiProg} onPress={() => void runAnalyzeAll()}>
+              <Text style={styles.exportText}>
+                <Icon name={aiProg ? "hourglass" : "flask"} size={14} color={colors.accent} />{" "}
+                {aiProg ? `Analizuję zdjęcia… ${aiProg.done}/${aiProg.total}` : "Analizuj zdjęcia (AI) dla wszystkich (mlkit/apple/clip)"}
+              </Text>
+            </Pressable>
+            {/* BULK: wyślij na serwer wszystkie sample z NOWYMI/ZMIENIONYMI danymi (nie wysłane lub zmieniony OCR/menu-AI). */}
+            {!uploadProg ? (() => {
+              const pending = captures.filter(needsSync);
+              return pending.length > 0 ? (
+                <Pressable style={styles.syncAllBtn} onPress={() => void uploadMany(pending)}>
+                  <Text style={styles.syncAllText}>
+                    <Icon name="cloud" size={14} color="#fff" /> Wyślij wszystkie nowe/zaktualizowane ({pending.length})
+                  </Text>
+                </Pressable>
+              ) : null;
+            })() : null}
+            {uploadProg ? (
+              <View style={[styles.export, styles.disabled]}>
+                <Text style={styles.exportText}>
+                  <Icon name="cloud" size={14} color={colors.accent} /> Wysyłam na serwer… {uploadProg.done}/{uploadProg.total}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.toolbar}>
               <Text style={styles.toolbarInfo}>
                 {captures.length} migawek · {fmtBytes(capturesDiskBytes(captures))} na dysku
@@ -386,6 +460,12 @@ export function CapturesView({
                           {im.ocr ? (
                             <View style={styles.ocrBadge}><Text style={styles.ocrBadgeText}>OCR {im.ocr.blocks.length}</Text></View>
                           ) : null}
+                          {im.menuAi ? (
+                            <View style={styles.aiBadge}><Text style={styles.aiBadgeText}>🧠 {(im.menuAi.mlkit ? 1 : 0) + (im.menuAi.appleVision ? 1 : 0) + (im.menuAi.clip ? 1 : 0)}</Text></View>
+                          ) : null}
+                          {(im.ocr || im.menuAi) ? (() => { const t = triageGroup(im.ocr, im.menuAi); return (
+                            <View style={styles.triageBadge}><Text style={styles.triageBadgeText} numberOfLines={1}>{t.emoji} {t.label}</Text></View>
+                          ); })() : null}
                         </View>
                       </Pressable>
                     ))}
@@ -450,16 +530,20 @@ export function CapturesView({
                       <View style={styles.footerRow}>
                         {flash ? (
                           <Text style={[styles.sampleBadge, styles.sampleImported]} numberOfLines={1}>{flash}</Text>
+                        ) : onSrv && changed ? ( // na serwerze, ale apka policzyła NOWE dane (OCR/menu-AI) → do dosłania
+                          <Text style={[styles.sampleBadge, styles.sampleNew]} numberOfLines={1}>
+                            <Icon name="cloud" size={11} color={colors.accent} /> ● nowe dane do wysłania
+                          </Text>
                         ) : st?.imported ? (
                           <Text style={[styles.sampleBadge, styles.sampleImported]} numberOfLines={1}>
-                            <Icon name="check" size={11} color="#2E7D32" /> zaimportowany{!changed ? " · aktualny" : ""}
+                            <Icon name="check" size={11} color="#2E7D32" /> zaimportowany · aktualny
                           </Text>
                         ) : st?.onServer ? (
                           <Text style={[styles.sampleBadge, styles.sampleOnServer]} numberOfLines={1}>
-                            <Icon name="cloud" size={11} color="#1A4E8A" /> na serwerze{!changed ? " · aktualny" : ""}
+                            <Icon name="cloud" size={11} color="#1A4E8A" /> na serwerze · aktualny
                           </Text>
                         ) : (
-                          <Text style={styles.sampleDim}>nie wysłano</Text>
+                          <Text style={[styles.sampleBadge, styles.sampleNew]} numberOfLines={1}>● nowe — nie wysłano</Text>
                         )}
                         <View style={styles.footerIcons}>
                           <Pressable hitSlop={10} disabled={!!exporting} onPress={() => doExport(c.id, [c.id])}>
@@ -515,6 +599,8 @@ const styles = StyleSheet.create({
   exportText: { color: colors.accent, fontWeight: "800", fontSize: 14 },
   importBtn: { backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center", marginBottom: 14 },
   importBtnText: { color: "#fff", fontWeight: "800", fontSize: 14 },
+  syncAllBtn: { backgroundColor: colors.accent, borderRadius: 10, paddingVertical: 12, alignItems: "center", marginBottom: 10 },
+  syncAllText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   toolbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   toolbarInfo: { fontSize: 12, color: colors.muted },
   deleteAll: { fontSize: 12, color: colors.error, fontWeight: "700" },
@@ -536,11 +622,16 @@ const styles = StyleSheet.create({
   sampleBadge: { fontSize: 11, fontWeight: "800", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: "hidden", flexShrink: 1 },
   sampleOnServer: { backgroundColor: "#DDEBFF", color: "#1A4E8A" },
   sampleImported: { backgroundColor: "#D7EFD7", color: "#2E7D32" },
+  sampleNew: { backgroundColor: colors.badgeBg, color: colors.accent },
   sampleDim: { fontSize: 11, color: colors.muted },
   thumbRow: { flexDirection: "row", marginTop: 10 },
   thumb: { width: 64, height: 80, borderRadius: 8, marginRight: 8, backgroundColor: colors.badgeBg },
   ocrBadge: { position: "absolute", top: 3, left: 3, backgroundColor: "rgba(74,222,128,0.9)", borderRadius: 5, paddingHorizontal: 4, paddingVertical: 1 },
   ocrBadgeText: { color: "#06281a", fontSize: 9, fontWeight: "800" },
+  aiBadge: { position: "absolute", top: 3, right: 11, backgroundColor: "rgba(167,139,250,0.92)", borderRadius: 5, paddingHorizontal: 4, paddingVertical: 1 },
+  aiBadgeText: { color: "#1a1033", fontSize: 9, fontWeight: "800" },
+  triageBadge: { position: "absolute", bottom: 0, left: 0, right: 8, backgroundColor: "rgba(0,0,0,0.72)", borderBottomLeftRadius: 8, borderBottomRightRadius: 8, paddingHorizontal: 3, paddingVertical: 2 },
+  triageBadgeText: { color: "#fff", fontSize: 9, fontWeight: "800", textAlign: "center" },
   metaLine: { fontSize: 12, color: colors.text, marginTop: 4 },
   runs: { marginTop: 12, borderTopWidth: 1, borderTopColor: colors.badgeBg, paddingTop: 8 },
   runsTitle: { fontSize: 12, fontWeight: "800", color: colors.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 },
