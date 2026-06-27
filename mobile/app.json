@@ -40,7 +40,6 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "143",
       "bundleIdentifier": "com.appwithkiss.menubutbetter.lab",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
